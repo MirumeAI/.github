@@ -1,0 +1,73 @@
+name: Feature
+description: 新機能の追加・既存機能の改善
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        新機能・改善内容について、目的と完了条件が第三者にも分かるように記載してください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: この変更によって何を実現したいかを記載してください。
+      placeholder: 例）カメラ切断後に作業者の操作なしで検査を再開できるようにする。
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景・課題
+      description: 現在どのような問題があり、なぜ対応が必要かを記載してください。
+      placeholder: 現状の問題、利用者への影響、発生条件など
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 変更内容
+      description: 想定している実装・変更内容を記載してください。未確定部分は未確定と明記してください。
+      placeholder: |
+        - 接続状態の監視処理を追加
+        - 切断検出後に再接続を試行
+        - 再接続成功後に撮像処理を再開
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      description: Issue を完了と判断できる条件をチェックリストで記載してください。
+      placeholder: |
+        - [ ] ○○できる
+        - [ ] △△の場合も正常に動作する
+        - [ ] 必要なテストが通る
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 担当領域
+      options:
+        - AI / Vision
+        - Backend
+        - Frontend
+        - Camera / Hardware
+        - Infrastructure
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: 関連Issue、参考資料、制約事項などがあれば記載してください。
+    validations:
+      required: false

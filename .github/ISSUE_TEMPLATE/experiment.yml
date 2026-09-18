@@ -1,0 +1,104 @@
+name: Experiment
+description: AI・アルゴリズム・性能評価などの実験
+title: "[Experiment] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        実験前に「何を検証するか」「何をもって成功とするか」を固定してください。
+        結果は実験後にこのIssueへ追記するか、関連PR・結果ファイルをリンクしてください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: この実験で明らかにしたいことを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: 仮説
+      description: どの変更により、どの指標がどう変化すると予想するかを記載してください。
+      placeholder: 例）軽量Backboneへ変更すると、FN=0を維持したまま推論時間を短縮できる。
+    validations:
+      required: true
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline
+      description: 比較対象となる現在の手法・設定・結果を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: change
+    attributes:
+      label: 変更内容
+      description: Baselineから何を変更するかを記載してください。一度に複数要因を変える場合は明記してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: protocol
+    attributes:
+      label: 評価データ・評価条件
+      description: 使用するデータ、分割、Seed、実行条件など、比較を再現するために必要な条件を記載してください。
+      placeholder: |
+        Dataset:
+        Split:
+        Seed:
+        Hardware:
+        Other conditions:
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: 評価指標
+      description: 実験で比較する指標を記載してください。
+      placeholder: |
+        - FP
+        - FN
+        - F1
+        - p95 latency
+    validations:
+      required: true
+
+  - type: textarea
+    id: success
+    attributes:
+      label: 成功条件
+      description: 結果を見る前に、採用・不採用を判断する基準を記載してください。
+      placeholder: |
+        - FN = 0
+        - FP <= 10%
+        - p95 latency < 700 ms
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 担当領域
+      options:
+        - AI / Vision
+        - Backend
+        - Frontend
+        - Camera / Hardware
+        - Infrastructure
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: result_link
+    attributes:
+      label: 結果記録先
+      description: 実験後に結果ファイル、PR、Commit、レポート等のリンクを追記してください。
+      placeholder: 実験開始時点では空欄で構いません。
+    validations:
+      required: false

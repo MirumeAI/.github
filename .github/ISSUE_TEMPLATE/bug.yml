@@ -1,0 +1,94 @@
+name: Bug
+description: 不具合・想定外動作の修正
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        不具合を再現できる情報と、修正完了を判断できる条件を記載してください。
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 現象
+      description: 何が起きているかを簡潔に記載してください。
+      placeholder: 例）LANカメラを再接続した後、接続状態は復帰するが撮像が再開されない。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 不具合を再現する手順を番号付きで記載してください。
+      placeholder: |
+        1. アプリを起動する
+        2. 検査を開始する
+        3. LANケーブルを抜く
+        4. LANケーブルを戻す
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+      description: 本来どう動くべきかを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: 現在どのように動作しているかを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 発生環境
+      description: 再現に関係するOS、バージョン、機器、ブランチ等を分かる範囲で記載してください。
+      placeholder: |
+        OS:
+        Application version / commit:
+        Device:
+        Other:
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了条件
+      description: 修正完了と判断する条件を記載してください。
+      placeholder: |
+        - [ ] 再現手順で不具合が発生しない
+        - [ ] 関連する既存機能が正常に動作する
+        - [ ] 必要なテストが通る
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 担当領域
+      options:
+        - AI / Vision
+        - Backend
+        - Frontend
+        - Camera / Hardware
+        - Infrastructure
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 補足・ログ
+      description: エラーログ、スクリーンショット、関連Issue等があれば記載してください。秘密情報は貼り付けないでください。
+    validations:
+      required: false

@@ -70,7 +70,9 @@ def local_modules(root: Path) -> set[str]:
     for p in root.iterdir():
         if p.name.startswith(".") or p.name in SKIP_DIRS:
             continue
-        if p.is_dir() and (p / "__init__.py").exists():
+        # `__init__.py` の有無は見ない。 Python 3 では名前空間パッケージとして
+        # import できるため、 `.py` を含む Directory はローカル扱いにする。
+        if p.is_dir() and any(p.rglob("*.py")):
             out.add(p.name)
         elif p.suffix == ".py":
             out.add(p.stem)

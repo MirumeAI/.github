@@ -80,11 +80,10 @@ def main() -> int:
     errors: list[str] = []
     counts = {"py": 0, "json": 0, "yaml": 0, "sh": 0}
 
-    have_yaml = True
     try:
-        import yaml  # noqa: F401
+        import yaml
     except ImportError:
-        have_yaml = False
+        yaml = None          # 無ければ YAML の検査だけ省く
 
     for rel in files:
         p = root / rel
@@ -122,8 +121,7 @@ def main() -> int:
         # 3) YAML
         elif suffix in (".yml", ".yaml"):
             counts["yaml"] += 1
-            if have_yaml:
-                import yaml
+            if yaml is not None:
                 try:
                     list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
                 except Exception as e:
@@ -150,7 +148,7 @@ def main() -> int:
 
     print(f"検査: {len(files)} ファイル "
           f"(py={counts['py']} json={counts['json']} yaml={counts['yaml']} sh={counts['sh']})")
-    if not have_yaml:
+    if yaml is None:
         print("注意: PyYAML が無いため YAML の検査を省略しました")
 
     if errors:

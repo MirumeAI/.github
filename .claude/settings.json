@@ -85,7 +85,8 @@
       "Bash(bash scripts/ci/basic_checks.py:*)",
       "Bash(python3 scripts/ci/basic_checks.py:*)",
       "Bash(python3 scripts/ci/import_check.py:*)",
-      "Bash(bash scripts/ci/test_guard_main.sh:*)"
+      "Bash(bash scripts/ci/test_guard_main.sh:*)",
+      "Bash(bash .claude/scripts/issue-form.sh:*)"
     ]
   }
 }

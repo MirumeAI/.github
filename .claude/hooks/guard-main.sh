@@ -266,7 +266,46 @@ while IFS= read -r line; do
       pr)
         case "$joined" in
           *" --admin "*) deny "gh pr merge --admin による保護の迂回" "" ;;
-        esac ;;
+        esac
+        # ---- CI が緑でない Pull Request は merge させない ----
+        #   GitHub Free かつ Private Repository では Required status checks を
+        #   設定できない。 **赤いまま merge できてしまう**ので、 ここで止める。
+        #   CI の結果が取れないときも止める（分からないなら通さない）。
+        if [ "${rest[0]:-}" = "merge" ]; then
+          pr_num=""
+          for a in "${rest[@]:1}"; do
+            case "$a" in -*) continue ;; esac
+            case "$a" in *[!0-9]*) ;; *) pr_num="$a"; break ;; esac
+          done
+          if [ -z "$pr_num" ]; then
+            pr_num="$(git -C "$TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+          fi
+          rollup="$(gh pr view "$pr_num" --repo "$(git -C "$TARGET" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##')" \
+                      --json statusCheckRollup 2>/dev/null \
+                    | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("UNKNOWN"); raise SystemExit
+rows = d.get("statusCheckRollup") or []
+if not rows:
+    print("NONE"); raise SystemExit
+bad = [r.get("name") or r.get("context") or "?"
+       for r in rows
+       if (r.get("conclusion") or r.get("state") or "").upper() not in ("SUCCESS", "NEUTRAL", "SKIPPED")]
+print("BAD:" + ",".join(bad) if bad else "GREEN")
+' 2>/dev/null)"
+          case "$rollup" in
+            GREEN) ;;
+            BAD:*) deny "CI が緑ではない Pull Request の merge" \
+                        "失敗または未完了: ${rollup#BAD:}" ;;
+            NONE)  deny "CI の結果が無い Pull Request の merge" \
+                        "workflow が動いていません。 手元で scripts/ci/ の検査を通してください。" ;;
+            *)     deny "CI の結果を確認できない" \
+                        "gh で Pull Request の状態を取得できませんでした。" ;;
+          esac
+        fi ;;
     esac
   fi
 done <<< "$SEGMENTS"

@@ -9,7 +9,7 @@ MirumeAI 標準開発ルールに従ってください。
 
 1. **このリポジトリは Public です。** 顧客名、顧客固有仕様、社内URL、IPアドレス、パスワード、API Key、Token、SSH 秘密鍵、顧客データ、内部システムの機密情報を書かない。
 2. `main` へ直接 commit / push しない。force push しない。
-3. Issue → Issue番号付き Branch → Pull Request → Review → Squash and merge。
+3. Issue → Issue番号付き Branch → Pull Request → Review（可能な場合）→ Squash and merge。
 4. テンプレートの文言を変更したら、`MirumeAI/development-docs` 側の説明と矛盾しないか確認し、同じ変更で同期する。
 
 ユーザーから明示の指示があっても、1 と 2 に反する操作は実行せず、理由を伝えて代替手順を提示してください。

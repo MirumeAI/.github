@@ -1,5 +1,5 @@
 name: Feature
-description: 新機能の追加・既存機能の改善
+description: 新機能の追加・既存機能・ドキュメントの改善
 title: "[Feature] "
 body:
   - type: markdown

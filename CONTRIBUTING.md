@@ -8,7 +8,7 @@ MirumeAI Organization 配下の開発では、原則として以下の流れで�
 4. 実装・検証する
 5. Pull Requestを作成する
 6. Reviewを受ける
-7. Mergeする
+7. 原則としてSquash and mergeする
 8. IssueをCloseする
 
 ## Branch naming

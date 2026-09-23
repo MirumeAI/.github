@@ -1,0 +1,36 @@
+# Pull Request の機械チェック。
+#
+# **人間が読む前に、機械で分かることは機械が見る。** ここで見るのは
+# 「壊れているかどうか」だけで、設計の良し悪しは判断しない。
+#
+# 中身は scripts/ci/basic_checks.py にある。手元でも同じものを実行できる:
+#     python3 scripts/ci/basic_checks.py
+#
+# 除外したいファイルは .ci-ignore に1行1パターン（glob）で書く。
+name: basic-checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # 構文チェックは実行環境の Python 版に依存する。
+      # 本番と同じ 3.10 で見ないと、3.12 で通る書き方を見逃す。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: PyYAML を入れる
+        run: python -m pip install --quiet pyyaml
+
+      - name: 機械チェック
+        run: python scripts/ci/basic_checks.py

@@ -104,6 +104,12 @@ t DENY  "gh secret set FOO --body bar"
 t DENY  "gh workflow run deploy.yml"
 t DENY  "gh pr merge 1 --admin"
 
+echo "== gh pr merge の CI ゲート =="
+# 実際の Repository へ問い合わせるため、 ネットワークが無い環境では
+# 「確認できない」で拒否されることを確かめる（分からないなら通さない）。
+t DENY  "gh pr merge 99999 --squash"
+t DENY  "gh pr merge --squash"
+
 echo "== ガード自身の書き換え =="
 t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" Edit
 t DENY  ".claude/settings.json"         "$WORK/on_feature" Write

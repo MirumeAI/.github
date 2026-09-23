@@ -40,3 +40,7 @@ jobs:
       # 実際にインストールはしない（torch や CUDA を入れると CI が重すぎる）。
       - name: 依存の宣言漏れ
         run: python scripts/ci/import_check.py
+
+      # ガードの回帰テスト。 主張ではなく実行で確かめる。
+      - name: guard-main.sh の回帰テスト
+        run: bash scripts/ci/test_guard_main.sh

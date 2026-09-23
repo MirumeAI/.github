@@ -3,10 +3,11 @@
 # **人間が読む前に、機械で分かることは機械が見る。** ここで見るのは
 # 「壊れているかどうか」だけで、設計の良し悪しは判断しない。
 #
-# 中身は scripts/ci/basic_checks.py にある。手元でも同じものを実行できる:
+# 中身は scripts/ci/ にある。手元でも同じものを実行できる:
 #     python3 scripts/ci/basic_checks.py
+#     python3 scripts/ci/import_check.py
 #
-# 除外したいファイルは .ci-ignore に1行1パターン（glob）で書く。
+# 除外は .ci-ignore（ファイル）と .ci-imports-allow（依存）で指定する。
 name: basic-checks
 
 on:
@@ -34,3 +35,8 @@ jobs:
 
       - name: 機械チェック
         run: python scripts/ci/basic_checks.py
+
+      # 「手元では動くのに新しい環境で ModuleNotFoundError」を止める。
+      # 実際にインストールはしない（torch や CUDA を入れると CI が重すぎる）。
+      - name: 依存の宣言漏れ
+        run: python scripts/ci/import_check.py

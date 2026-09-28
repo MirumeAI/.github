@@ -53,3 +53,11 @@ jobs:
       # 走らせない。 権限や Plan で結果が変わり、 テストが信用できなくなる。
       - name: Organization 監査の判定
         run: python scripts/ci/test_org_audit.py
+
+      # **秘密情報の走査が、 拡張子で取りこぼさないこと。**
+      # 複製されていた旧版は `.env` や拡張子の無いファイルを丸ごと
+      # 飛ばしていた（実在の `configs/active_profile` が該当）。
+      # 再利用 workflow から呼ぶときに validator が自分自身を検査して
+      # しまわないこと（`CI_ROOT`）も、 ここで見る。
+      - name: 秘密情報の走査と CI_ROOT
+        run: python scripts/ci/test_secret_scan.py

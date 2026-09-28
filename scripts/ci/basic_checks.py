@@ -87,13 +87,32 @@ def load_ignores(root: Path) -> list[str]:
             if ln.strip() and not ln.startswith("#")]
 
 
+def _git_files(root: Path, *extra: str) -> list[str]:
+    """追跡しているファイル + **まだ追跡していない新しいファイル**。
+
+    `git ls-files` だけを見ていたので、 **新しく作ったファイルは
+    `git add` するまで検査されなかった**。 手元で「OK」と出たものが、
+    commit した後の CI で初めて落ちる。 今日 3 回起きた。
+
+    `--others --exclude-standard` で、 `.gitignore` に入っているもの
+    （生成物・秘密の置き場）は除いたまま、 新しいファイルを足す。
+    """
+    seen, out = set(), []
+    for args in (["git", "ls-files", "-z", *extra],
+                 ["git", "ls-files", "-z", "--others", "--exclude-standard",
+                  *extra]):
+        got = subprocess.run(args, cwd=root, capture_output=True, text=True,
+                             check=True).stdout
+        for rel in got.split("\0"):
+            if rel and rel not in seen:
+                seen.add(rel)
+                out.append(rel)
+    return out
+
+
 def tracked_files(root: Path, ignores: list[str]) -> list[Path]:
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=root,
-                         capture_output=True, text=True, check=True).stdout
     files = []
-    for rel in out.split("\0"):
-        if not rel:
-            continue
+    for rel in _git_files(root):
         p = Path(rel)
         if SKIP_DIRS & set(p.parts):
             continue

@@ -116,5 +116,60 @@ class TheValidatorsFollowCiRootTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout[-400:])
 
 
+class NewFilesAreCheckedBeforeAddTest(unittest.TestCase):
+    """**`git add` する前の新しいファイルも検査すること。**
+
+    `git ls-files` だけを見ていたので、 手元で「OK」と出たものが
+    commit した後の CI で初めて落ちた。 **今日 3 回起きた**
+    （org_audit の追加 / validator の集約 / 見本の秘密情報）。
+
+    `.gitignore` に入っているものは今までどおり対象外にする。 生成物や
+    秘密の置き場を検査に入れると、 毎回 NG になって誰も見なくなる。
+    """
+
+    def _run(self, checker: str, files: dict, ignore: str = "") -> str:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+            if ignore:
+                (root / ".gitignore").write_text(ignore, encoding="utf-8")
+            (root / "README.md").write_text("ok\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            # **ここから先は add しない。** それが本題。
+            for rel, body in files.items():
+                p_ = root / rel
+                p_.parent.mkdir(parents=True, exist_ok=True)
+                p_.write_text(body, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=str(root))
+            r = subprocess.run([sys.executable, str(HERE / checker)],
+                               capture_output=True, text=True, env=env)
+            return r.stdout + r.stderr
+
+    def test_a_new_file_is_checked_by_basic_checks(self) -> None:
+        out = self._run("basic_checks.py", {"zz_new.py": "def broken(:\n"})
+        self.assertIn("zz_new.py", out,
+                      "add 前の新しいファイルを検査していない")
+        self.assertIn("NG", out)
+
+    def test_a_new_file_is_checked_by_import_check(self) -> None:
+        out = self._run("import_check.py",
+                        {"zz_new.py": "import totally_absent_pkg\n"})
+        self.assertIn("zz_new.py", out,
+                      "add 前の新しいファイルを検査していない")
+
+    def test_an_ignored_file_is_left_alone(self) -> None:
+        """**追跡しないと決めたものは対象外のまま。**"""
+        out = self._run("basic_checks.py",
+                        {"build/zz_new.py": "def broken(:\n"},
+                        ignore="build/\n")
+        self.assertNotIn("build/zz_new.py", out)
+        self.assertIn("OK", out)
+
+    def test_a_clean_new_file_passes(self) -> None:
+        out = self._run("basic_checks.py", {"zz_new.py": "x = 1\n"})
+        self.assertIn("OK", out)
+        self.assertNotIn("NG", out)
+
+
 if __name__ == "__main__":
     unittest.main()

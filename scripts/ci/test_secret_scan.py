@@ -22,11 +22,18 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "basic_checks.py"
 
-#: 検出されるべき見本。 **本物ではない**（公式文書の例示値と同じ形）。
+#: 見本の値は **実行時に組み立てる**。 本物ではないが、 そのまま書くと
+#: `basic_checks.py` が**このファイル自身**を検出して CI が落ちる
+#: （実際に落ちた）。 ファイルごと `.ci-ignore` で除外すると、 後から
+#: 本物が混ざっても気づけなくなるので、 除外はしない。
+_AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+_GH = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
+
+#: 検出されるべき見本。
 SAMPLES = {
-    ".env": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n",
-    "configs/active_profile": "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n",
-    "deploy/site.conf": "aws = AKIAIOSFODNN7EXAMPLE\n",
+    ".env": f"AWS_ACCESS_KEY_ID={_AWS}\n",
+    "configs/active_profile": f"token: {_GH}\n",
+    "deploy/site.conf": f"aws = {_AWS}\n",
 }
 
 
@@ -55,8 +62,7 @@ class SecretScanCoversEveryTextFileTest(unittest.TestCase):
 
     def test_a_file_without_a_suffix_is_scanned(self) -> None:
         """**拡張子で絞らないこと。** 実在のファイルが素通りしていた。"""
-        out = self._run({"configs/active_profile":
-                         "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"})
+        out = self._run({"configs/active_profile": f"token: {_GH}\n"})
         self.assertIn("configs/active_profile", out)
 
     def test_a_clean_repository_passes(self) -> None:
@@ -69,7 +75,7 @@ class SecretScanCoversEveryTextFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
-            (root / "blob").write_bytes(b"\x00\x01\x02" + b"AKIAIOSFODNN7EXAMPLE")
+            (root / "blob").write_bytes(b"\x00\x01\x02" + _AWS.encode())
             (root / "README.md").write_text("ok\n", encoding="utf-8")
             subprocess.run(["git", "add", "-A", "-f"], cwd=root, check=True)
             env = dict(os.environ, CI_ROOT=str(root))

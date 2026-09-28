@@ -142,8 +142,16 @@ def main() -> int:
                 continue
             if node.lineno in skip:
                 continue
+            # **同じディレクトリの `.py` はローカル。**
+            #   `local_modules` はリポジトリ直下と `src/` しか見ないので、
+            #   `scripts/ci/a.py` から `import b`（= `scripts/ci/b.py`）を
+            #   外部依存として誤検出していた。 `sys.path` に自分の場所を
+            #   足して隣を import するのは普通の書き方で、 許可リストに
+            #   並べるものではない。
+            siblings = {q.stem for q in p.parent.glob("*.py")} - {p.stem}
             for top in names:
-                if not top or top in std or top in local or norm(top) in allow:
+                if (not top or top in std or top in local
+                        or top in siblings or norm(top) in allow):
                     continue
                 cands = {norm(top), *(norm(x) for x in DIST_ALIAS.get(top, ()))}
                 if cands & decl:

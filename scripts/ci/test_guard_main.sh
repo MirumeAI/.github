@@ -144,4 +144,25 @@ t ALLOW "git switch -c feature/3-z"
 
 echo
 echo "合格 $PASS / 不合格 $FAIL"
+
+# **数字を作る側が、 文書との一致も確かめる。**
+#
+# 5 Repository の CLAUDE.md が「63 ケース」と書いていたが、 実行すると
+# 65 ケース通る状態だった。 ケースを足したときに数字を直す仕組みが無く、
+# 文章に書いた数字は実装が増えても変わらない。 人では気づけない。
+#
+# ここで見れば、 再利用 workflow を呼んでいる Repository は Pull Request
+# ごとに止まる。 件数を書いていない Repository では何もしない。
+_DOC_ROOT="${CI_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+_DOC="$_DOC_ROOT/CLAUDE.md"
+if [ -f "$_DOC" ]; then
+  _WRITTEN="$(grep -oE '[0-9]+ *ケース' "$_DOC" | head -1 | grep -oE '[0-9]+' || true)"
+  if [ -n "$_WRITTEN" ] && [ "$_WRITTEN" != "$PASS" ]; then
+    echo
+    echo "不一致: CLAUDE.md は $_WRITTEN ケースと書いていますが、 実測は $PASS ケースです。" >&2
+    echo "        ${_DOC#"$_DOC_ROOT"/} の件数を直してください。" >&2
+    FAIL=$((FAIL+1))
+  fi
+fi
+
 [ "$FAIL" -eq 0 ]

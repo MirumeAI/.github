@@ -171,5 +171,56 @@ class NewFilesAreCheckedBeforeAddTest(unittest.TestCase):
         self.assertNotIn("NG", out)
 
 
+class TheDocumentedCountMustMatchTest(unittest.TestCase):
+    """**数字を作る側が、 文書との一致も確かめること。**
+
+    5 Repository の `CLAUDE.md` が「63 ケース」と書いていたが、 実行すると
+    65 ケース通る状態だった。 ケースを足したときに数字を直す仕組みが無く、
+    **文章に書いた数字は実装が増えても変わらない**。 人では気づけない。
+    """
+
+    def _run(self, claude_md: "str | None") -> tuple:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            hooks = root / ".claude" / "hooks"
+            hooks.mkdir(parents=True)
+            src = (HERE.parents[1] / ".claude" / "hooks"
+                   / "guard-main.sh").read_text(encoding="utf-8")
+            (hooks / "guard-main.sh").write_text(src, encoding="utf-8")
+            if claude_md is not None:
+                (root / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=str(root))
+            r = subprocess.run(["bash", str(HERE / "test_guard_main.sh")],
+                               capture_output=True, text=True, env=env)
+            return r.returncode, r.stdout + r.stderr
+
+    def test_a_stale_count_fails(self) -> None:
+        code, out = self._run("`test_guard_main.sh` が 63 ケースで検証している。")
+        self.assertEqual(code, 1, "ずれているのに通っています")
+        self.assertIn("不一致", out)
+        self.assertIn("63", out)
+
+    def test_a_matching_count_passes(self) -> None:
+        # 実測の件数をまず取る（ケースを足しても壊れないように）
+        _, out = self._run(None)
+        import re
+        m = re.search(r"合格 (\d+)", out)
+        self.assertIsNotNone(m)
+        code, out2 = self._run(
+            f"`test_guard_main.sh` が {m.group(1)} ケースで検証している。")
+        self.assertEqual(code, 0, out2[-300:])
+        self.assertNotIn("不一致", out2)
+
+    def test_no_count_is_not_an_error(self) -> None:
+        """件数を書いていない Repository では何もしないこと。"""
+        code, out = self._run("件数は書かない。")
+        self.assertEqual(code, 0, out[-300:])
+        self.assertNotIn("不一致", out)
+
+    def test_no_claude_md_is_not_an_error(self) -> None:
+        code, out = self._run(None)
+        self.assertEqual(code, 0, out[-300:])
+
+
 if __name__ == "__main__":
     unittest.main()

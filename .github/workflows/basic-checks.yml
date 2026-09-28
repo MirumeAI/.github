@@ -44,3 +44,12 @@ jobs:
       # ガードの回帰テスト。 主張ではなく実行で確かめる。
       - name: guard-main.sh の回帰テスト
         run: bash scripts/ci/test_guard_main.sh
+
+      # **Organization 監査の判定が崩れていないこと。**
+      # 所見 / Exception / UNKNOWN の 3 つを混ぜると「直せるもの」が
+      # 埋もれる。 実際に Plan 制約の 403 を UNKNOWN にも数えていて、
+      # 同じ事実が 2 箇所に出ていた。
+      # 監査そのもの（org_audit.py）は Organization を叩くので CI では
+      # 走らせない。 権限や Plan で結果が変わり、 テストが信用できなくなる。
+      - name: Organization 監査の判定
+        run: python scripts/ci/test_org_audit.py

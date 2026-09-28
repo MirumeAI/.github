@@ -1,0 +1,3 @@
+# Python が自動生成するもの。 追跡すると Pull Request の差分に毎回出る。
+__pycache__/
+*.py[cod]

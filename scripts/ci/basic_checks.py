@@ -34,6 +34,10 @@ SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules",
 #: 空でよいファイル。置き場所を作るためのもの。
 ALLOW_EMPTY = {".gitkeep", ".gitignore", ".keep", "__init__.py", "py.typed"}
 
+#: VERSION ファイルの形。 リリースのタグと文字列として突き合わせるので、
+#: 前後に何も付けない。
+VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
 #: 秘密情報らしき形。**値を出力しない**（ログに残すと二次漏洩になる）。
 SECRET_PATTERNS = [
     ("AWS アクセスキー", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
@@ -45,7 +49,34 @@ SECRET_PATTERNS = [
 ]
 
 TEXT_SUFFIXES = {".py", ".sh", ".md", ".json", ".yml", ".yaml", ".txt", ".cfg",
-                 ".toml", ".ini", ".html", ".js", ".css", ".service", ".desktop"}
+                 ".toml", ".ini", ".html", ".js", ".css", ".service", ".desktop",
+                 # 鍵や設定がそのまま入りやすい形。 **ここを外すと素通りする。**
+                 ".env", ".pem", ".key", ".crt", ".conf", ".properties", ".sql"}
+
+#: 拡張子の無いテキストファイルも秘密情報の走査にかける。
+#:
+#: **拡張子で絞ると、 拡張子の無いファイルが丸ごと素通りする。**
+#: 実際に `configs/active_profile` のような拡張子なしファイルがあり、
+#: そこへ鍵を書いても検出できなかった（監査で実証）。
+#: 中身が読めてテキストなら見る、 という判断にする。
+MAX_SECRET_SCAN_BYTES = 2 * 1024 * 1024
+
+
+def looks_like_text(path: Path, size: int) -> bool:
+    """秘密情報の走査にかけてよいか（拡張子なしファイル用）。"""
+    if size == 0 or size > MAX_SECRET_SCAN_BYTES:
+        return False
+    try:
+        head = path.open("rb").read(4096)
+    except OSError:
+        return False
+    if b"\x00" in head:            # NUL があればバイナリ
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def load_ignores(root: Path) -> list[str]:
@@ -135,7 +166,9 @@ def main() -> int:
                 errors.append(f"{rel}: シェルの構文エラー: {r.stderr.strip().splitlines()[0] if r.stderr.strip() else ''}")
 
         # 5) 秘密情報（テキストのみ。**一致した値は出さない**）
-        if suffix in TEXT_SUFFIXES and size <= 2 * 1024 * 1024:
+        scan = (suffix in TEXT_SUFFIXES and size <= MAX_SECRET_SCAN_BYTES) or (
+            suffix == "" and looks_like_text(p, size))
+        if scan:
             body = p.read_text(encoding="utf-8", errors="replace")
             for label, pat in SECRET_PATTERNS:
                 m = pat.search(body)
@@ -145,6 +178,20 @@ def main() -> int:
                                   f"誤検出なら `.ci-ignore` へ追加し、"
                                   f"本物なら**必ず無効化・再発行**する")
                     break
+
+    # 6) VERSION ファイル（あれば）の形式。
+    #    **タグと突き合わせる唯一の出どころなので、 形が崩れると
+    #    リリースが作れない。** 無い Repository では何もしない。
+    vfile = root / "VERSION"
+    if vfile.is_file():
+        raw = vfile.read_text(encoding="utf-8", errors="replace")
+        v = raw.strip()
+        if not VERSION_RE.fullmatch(v):
+            errors.append("VERSION: 'x.y.z' の形にしてください"
+                          f"（いまは {v[:40]!r}）")
+        elif raw != v + "\n":
+            errors.append("VERSION: 版だけを1行で書いてください"
+                          "（前後の空白や複数行は不可）")
 
     print(f"検査: {len(files)} ファイル "
           f"(py={counts['py']} json={counts['json']} yaml={counts['yaml']} sh={counts['sh']})")

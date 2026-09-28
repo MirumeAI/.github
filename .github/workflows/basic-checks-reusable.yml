@@ -1,0 +1,82 @@
+# Organization 共通の機械チェック（再利用 workflow）。
+#
+# **validator の正本をここ1箇所にする。** 同じ script を各 Repository へ
+# 複製していたため、 改善が 1 Repository に閉じ込められていた。 実測:
+#
+#   basic_checks.py   5件同一 + 1件だけ改善版（秘密情報の走査が広い）
+#   import_check.py   5件同一 + 1件だけ修正版（隣のモジュールの誤検出）
+#
+# 残り 5 Repository は `.env` や拡張子の無いファイルに書かれた鍵を
+# 検出できなかった。 **複製は、 直したことが届かない。**
+#
+# 呼び出し側:
+#
+#     jobs:
+#       checks:
+#         uses: MirumeAI/.github/.github/workflows/basic-checks-reusable.yml@main
+#
+# 呼び出し側のコードと、 ここの validator の**両方**を checkout し、
+# `CI_ROOT` を呼び出し側へ向けて実行する。 3 つの validator はすべて
+# `CI_ROOT` を見る。
+name: basic-checks-reusable
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "構文チェックに使う Python。 本番と同じ版で見ないと、 新しい版で通る書き方を見逃す。"
+        type: string
+        required: false
+        default: "3.10"
+      run-guard-test:
+        description: "guard-main.sh の回帰テストを行うか。 hook を持たない Repository では false。"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # 検査される側（呼び出し元の Repository）
+      - uses: actions/checkout@v4
+        with:
+          path: target
+
+      # 検査する側（validator の正本）。 Public なので認証は要らない。
+      - uses: actions/checkout@v4
+        with:
+          repository: MirumeAI/.github
+          path: validators
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: PyYAML を入れる
+        run: python -m pip install --quiet pyyaml
+
+      - name: 機械チェック
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+        run: python validators/scripts/ci/basic_checks.py
+
+      # 「手元では動くのに新しい環境で ModuleNotFoundError」を止める。
+      # 実際にインストールはしない（torch や CUDA を入れると CI が重すぎる）。
+      - name: 依存の宣言漏れ
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+        run: python validators/scripts/ci/import_check.py
+
+      # **呼び出し側の hook を検証する。** ここの hook ではない。
+      # Plan 制約で Private Repository に branch protection を掛けられない
+      # ため、 この hook が main を守る唯一の機械的な壁になっている。
+      - name: guard-main.sh の回帰テスト
+        if: ${{ inputs.run-guard-test }}
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+        run: bash validators/scripts/ci/test_guard_main.sh

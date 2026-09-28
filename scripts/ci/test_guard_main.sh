@@ -9,8 +9,20 @@
 # 終了コード 0 で全件期待どおり、 1 で不一致あり。
 set -uo pipefail
 
-HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.claude/hooks/guard-main.sh"
+# 検証する hook の場所。 **`CI_ROOT` があればそちらを見る。**
+#
+# 再利用 workflow から呼ぶとき、 この script は `.github` 側に置かれ、
+# 検証したいのは **呼び出し側 Repository の hook** になる。 自分の場所から
+# 辿るだけだと、 平台の hook を検証して「合格」と言ってしまう。
+# `basic_checks.py` と `import_check.py` も同じ鍵を見ている。
+_CI_ROOT="${CI_ROOT:-}"
+if [ -n "$_CI_ROOT" ]; then
+  HOOK="$(cd "$_CI_ROOT" && pwd)/.claude/hooks/guard-main.sh"
+else
+  HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.claude/hooks/guard-main.sh"
+fi
 [ -f "$HOOK" ] || { echo "hook が見つかりません: $HOOK" >&2; exit 2; }
+echo "検証する hook: $HOOK"
 
 PASS=0; FAIL=0
 WORK="$(mktemp -d)"

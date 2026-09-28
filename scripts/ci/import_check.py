@@ -65,6 +65,29 @@ def declared(root: Path) -> set[str]:
     return out
 
 
+def _git_files(root: Path, *extra: str) -> list[str]:
+    """追跡しているファイル + **まだ追跡していない新しいファイル**。
+
+    `git ls-files` だけを見ていたので、 **新しく作ったファイルは
+    `git add` するまで検査されなかった**。 手元で「OK」と出たものが、
+    commit した後の CI で初めて落ちる。 今日 3 回起きた。
+
+    `--others --exclude-standard` で、 `.gitignore` に入っているもの
+    （生成物・秘密の置き場）は除いたまま、 新しいファイルを足す。
+    """
+    seen, out = set(), []
+    for args in (["git", "ls-files", "-z", *extra],
+                 ["git", "ls-files", "-z", "--others", "--exclude-standard",
+                  *extra]):
+        got = subprocess.run(args, cwd=root, capture_output=True, text=True,
+                             check=True).stdout
+        for rel in got.split("\0"):
+            if rel and rel not in seen:
+                seen.add(rel)
+                out.append(rel)
+    return out
+
+
 def local_modules(root: Path) -> set[str]:
     out = set()
     for p in root.iterdir():
@@ -115,12 +138,10 @@ def main() -> int:
     local = local_modules(root)
     std = set(sys.stdlib_module_names)
 
-    files = subprocess.run(["git", "ls-files", "-z", "*.py"], cwd=root,
-                           capture_output=True, text=True, check=True).stdout
     missing: dict[str, list[str]] = {}
     n = 0
-    for rel in files.split("\0"):
-        if not rel or SKIP_DIRS & set(Path(rel).parts):
+    for rel in _git_files(root, "*.py"):
+        if SKIP_DIRS & set(Path(rel).parts):
             continue
         p = root / rel
         if not p.is_file():

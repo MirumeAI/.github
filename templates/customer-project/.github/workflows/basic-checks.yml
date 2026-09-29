@@ -1,0 +1,16 @@
+# Pull Request の機械チェック。
+#
+# **validator の正本は `MirumeAI/.github`。** 各 Repository へ複製すると、
+# 改善が 1 Repository に閉じ込められる。 実際にそうなっていた。
+name: basic-checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: MirumeAI/.github/.github/workflows/basic-checks-reusable.yml@main

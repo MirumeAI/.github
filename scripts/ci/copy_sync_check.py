@@ -38,6 +38,10 @@ SHARED = (
     # Plan 制約で branch protection が使えない Repository では、
     # これが main を守る唯一の機械的な壁になる。 **ずれてよいものではない。**
     ".claude/hooks/guard-main.sh",
+    # 対象外にするファイルを `.ci-leak-allow` へ出したので、 script 本体は
+    # 全 Repository で同一になった。 **中に表を持たせていた間は照合できず、
+    # ここだけ drift が野放しだった。**
+    "scripts/ci/customer_data_check.py",
 )
 
 ALLOW_FILE = ".ci-copy-allow"

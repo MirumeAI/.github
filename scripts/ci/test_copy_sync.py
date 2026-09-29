@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -24,12 +25,19 @@ HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "copy_sync_check.py"
 ROOT = HERE.parents[1]
 
+_spec = importlib.util.spec_from_file_location("copy_sync_check", CHECKER)
+C = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(C)
+
 
 def _canonical_tree(dst: Path) -> None:
-    """正本の見本を作る。"""
-    for rel in ("scripts/ci/basic_checks.py", "scripts/ci/import_check.py",
-                "scripts/ci/test_guard_main.sh",
-                ".claude/hooks/guard-main.sh"):
+    """正本の見本を作る。
+
+    **対象の一覧を `SHARED` から取る。** 見本の一覧を別に持っていたため、
+    `SHARED` へ足しても見本は増えず、 足した分は照合されないまま
+    「合格」と出ていた。 期待件数も直書きしてあり、 足すたびに落ちた。
+    """
+    for rel in C.SHARED:
         p = dst / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes((ROOT / rel).read_bytes())
@@ -52,7 +60,7 @@ class ItFindsDriftTest(unittest.TestCase):
             _canonical_tree(tgt)
             code, out = self._run(tgt, can)
             self.assertEqual(code, 0, out[-400:])
-            self.assertIn("照合: 4 ファイル", out)
+            self.assertIn(f"照合: {len(C.SHARED)} ファイル", out)
 
     def test_one_changed_byte_fails(self) -> None:
         """**1 文字違えば止まること。** 見逃すと元に戻る。"""
@@ -85,6 +93,25 @@ class ItFindsDriftTest(unittest.TestCase):
             code, out = self._run(tgt, can)
             self.assertEqual(code, 1, out[-400:])
             self.assertIn(".claude/hooks/guard-main.sh", out)
+
+    def test_the_leak_check_is_covered(self) -> None:
+        """**混入検査も対象であること。**
+
+        これだけ対象外だった。 script の中に「対象外にするファイル」の表を
+        持っており、 中身が Repository ごとに違ったためである。 表を
+        `.ci-leak-allow` へ出して同一にした（PDM #61 / IA-PDM #106）。
+        """
+        self.assertIn("scripts/ci/customer_data_check.py", C.SHARED)
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            can, tgt = base / "can", base / "tgt"
+            _canonical_tree(can)
+            _canonical_tree(tgt)
+            f = tgt / "scripts/ci/customer_data_check.py"
+            f.write_bytes(f.read_bytes() + b"\n# drift\n")
+            code, out = self._run(tgt, can)
+            self.assertEqual(code, 1, out[-400:])
+            self.assertIn("scripts/ci/customer_data_check.py", out)
 
     def test_settings_json_is_not_compared(self) -> None:
         """**`.claude/settings.json` は対象外。**

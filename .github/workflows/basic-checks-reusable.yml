@@ -60,6 +60,17 @@ jobs:
       - name: PyYAML を入れる
         run: python -m pip install --quiet pyyaml
 
+      # **手元用の複製が正本とずれていないこと。**
+      # CI は正本を実行するので、 複製がずれても CI は緑のまま。 すると
+      # 「手元では OK なのに CI で落ちる」「改善が 1 Repository に
+      # 閉じ込められる」が起きる。 実際に 3 回起きた。
+      # 呼び出し側と正本の両方を checkout しているので、 ここで比べられる。
+      - name: 複製が正本とずれていないか
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+          CANONICAL_ROOT: ${{ github.workspace }}/validators
+        run: python validators/scripts/ci/copy_sync_check.py
+
       - name: 機械チェック
         env:
           CI_ROOT: ${{ github.workspace }}/target

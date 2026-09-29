@@ -61,3 +61,9 @@ jobs:
       # しまわないこと（`CI_ROOT`）も、 ここで見る。
       - name: 秘密情報の走査と CI_ROOT
         run: python scripts/ci/test_secret_scan.py
+
+      # **複製のずれを見つける側が壊れていないこと。**
+      # 見つける側が壊れると、 改善が 1 Repository に閉じ込められる状態に
+      # 戻る。 実際に 3 回起きた。
+      - name: 複製の照合そのもの
+        run: python scripts/ci/test_copy_sync.py

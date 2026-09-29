@@ -1,0 +1,7 @@
+# 顧客の値の混入検査（scripts/ci/customer_data_check.py）で対象外にするファイル。
+# **理由を必ず書く。** 理由の無い除外は、 次に見た人が外せない。
+#
+# 書き方: <追跡パス>  # 理由
+
+scripts/ci/customer_data_check.py   # 検査そのもの。 見つけ方の説明に例として書いてある
+scripts/ci/test_customer_data.py    # この検査のテスト。 見つけるべき値を例として持つ

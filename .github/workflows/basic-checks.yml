@@ -73,3 +73,14 @@ jobs:
       # 必要になった瞬間まで気づけない。 見つける側が壊れたら意味が無い。
       - name: 版と配置の記録の検査
         run: python scripts/ci/test_release_record.py
+
+      # **このリポジトリは Public。** 顧客の値が入ると、 取り消せない形で
+      # 外へ出る。 それなのに検査が無く、 Private な Core 2 件にだけ
+      # あった（必要な順番が逆）。
+      # **再利用 workflow には入れない。** 顧客 Repository の config/ には
+      # PLC の IP が正当に入るため、 毎回 NG になって誰も見なくなる。
+      - name: 現場の値が混ざっていないか
+        run: python scripts/ci/customer_data_check.py
+
+      - name: 混入の検査そのもの
+        run: python scripts/ci/test_customer_data.py

@@ -67,3 +67,9 @@ jobs:
       # 戻る。 実際に 3 回起きた。
       - name: 複製の照合そのもの
         run: python scripts/ci/test_copy_sync.py
+
+      # **版と配置の記録の検査そのもの。**
+      # 「deployed_release に書いた版が無い」「rollback が今の版と同じ」は
+      # 必要になった瞬間まで気づけない。 見つける側が壊れたら意味が無い。
+      - name: 版と配置の記録の検査
+        run: python scripts/ci/test_release_record.py

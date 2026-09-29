@@ -1,0 +1,11 @@
+# Core の作業コピー。 **追跡しない。**
+# 案件 Repository に Core の Source を置かない（`versions.yaml` で固定する）。
+/PDM/
+/Image-Acquisition-PDM/
+
+# 生成物
+__pycache__/
+*.py[cod]
+
+# 顧客のライセンス・認証情報
+*.lic

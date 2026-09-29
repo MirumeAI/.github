@@ -1,0 +1,15 @@
+# この案件が使う Core の組合せ。
+#
+# **浮動 Branch 名や latest で本番構成を管理しない。** Commit SHA で固定する。
+# どの版で動いているかが分からないと、 不具合の再現も切り戻しもできない。
+schema_version: 1
+
+pdm:
+  repository: MirumeAI/PDM
+  ref: main
+  commit: <40 桁の commit SHA>
+
+image_acquisition_pdm:
+  repository: MirumeAI/Image-Acquisition-PDM
+  ref: main
+  commit: <40 桁の commit SHA>

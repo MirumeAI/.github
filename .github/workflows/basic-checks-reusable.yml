@@ -86,6 +86,16 @@ jobs:
       # **呼び出し側の hook を検証する。** ここの hook ではない。
       # Plan 制約で Private Repository に branch protection を掛けられない
       # ため、 この hook が main を守る唯一の機械的な壁になっている。
+      # **Release と Deployment の記録が形式どおりか。**
+      # 項目の有無だけでなく、 記録どうしの食い違いを見る。
+      # 「deployed_release に書いた版が release/ に無い」「rollback_release
+      # が今の版と同じ」は、 **必要になった瞬間まで気づけない**。
+      # どちらのフォルダも無い Repository では何もしない。
+      - name: 版と配置の記録
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+        run: python validators/scripts/ci/release_record_check.py
+
       - name: guard-main.sh の回帰テスト
         if: ${{ inputs.run-guard-test }}
         env:

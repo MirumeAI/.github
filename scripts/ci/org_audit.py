@@ -45,14 +45,57 @@ REQUIRED_FILES = (
     ".github/workflows/basic-checks.yml",
 )
 
-#: repo_type ごとに期待する lifecycle。 違っていれば棚卸し漏れの可能性。
-#: 標準の Target ではなく、 **現行の運用（repository_management.md）**に合わせる。
-LIFECYCLE_BY_TYPE = {
-    "org-config": ("production", "maintenance"),
-    "docs": ("production", "maintenance"),
-    "core": ("development", "production", "maintenance"),
-    "customer": ("development", "production", "maintenance"),
+#: 標準（v1.2 §6）の Custom Properties と、 取りうる値。 **決めた Target を
+#: ここ 1 箇所に書く。** 監査はこれとの差を所見にする。
+#:
+#: 標準から変えたところ（development-docs の as_is_inventory.md §9.6 で決定）:
+#:   repo_type            `unclassified` を残す。 分類を忘れた新しい
+#:                        Repository を見つける目印（既定値）
+#:   data_classification  `public` を足す。 Public な Repository を表す値が
+#:                        標準に無かった
+#: `owner_team` は標準でも選択肢を閉じていない（「...」）ので、 値の種類は
+#: 見ない（None）。
+STANDARD = {
+    "domain": ("visual-inspection", "robotics", "platform", "research",
+               "internal", "other"),
+    "repo_type": ("product-core", "application", "customer-project",
+                  "platform", "documentation", "delivery-control", "research",
+                  "unclassified"),
+    "criticality": ("high", "medium", "low"),
+    "lifecycle": ("active", "maintenance", "archived"),
+    "owner_team": None,
+    "governance_profile": ("strict", "standard", "research"),
+    "data_classification": ("public", "internal", "customer-confidential",
+                            "restricted"),
+    "production_impact": ("direct", "indirect", "none"),
 }
+
+#: 定義が取れなくても Repository ごとに確かめる Property（前から必須）。
+ALWAYS_REQUIRED = ("repo_type", "lifecycle")
+
+#: 標準へ寄せる前の言葉 → 寄せた先。 **移行を確かめたら消す。**
+#: 寄せる途中も、 組の判定（strict など）は寄せた先の意味で行う。
+#: None は寄せ先を Repository ごとに決めるもの（機械では決まらない）。
+#: lifecycle の development / production の区別は production_impact が持つ。
+LEGACY = {
+    "repo_type": {"core": "product-core", "customer": "customer-project",
+                  "docs": "documentation", "org-config": "platform"},
+    "lifecycle": {"development": "active", "production": "active"},
+    "owner_team": {"developers": None, "maintainers": None},
+}
+
+#: 版を持つ Property。 **値を入れない。** Core の版の正本は customer
+#: Repository の versions.yaml（commit SHA）。 Property にも書くと正本が
+#: 2 つになり、 片方だけ更新されて食い違う。
+VERSION_PROPERTIES = ("core_version",)
+
+#: governance_profile を strict にするもの（標準 §8 の「主対象」）。
+#: production_impact=direct も strict（顧客 Repository が該当する）。
+STRICT_TYPES = ("product-core", "platform")
+
+#: Public な Repository に付いてはいけない分類。 付いていれば、 顧客の値が
+#: 取り消せない形で外へ出ている可能性がある。
+NEVER_PUBLIC = ("customer-confidential", "restricted")
 
 #: Plan で使えない機能。 **未実施と区別する。**
 PLAN_LIMITED = {
@@ -129,7 +172,8 @@ def audit_org(gh: Gh) -> dict:
     org = gh.get(f"/orgs/{ORG}", "Organization の Plan") or {}
     out = {
         "plan": (org.get("plan") or {}).get("name"),
-        "properties": {},
+        # None は「取れなかった」。 {}（定義が無い）と区別する
+        "properties": None,
         "issue_types": [],
         "issue_fields": [],
         "teams": {},
@@ -208,6 +252,80 @@ def audit_repos(gh: Gh) -> dict:
     return out
 
 
+def _expected_properties(org: dict) -> tuple:
+    """Repository ごとに値を確かめる Property。
+
+    **Organization に定義が無いものは Repository ごとに数えない。** 定義が
+    無いことを 1 度だけ数える（6 件に同じ所見を並べると、 直すものが
+    1 つだと読み取れない）。 定義が取れなかったときは、 前から必須の
+    ものだけを見る（取れないことを「無い」と言わない）。
+    """
+    defined = org.get("properties")
+    if defined is None:
+        return ALWAYS_REQUIRED
+    return tuple(k for k in STANDARD if k in defined or k in ALWAYS_REQUIRED)
+
+
+def _new_word(key: str, value):
+    """旧い言葉なら寄せた先（決まらなければ None）、 それ以外はそのまま。"""
+    return LEGACY.get(key, {}).get(value, value)
+
+
+def _check_properties(name: str, info: dict, expected: tuple, add) -> dict:
+    """値を 1 つずつ確かめ、 標準の言葉に寄せた値を返す（組の判定に使う）。"""
+    p = info["properties"]
+    now = {}
+    for key in expected:
+        v = p.get(key)
+        if not v:
+            add(WARNING, "missing_property", name, f"{key} が未設定")
+            continue
+        if v in LEGACY.get(key, {}):
+            to = LEGACY[key][v]
+            add(INFO, "legacy_value", name,
+                f"{key}={v} は標準の言葉へ寄せる途中"
+                + (f"（→ {to}）" if to else "（寄せ先は Repository ごとに決める）"))
+            if to:
+                now[key] = to
+            continue
+        allowed = STANDARD[key]
+        if allowed is not None and v not in allowed:
+            add(WARNING, "unknown_value", name, f"{key}={v} は標準に無い値")
+            continue
+        now[key] = v
+    for key in VERSION_PROPERTIES:
+        if p.get(key):
+            add(WARNING, "second_source_of_truth", name,
+                f"{key}={p[key]}。 版の正本は versions.yaml"
+                "（2 つにすると片方だけ更新されて食い違う）")
+    return now
+
+
+def _check_combinations(name: str, info: dict, now: dict, add) -> None:
+    """値どうしの組。 **寄せた先の意味で**判定する。"""
+    rt, gp = now.get("repo_type"), now.get("governance_profile")
+    if rt == "unclassified":
+        add(WARNING, "unclassified_repo", name,
+            "repo_type が unclassified のまま（暫定値を放置しない）")
+    if gp and gp != "strict":
+        why = (f"repo_type={rt}" if rt in STRICT_TYPES else
+               "production_impact=direct"
+               if now.get("production_impact") == "direct" else None)
+        if why:
+            add(WARNING, "profile_mismatch", name,
+                f"{why} なのに governance_profile={gp}（標準 §8 は strict）")
+    dc = now.get("data_classification")
+    if not info["private"] and dc and dc != "public":
+        if dc in NEVER_PUBLIC:
+            add(CRITICAL, "public_classification", name,
+                f"Public なのに data_classification={dc}"
+                "（顧客の値が外へ出ている可能性がある）")
+        else:
+            add(WARNING, "public_classification", name,
+                f"Public なのに data_classification={dc}"
+                "（Public に置けない値を置いてよいことになっている）")
+
+
 def classify(org: dict, repos: dict, local: dict) -> tuple:
     """所見を組み立てる。 `(findings, exceptions)`。"""
     findings, exceptions = [], []
@@ -216,8 +334,15 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
         findings.append({"severity": sev, "code": code,
                          "repo": repo, "message": msg})
 
+    expected = _expected_properties(org)
     for name, info in repos.items():
         if info["archived"]:
+            # 棚卸し対象外。 ただし lifecycle が archived でなければ、
+            # 一覧では稼働中に見えるので知らせる
+            lc = _new_word("lifecycle", info["properties"].get("lifecycle"))
+            if lc != "archived":
+                add(WARNING, "archive_drift", name,
+                    "GitHub では archived だが lifecycle が archived でない")
             continue
         # --- 必須ファイル ---
         for f, present in info["files"].items():
@@ -225,20 +350,8 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
                 add(CRITICAL if f == "CLAUDE.md" else WARNING,
                     "missing_required_file", name, f"{f} が無い")
         # --- Custom Properties ---
-        p = info["properties"]
-        for key in ("repo_type", "lifecycle"):
-            if not p.get(key):
-                add(WARNING, "missing_property", name, f"{key} が未設定")
-        rt, lc = p.get("repo_type"), p.get("lifecycle")
-        if rt == "unclassified":
-            add(WARNING, "unclassified_repo", name,
-                "repo_type が unclassified のまま（暫定値を放置しない）")
-        if rt in LIFECYCLE_BY_TYPE and lc and lc not in LIFECYCLE_BY_TYPE[rt]:
-            add(INFO, "lifecycle_mismatch", name,
-                f"repo_type={rt} に対して lifecycle={lc}")
-        if info["archived"] and lc == "active":
-            add(WARNING, "archive_drift", name,
-                "GitHub では archived だが lifecycle が archived でない")
+        now = _check_properties(name, info, expected, add)
+        _check_combinations(name, info, now, add)
         # --- 保護 ---
         for cap in info["plan_limited"]:
             exceptions.append({"repo": name, "capability": cap,
@@ -262,6 +375,12 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
                     f"書いているが、 実行すると {actual} ケース")
 
     # --- Organization ---
+    defined = org.get("properties")
+    if defined is not None:
+        for key in STANDARD:
+            if key not in defined:
+                add(WARNING, "missing_property_definition", f"(org) {ORG}",
+                    f"標準の Property {key} が定義されていない")
     if org.get("plan") in ("free",):
         exceptions.append({
             "repo": f"(org) {ORG}", "capability": "org_rulesets",
@@ -299,7 +418,9 @@ def render(org, repos, findings, exceptions, unknown) -> int:
     """人が読む形。 戻り値は Critical の件数。"""
     print(f"Organization: {ORG}  Plan: {org.get('plan') or '不明'}  "
           f"Repository: {len(repos)} 件")
-    print(f"Custom Properties: {', '.join(org['properties']) or '不明'}")
+    props = org.get("properties")
+    print("Custom Properties: "
+          + ("不明" if props is None else (", ".join(props) or "なし")))
     print(f"Issue Types: {', '.join(org['issue_types']) or '不明'}")
     print(f"Issue Fields: {', '.join(org['issue_fields']) or '不明'}")
     for slug, names in (org.get("teams") or {}).items():

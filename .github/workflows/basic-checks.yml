@@ -54,6 +54,13 @@ jobs:
       - name: Organization 監査の判定
         run: python scripts/ci/test_org_audit.py
 
+      # **Issue の種別を付ける経路が崩れていないこと。**
+      # 直近の Issue 71 件はすべて種別なしだった。 Form も /issue も種別を
+      # 指定していなかったためで、 種別を足しただけでは使われない。
+      # Form の type: と、 それを読む issue-form.sh を確かめる（gh は差し替え）。
+      - name: Issue Form の種別
+        run: python scripts/ci/test_issue_form.py
+
       # **秘密情報の走査が、 拡張子で取りこぼさないこと。**
       # 複製されていた旧版は `.env` や拡張子の無いファイルを丸ごと
       # 飛ばしていた（実在の `configs/active_profile` が該当）。

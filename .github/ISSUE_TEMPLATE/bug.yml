@@ -1,6 +1,7 @@
 name: Bug
 description: 不具合・想定外動作の修正
 title: "[Bug] "
+type: Bug
 body:
   - type: markdown
     attributes:

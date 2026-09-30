@@ -20,7 +20,7 @@ allowed-tools: Bash(bash .claude/scripts/issue-form.sh:*), Bash(gh issue create:
 bash .claude/scripts/issue-form.sh skeleton <種別>
 ```
 
-標準出力が本文の雛形、標準エラーが title の接頭辞・必須ラベル・選択肢。
+標準出力が本文の雛形、標準エラーが title の接頭辞・Issue の種別・必須ラベル・選択肢。
 
 ## 3. 形式のルール
 
@@ -73,7 +73,11 @@ bash .claude/scripts/issue-form.sh check <種別> <ファイル>
 `OK` になるまで作成しない。確認後、ユーザーの承認を得て作成する。
 
 ```bash
-gh issue create --repo MirumeAI/<repository> --title "<接頭辞><要約>" --body-file <ファイル>
+gh issue create --repo MirumeAI/<repository> --type <Issue の種別> --title "<接頭辞><要約>" --body-file <ファイル>
 ```
+
+`<Issue の種別>` は skeleton と check が表示した値をそのまま使う（正本は Form の `type:`）。
+`--type` を省くと種別の無い Issue になる。`unknown flag: --type` と出たら gh が古い（2.94.0 以降が必要）。
+`--type` を外して作らず、gh の更新をユーザーに依頼する。
 
 発行された番号を報告する。Issue 番号が確定するまで Branch は作らない。

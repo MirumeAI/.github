@@ -9,6 +9,7 @@
 #   issue-form.sh check    <feature|bug|experiment> <file>
 #
 # ラベルをこのファイルへ書き写さない。常に正本から取得する。
+# Issue の種別（Organization の Issue Type）も Form の `type:` から取る。
 
 set -euo pipefail
 
@@ -74,6 +75,19 @@ options() {
 
 title_prefix() { fetch_form "$1" | sed -n 's/^title: "\(.*\)"$/\1/p'; }
 
+# Issue の種別。gh issue create の --type に渡す（省くと種別の無い Issue になる）
+issue_type() { fetch_form "$1" | sed -n 's/^type: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p'; }
+
+type_line() {
+  local t
+  t="$(issue_type "$1")"
+  if [ -n "$t" ]; then
+    echo "Issue の種別: $t（gh issue create --type $t）"
+  else
+    echo "Issue の種別: なし（Form に type: が無い。--type は付けない）"
+  fi
+}
+
 skeleton() {
   local type="$1" req opt
   req="$(required_labels "$type")"
@@ -81,6 +95,7 @@ skeleton() {
 
   echo "# --- ここから下が Issue 本文。この行と次の説明ブロックは本文に含めない ---" >&2
   echo "title の接頭辞: $(title_prefix "$type")" >&2
+  type_line "$type" >&2
   echo "必須ラベル:" >&2
   echo "$req" | sed 's/^/  - /' >&2
   if [ -n "$opt" ]; then
@@ -167,6 +182,7 @@ check() {
 
   [ "$ng" -eq 0 ] || exit 1
   echo "OK: 見出し・必須項目・選択肢すべて Form の定義と一致しています"
+  type_line "$type"
 }
 
 [ $# -ge 1 ] || usage

@@ -19,14 +19,15 @@ MirumeAI 標準開発ルールに従ってください。
 ```text
 .github/
 ├── ISSUE_TEMPLATE/
-│   ├── feature.yml      … 新機能・機能改善・ドキュメント改善
-│   ├── bug.yml          … 不具合修正
-│   ├── experiment.yml   … AI・アルゴリズム・性能評価
+│   ├── feature.yml      … 新機能・機能改善・ドキュメント改善（種別 Feature）
+│   ├── bug.yml          … 不具合修正（種別 Bug）
+│   ├── experiment.yml   … AI・アルゴリズム・性能評価（種別 Experiment）
 │   └── config.yml       … blank_issues_enabled: false
 └── PULL_REQUEST_TEMPLATE.md
 ```
 
 ここに置いたテンプレートは、各 Repository に同種の独自テンプレートが**無い場合のみ**既定値として使われます。
+種別（`type:`）は Organization の Issue Types にあるものだけを書きます。CLI の `/issue` も Form の `type:` を読んで `--type` に渡します。
 各製品 Repository へ複製しないでください。
 
 ## 変更時の手順

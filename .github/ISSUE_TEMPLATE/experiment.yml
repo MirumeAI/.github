@@ -1,6 +1,7 @@
 name: Experiment
 description: AI・アルゴリズム・性能評価などの実験
 title: "[Experiment] "
+type: Experiment
 body:
   - type: markdown
     attributes:

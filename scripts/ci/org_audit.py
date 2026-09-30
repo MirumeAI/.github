@@ -167,15 +167,27 @@ def _documented_case_count(text: str) -> "int | None":
     return int(m.group(1)) if m else None
 
 
+def _form_types(repo_root: Path) -> dict:
+    """Issue Form ごとの `type:`（無ければ None）。 `config.yml` は Form ではない。"""
+    out = {}
+    for f in sorted((repo_root / ".github" / "ISSUE_TEMPLATE").glob("*.yml")):
+        if f.name == "config.yml":
+            continue
+        m = re.search(r"^type:\s*\"?([^\"\n]+?)\"?\s*$",
+                      f.read_text(encoding="utf-8"), re.M)
+        out[f.name] = m.group(1) if m else None
+    return out
+
+
 def audit_org(gh: Gh) -> dict:
     """Organization 側の実測値。"""
     org = gh.get(f"/orgs/{ORG}", "Organization の Plan") or {}
     out = {
         "plan": (org.get("plan") or {}).get("name"),
-        # None は「取れなかった」。 {}（定義が無い）と区別する
+        # None は「取れなかった」。 {} や []（定義が無い）と区別する
         "properties": None,
-        "issue_types": [],
-        "issue_fields": [],
+        "issue_types": None,         # 有効なものだけ
+        "issue_fields": None,
         "teams": {},
     }
     schema = gh.get(f"/orgs/{ORG}/properties/schema", "Custom Properties の定義")
@@ -192,7 +204,8 @@ def audit_org(gh: Gh) -> dict:
             ("issue_fields", f"/orgs/{ORG}/issue-fields", "Issue Fields")):
         got = gh.get(path, why)
         if got is not None:
-            out[key] = [x["name"] for x in got]
+            # 無効にした種別は Form から指定しても使えない
+            out[key] = [x["name"] for x in got if x.get("is_enabled", True)]
     teams = gh.get(f"/orgs/{ORG}/teams", "Team 一覧")
     if teams is not None:
         for t in teams:
@@ -374,6 +387,19 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
                     f"CLAUDE.md は hook 回帰テストを {documented} ケースと"
                     f"書いているが、 実行すると {actual} ケース")
 
+    # --- Issue Form の種別 ---
+    # **Form に存在しない種別を書いたときの挙動は公式文書に無い。** 種別の
+    # 名前を Organization 側で変えたり無効にしたりしても、 Form は黙って
+    # そのまま残る。 取れなかったとき（None）は「無い」と言わない。
+    types = org.get("issue_types")
+    if types is not None:
+        for form, t in (local.get("form_types") or {}).items():
+            if t and t not in types:
+                add(WARNING, "form_type_missing", f"(org) {ORG}",
+                    f"Issue Form {form} の type: {t} が Organization の"
+                    "有効な種別に無い（その Form の Issue に種別が付かない"
+                    "可能性がある）")
+
     # --- Organization ---
     defined = org.get("properties")
     if defined is not None:
@@ -392,7 +418,8 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
 def collect_local(repo_root: Path, repos: dict, gh: Gh) -> dict:
     """手元で実行して分かること + 各 Repository の CLAUDE.md の記述。"""
     out = {"guard_cases": _guard_case_count(repo_root),
-           "documented_cases": {}}
+           "documented_cases": {},
+           "form_types": _form_types(repo_root)}
     if out["guard_cases"] is None:
         gh.unknown.append("hook 回帰テストの実件数: "
                           "scripts/ci/test_guard_main.sh が無い")
@@ -421,8 +448,11 @@ def render(org, repos, findings, exceptions, unknown) -> int:
     props = org.get("properties")
     print("Custom Properties: "
           + ("不明" if props is None else (", ".join(props) or "なし")))
-    print(f"Issue Types: {', '.join(org['issue_types']) or '不明'}")
-    print(f"Issue Fields: {', '.join(org['issue_fields']) or '不明'}")
+    for key, label in (("issue_types", "Issue Types（有効）"),
+                       ("issue_fields", "Issue Fields")):
+        got = org.get(key)
+        print(f"{label}: "
+              + ("不明" if got is None else (", ".join(got) or "なし")))
     for slug, names in (org.get("teams") or {}).items():
         print(f"Team {slug}: {len(names)} Repository")
     print()

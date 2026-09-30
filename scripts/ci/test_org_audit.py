@@ -428,6 +428,47 @@ class ItGuardsThePublicBoundaryTest(unittest.TestCase):
         self.assertEqual(self._find(True, "customer-confidential"), [])
 
 
+class ItKeepsTheFormTypesUsableTest(unittest.TestCase):
+    """**Form の `type:` が Organization に無いと、 黙って種別なしに戻る。**
+
+    Form に存在しない種別を書いたときの挙動は公式文書に無い。 種別の名前を
+    Organization 側で変えたり無効にしたりしても、 Form はそのまま残る。
+    """
+
+    def test_a_type_missing_in_the_org_is_found(self) -> None:
+        local = {"form_types": {"experiment.yml": "Experiment",
+                                "feature.yml": "Feature"}}
+        findings, _ = A.classify(
+            _org(issue_types=["Task", "Bug", "Feature"]), {}, local)
+        self.assertEqual(_codes(findings), ["form_type_missing"])
+        self.assertIn("experiment.yml", findings[0]["message"])
+
+    def test_nothing_is_claimed_when_the_types_are_unknown(self) -> None:
+        """**取れないことを「無い」と言わない。**"""
+        local = {"form_types": {"experiment.yml": "Experiment"}}
+        findings, _ = A.classify(_org(issue_types=None), {}, local)
+        self.assertEqual(findings, [])
+
+    def test_a_disabled_type_is_not_usable(self) -> None:
+        """無効にした種別は、 一覧にあっても Form から使えない。"""
+        gh = A.Gh()
+
+        def fake(path, why):
+            if path.endswith("/issue-types"):
+                return [{"name": "Feature", "is_enabled": True},
+                        {"name": "Experiment", "is_enabled": False}]
+            return {} if path == f"/orgs/{A.ORG}" else []
+        gh.get = fake
+        self.assertEqual(A.audit_org(gh)["issue_types"], ["Feature"])
+
+    def test_the_types_are_read_from_the_real_forms(self) -> None:
+        got = A._form_types(HERE.parents[1])
+        self.assertLessEqual({"bug.yml", "experiment.yml", "feature.yml"},
+                             set(got))
+        self.assertNotIn("config.yml", got, "config.yml は Form ではない")
+        self.assertEqual(got["feature.yml"], "Feature")
+
+
 class ItComparesTheDocumentWithTheImplementationTest(unittest.TestCase):
     """**文章に書いた数字は、 実装が増えても変わらない。**
 

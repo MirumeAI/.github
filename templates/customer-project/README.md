@@ -56,7 +56,17 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
      -C <作業ディレクトリ> '*/templates/customer-project'
    ```
 
-3. Custom Properties を設定する（`repo_type=customer`、`lifecycle=development`、`owner_team`）
+3. Custom Properties を 8 つすべて設定する（Organization の管理者が行う）
+
+   | Property | 値 |
+   |---|---|
+   | `repo_type` / `lifecycle` / `owner_team` | `customer-project` / `active` / `delivery` |
+   | `domain` / `criticality` | 案件に合わせる（検査なら `visual-inspection` / `high`） |
+   | `data_classification` | `customer-confidential` |
+   | `production_impact` / `governance_profile` | 稼働前は `none` / `standard`。現場で稼働したら `direct` / `strict` |
+
+   設定後に `MirumeAI/.github` の `scripts/ci/org_audit.py`（読み取りだけ）を実行し、所見に出ないことを確かめる。
+   値の意味は `MirumeAI/development-docs` の `00_management/repository_management.md`
 4. Team の権限を確認する（`developers=write` / `maintainers=admin`）
 5. `versions.yaml` の commit SHA を埋める
 6. `CLAUDE.md` を置く（正本は `MirumeAI/development-docs`）

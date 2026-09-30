@@ -134,6 +134,20 @@ class ItFindsDriftTest(unittest.TestCase):
                 self.assertEqual(code, 1, out[-400:])
                 self.assertIn(rel, out)
 
+    def test_every_shared_command_is_compared(self) -> None:
+        """**共通 command と script は、 すべて照合の対象であること。**
+
+        新しい command を足したときに `SHARED` へ入れ忘れると、 その複製は
+        照合されないまま drift する（`customer-request.md` は正本に置かれて
+        おらず、 照合できない状態だった）。
+        """
+        for sub in (".claude/commands", ".claude/scripts"):
+            for f in sorted((ROOT / sub).iterdir()):
+                if f.is_file():
+                    with self.subTest(file=f.name):
+                        self.assertIn(f"{sub}/{f.name}", C.SHARED,
+                                      f"{sub}/{f.name} が照合の対象に無い")
+
     def test_settings_json_is_not_compared(self) -> None:
         """**`.claude/settings.json` は対象外。**
 

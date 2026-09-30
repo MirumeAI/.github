@@ -212,9 +212,9 @@ class ItFindsWhatMattersTest(unittest.TestCase):
         """**一覧では稼働中に見える。**
 
         この判定は前からあったが、 archived を先に飛ばしていたので
-        一度も動いていなかった。 旧い言葉（production）でも見つけること。
+        一度も動いていなかった。
         """
-        for lc in ("active", "production"):
+        for lc in ("active", "maintenance"):
             with self.subTest(lifecycle=lc):
                 findings, _ = A.classify(_org(), {"r": _repo(
                     archived=True, properties=_props(lifecycle=lc))}, {})
@@ -222,10 +222,10 @@ class ItFindsWhatMattersTest(unittest.TestCase):
 
 
 class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
-    """**Custom Properties を標準（§6）の言葉へ寄せる。**
+    """**Custom Properties は標準（§6）の言葉で書く。**
 
-    寄せる途中は旧い言葉も通す（所見は INFO）。 寄せたかどうかは、
-    この監査の所見が 0 件になることで確かめる。
+    2026-09-30 に寄せ終えた。 決めた値の表で所見 0 件になること、
+    旧い言葉がもう通らないことを確かめる。
     """
 
     #: 決めた Target（as_is_inventory.md §9.1）。 名前は伏せている
@@ -247,14 +247,11 @@ class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
                  "standard", "internal", "none"),
     }
 
-    #: 寄せる前の実測値（2026-09-30）。 名前は伏せている。
-    BEFORE = {
-        "core-a": (True, "core", "development", "developers"),
-        "core-b": (True, "core", "development", "developers"),
-        "customer-a": (True, "customer", "production", "developers"),
-        "customer-b": (True, "customer", "production", "developers"),
-        "platform": (False, "org-config", "production", "maintainers"),
-        "docs": (True, "docs", "production", "maintainers"),
+    #: 寄せる前に使っていた言葉（2026-09-30 まで）。
+    OLD_WORDS = {
+        "repo_type": ("core", "customer", "docs", "org-config",
+                      "template", "workflow"),
+        "lifecycle": ("development", "production"),
     }
 
     def test_all_eight_properties_of_the_standard_are_audited(self) -> None:
@@ -278,51 +275,34 @@ class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
         findings, _ = A.classify(_org(), repos, {})
         self.assertEqual(findings, [])
 
-    def test_the_values_before_the_change_are_only_on_the_way(self) -> None:
-        """**寄せる前の実測値で、 余計な所見を出さないこと。**
+    def test_the_old_words_are_no_longer_accepted(self) -> None:
+        """**寄せ終えたので、 旧い言葉は「標準に無い値」になる。**
 
-        出るのは「寄せる途中」（INFO）と「定義が無い」の 2 種類だけ。
-        旧い言葉を誤りとして数えると、 適用前から直すものが埋もれる。
+        定義からも外したので入れられないはずだが、 選択肢を戻されたときに
+        気づけるようにする。
         """
-        repos = {}
-        for name, (private, rt, lc, ot) in self.BEFORE.items():
-            repos[name] = _repo(private=private, properties={
-                "repo_type": rt, "lifecycle": lc, "owner_team": ot,
-                "core_version": None})
-        org = _org(properties=_schema(
-            ["repo_type", "lifecycle", "owner_team", "core_version"]))
-        findings, _ = A.classify(org, repos, {})
-        legacy = [f for f in findings if f["code"] == "legacy_value"]
-        undefined = [f for f in findings
-                     if f["code"] == "missing_property_definition"]
-        self.assertEqual(len(legacy), 18, "6 件 × 3 Property")
-        self.assertTrue(all(f["severity"] == A.INFO for f in legacy))
-        self.assertEqual(sorted(f["message"].split()[2] for f in undefined),
-                         ["criticality", "data_classification", "domain",
-                          "governance_profile", "production_impact"])
-        self.assertEqual(len(findings), 18 + 5, _codes(findings))
+        for key, words in self.OLD_WORDS.items():
+            for w in words:
+                with self.subTest(key=key, value=w):
+                    findings, _ = A.classify(_org(), {"r": _repo(
+                        properties=_props(**{key: w}))}, {})
+                    self.assertEqual(_codes(findings), ["unknown_value"])
+                    self.assertEqual(findings[0]["severity"], A.WARNING)
 
-    def test_a_legacy_value_names_where_it_goes(self) -> None:
-        findings, _ = A.classify(_org(), {"r": _repo(
-            properties=_props(repo_type="core"))}, {})
-        self.assertEqual(_codes(findings), ["legacy_value"])
-        self.assertIn("product-core", findings[0]["message"])
+    def test_a_team_name_as_owner_is_found(self) -> None:
+        """**担当は機能の言葉で表す。** Team は権限の単位（D12）。
 
-    def test_a_legacy_value_is_judged_by_its_new_meaning(self) -> None:
-        """**寄せる途中も組の判定を止めない。** core は product-core として
-        strict を求める。"""
-        findings, _ = A.classify(_org(), {"r": _repo(properties=_props(
-            repo_type="core", governance_profile="standard",
-            production_impact="indirect"))}, {})
-        self.assertEqual(_codes(findings), ["legacy_value", "profile_mismatch"])
-
-    def test_a_team_name_as_owner_has_no_automatic_mapping(self) -> None:
-        """developers / maintainers は Team の名前。 機能の言葉へは
-        Repository ごとに寄せる（機械では決まらない）。"""
-        findings, _ = A.classify(_org(), {"r": _repo(
-            properties=_props(owner_team="developers"))}, {})
-        self.assertEqual(_codes(findings), ["legacy_value"])
-        self.assertIn("Repository ごと", findings[0]["message"])
+        Team の一覧は API から取るので、 Team が増えても表を直さなくてよい。
+        """
+        org = _org(teams={"developers": [], "maintainers": []})
+        for team in ("developers", "maintainers"):
+            with self.subTest(owner_team=team):
+                findings, _ = A.classify(org, {"r": _repo(
+                    properties=_props(owner_team=team))}, {})
+                self.assertEqual(_codes(findings), ["team_as_owner"])
+        findings, _ = A.classify(org, {"r": _repo(
+            properties=_props(owner_team="platform"))}, {})
+        self.assertEqual(findings, [], "機能の言葉まで Team 名と誤認しています")
 
     def test_owner_team_is_an_open_vocabulary(self) -> None:
         """標準も owner_team の選択肢を閉じていない（「...」）。"""
@@ -333,19 +313,11 @@ class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
                 self.assertEqual(findings, [])
 
     def test_a_value_outside_the_standard_is_found(self) -> None:
-        """いまの定義にある `template` は標準に無い（使用 0 件）。"""
+        """標準に無い値（定義から外した `template` など）を見つける。"""
         findings, _ = A.classify(_org(), {"r": _repo(
             properties=_props(repo_type="template"))}, {})
         self.assertEqual(_codes(findings), ["unknown_value"])
         self.assertEqual(findings[0]["severity"], A.WARNING)
-
-    def test_every_legacy_word_goes_to_a_standard_word(self) -> None:
-        for key, table in A.LEGACY.items():
-            for old, new in table.items():
-                with self.subTest(key=key, old=old):
-                    self.assertNotIn(old, A.STANDARD[key] or ())
-                    if new is not None:
-                        self.assertIn(new, A.STANDARD[key])
 
     def test_a_missing_value_is_found(self) -> None:
         findings, _ = A.classify(_org(), {"r": _repo(

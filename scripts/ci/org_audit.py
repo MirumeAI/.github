@@ -54,7 +54,10 @@ REQUIRED_FILES = (
 #:   data_classification  `public` を足す。 Public な Repository を表す値が
 #:                        標準に無かった
 #: `owner_team` は標準でも選択肢を閉じていない（「...」）ので、 値の種類は
-#: 見ない（None）。
+#: 見ない（None）。 ただし Team の名前は使わない（担当は機能の言葉で表す。
+#: Team は権限の単位）。
+#: lifecycle に development / production は無い。 開発中か稼働中かは
+#: production_impact が持つ（2026-09-30 に寄せた）。
 STANDARD = {
     "domain": ("visual-inspection", "robotics", "platform", "research",
                "internal", "other"),
@@ -72,17 +75,6 @@ STANDARD = {
 
 #: 定義が取れなくても Repository ごとに確かめる Property（前から必須）。
 ALWAYS_REQUIRED = ("repo_type", "lifecycle")
-
-#: 標準へ寄せる前の言葉 → 寄せた先。 **移行を確かめたら消す。**
-#: 寄せる途中も、 組の判定（strict など）は寄せた先の意味で行う。
-#: None は寄せ先を Repository ごとに決めるもの（機械では決まらない）。
-#: lifecycle の development / production の区別は production_impact が持つ。
-LEGACY = {
-    "repo_type": {"core": "product-core", "customer": "customer-project",
-                  "docs": "documentation", "org-config": "platform"},
-    "lifecycle": {"development": "active", "production": "active"},
-    "owner_team": {"developers": None, "maintainers": None},
-}
 
 #: 版を持つ Property。 **値を入れない。** Core の版の正本は customer
 #: Repository の versions.yaml（commit SHA）。 Property にも書くと正本が
@@ -266,13 +258,9 @@ def _expected_properties(org: dict) -> tuple:
     return tuple(k for k in STANDARD if k in defined or k in ALWAYS_REQUIRED)
 
 
-def _new_word(key: str, value):
-    """旧い言葉なら寄せた先（決まらなければ None）、 それ以外はそのまま。"""
-    return LEGACY.get(key, {}).get(value, value)
-
-
-def _check_properties(name: str, info: dict, expected: tuple, add) -> dict:
-    """値を 1 つずつ確かめ、 標準の言葉に寄せた値を返す（組の判定に使う）。"""
+def _check_properties(name: str, info: dict, expected: tuple, teams: set,
+                      add) -> dict:
+    """値を 1 つずつ確かめ、 正しい値だけを返す（組の判定に使う）。"""
     p = info["properties"]
     now = {}
     for key in expected:
@@ -280,17 +268,14 @@ def _check_properties(name: str, info: dict, expected: tuple, add) -> dict:
         if not v:
             add(WARNING, "missing_property", name, f"{key} が未設定")
             continue
-        if v in LEGACY.get(key, {}):
-            to = LEGACY[key][v]
-            add(INFO, "legacy_value", name,
-                f"{key}={v} は標準の言葉へ寄せる途中"
-                + (f"（→ {to}）" if to else "（寄せ先は Repository ごとに決める）"))
-            if to:
-                now[key] = to
-            continue
         allowed = STANDARD[key]
         if allowed is not None and v not in allowed:
             add(WARNING, "unknown_value", name, f"{key}={v} は標準に無い値")
+            continue
+        if key == "owner_team" and v in teams:
+            add(WARNING, "team_as_owner", name,
+                f"owner_team={v} は Team の名前"
+                "（担当は機能の言葉で表す。 Team は権限の単位）")
             continue
         now[key] = v
     for key in VERSION_PROPERTIES:
@@ -302,7 +287,7 @@ def _check_properties(name: str, info: dict, expected: tuple, add) -> dict:
 
 
 def _check_combinations(name: str, info: dict, now: dict, add) -> None:
-    """値どうしの組。 **寄せた先の意味で**判定する。"""
+    """値どうしの組。 標準に無い値は使わない（先に所見にしている）。"""
     rt, gp = now.get("repo_type"), now.get("governance_profile")
     if rt == "unclassified":
         add(WARNING, "unclassified_repo", name,
@@ -335,12 +320,12 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
                          "repo": repo, "message": msg})
 
     expected = _expected_properties(org)
+    teams = set(org.get("teams") or {})
     for name, info in repos.items():
         if info["archived"]:
             # 棚卸し対象外。 ただし lifecycle が archived でなければ、
             # 一覧では稼働中に見えるので知らせる
-            lc = _new_word("lifecycle", info["properties"].get("lifecycle"))
-            if lc != "archived":
+            if info["properties"].get("lifecycle") != "archived":
                 add(WARNING, "archive_drift", name,
                     "GitHub では archived だが lifecycle が archived でない")
             continue
@@ -350,7 +335,7 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
                 add(CRITICAL if f == "CLAUDE.md" else WARNING,
                     "missing_required_file", name, f"{f} が無い")
         # --- Custom Properties ---
-        now = _check_properties(name, info, expected, add)
+        now = _check_properties(name, info, expected, teams, add)
         _check_combinations(name, info, now, add)
         # --- 保護 ---
         for cap in info["plan_limited"]:

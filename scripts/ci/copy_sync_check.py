@@ -42,6 +42,11 @@ SHARED = (
     # 全 Repository で同一になった。 **中に表を持たせていた間は照合できず、
     # ここだけ drift が野放しだった。**
     "scripts/ci/customer_data_check.py",
+    # Issue を作る手順。 種別の対応（#38）では、 正本を直した後に 5 件へ
+    # 1 件ずつ同期した。 照合しないと、 同期を忘れた Repository だけ
+    # 種別の無い Issue に戻る。
+    ".claude/scripts/issue-form.sh",
+    ".claude/commands/issue.md",
 )
 
 ALLOW_FILE = ".ci-copy-allow"

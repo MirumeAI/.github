@@ -113,6 +113,27 @@ class ItFindsDriftTest(unittest.TestCase):
             self.assertEqual(code, 1, out[-400:])
             self.assertIn("scripts/ci/customer_data_check.py", out)
 
+    def test_the_issue_command_is_covered(self) -> None:
+        """**Issue を作る手順も対象であること。**
+
+        種別の対応（#38）では、 正本を直した後に 5 Repository へ 1 件ずつ
+        同期した。 照合しないと、 同期を忘れた Repository だけ種別の無い
+        Issue に戻り、 誰も気づけない。
+        """
+        for rel in (".claude/scripts/issue-form.sh",
+                    ".claude/commands/issue.md"):
+            with self.subTest(file=rel), tempfile.TemporaryDirectory() as td:
+                self.assertIn(rel, C.SHARED)
+                base = Path(td)
+                can, tgt = base / "can", base / "tgt"
+                _canonical_tree(can)
+                _canonical_tree(tgt)
+                f = tgt / rel
+                f.write_bytes(f.read_bytes() + b"\n# drift\n")
+                code, out = self._run(tgt, can)
+                self.assertEqual(code, 1, out[-400:])
+                self.assertIn(rel, out)
+
     def test_settings_json_is_not_compared(self) -> None:
         """**`.claude/settings.json` は対象外。**
 

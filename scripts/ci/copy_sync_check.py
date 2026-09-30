@@ -47,6 +47,13 @@ SHARED = (
     # 種別の無い Issue に戻る。
     ".claude/scripts/issue-form.sh",
     ".claude/commands/issue.md",
+    # ほかの共通 command。 `customer-request.md` は 5 件で同一だったが、
+    # 正本（この Repository）に無く照合できなかった。 **新しい command を
+    # 足したら、 ここにも足す**（テストが .claude/ と突き合わせる）。
+    ".claude/commands/branch.md",
+    ".claude/commands/pr.md",
+    ".claude/commands/docs-sync.md",
+    ".claude/commands/customer-request.md",
 )
 
 ALLOW_FILE = ".ci-copy-allow"

@@ -30,6 +30,11 @@ MirumeAI 標準開発ルールに従ってください。
 種別（`type:`）は Organization の Issue Types にあるものだけを書きます。CLI の `/issue` も Form の `type:` を読んで `--type` に渡します。
 各製品 Repository へ複製しないでください。
 
+ほかに次を置いています。
+
+- `scripts/ci/` … 各 Repository の CI が使う検査の正本、Organization 監査（`org_audit.py`）、顧客案件の Repository を作る道具（`new_customer_repo.py`。Organization の Owner が実行する）
+- `templates/customer-project/` … 顧客案件の Repository の雛形。**中の `CLAUDE.md` は案件の Repository 用で、この Repository の規則ではありません。** Claude Code 一式（`.claude/`）は雛形に置かず、作るときに正本（この Repository）から写します
+
 ## 変更時の手順
 
 1. テンプレートを変更する

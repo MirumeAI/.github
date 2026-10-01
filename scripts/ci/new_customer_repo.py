@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -410,9 +411,15 @@ def preflight(api: Api, plan: Plan, resume: bool) -> tuple:
     return res, repo
 
 
+def _label(st: str) -> str:
+    """状態を 4 桁にそろえる（全角は 2 桁に数える）。"""
+    width = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in st)
+    return st + " " * max(0, 4 - width)
+
+
 def _show_results(results: list) -> None:
     for st, msg in results:
-        print(f"  {st:4}  {msg}")
+        print(f"  {_label(st)}  {msg}")
 
 
 def _properties_line(props: dict) -> str:
@@ -433,7 +440,7 @@ def show_plan(plan: Plan) -> None:
     print()
     print(f"最初の中身（{len(plan.tree)} ファイル）")
     for kind, note in (("雛形", f"{TEMPLATE}/ から。 案件の名前を入れる"),
-                       ("正本", "この Repository から写す（照合の対象）"),
+                       ("正本", "この Repository から写す。 照合の対象"),
                        ("作る", f"正本に {' と '.join(SETTINGS_EXTRA_DENY)}"
                                 " の拒否を足す")):
         paths = sorted(p for p, o in plan.origin.items() if o == kind)
@@ -686,7 +693,7 @@ def check(api: Api, plan: Plan, audit=audit_one) -> int:
     print(f"{ORG}/{name} を確かめます（読み取りだけ）\n")
     st, repo = api.get(f"/repos/{ORG}/{name}")
     if st == "missing":
-        print(f"  {NG:4}  {ORG}/{name} が無い")
+        print(f"  {_label(NG)}  {ORG}/{name} が無い")
         return 1
     res = []
 

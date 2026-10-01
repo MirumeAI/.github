@@ -39,38 +39,13 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 `config/` には PLC の接続先など内部ネットワークの情報が入ります。**この Repository は Private にし、Public な場所へ内容を転記しないでください。**
 
-## この雛形から新しい案件を作る
+## 始めるときにやること
 
-**Repository の作成と設定は人が行います。** Agent は Repository の設定を変更できません（`MirumeAI/development-docs` の DECISION D5）。
+この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
 
-1. Repository を作る（Private）
-
-   ```bash
-   gh repo create MirumeAI/customer-<会社>-<部品> --private
-   ```
-
-2. この雛形を中身として入れる
-
-   ```bash
-   gh api repos/MirumeAI/.github/tarball/main | tar -xz --strip-components=1 \
-     -C <作業ディレクトリ> '*/templates/customer-project'
-   ```
-
-3. Custom Properties を 8 つすべて設定する（Organization の管理者が行う）
-
-   | Property | 値 |
-   |---|---|
-   | `repo_type` / `lifecycle` / `owner_team` | `customer-project` / `active` / `delivery` |
-   | `domain` / `criticality` | 案件に合わせる（検査なら `visual-inspection` / `high`） |
-   | `data_classification` | `customer-confidential` |
-   | `production_impact` / `governance_profile` | 稼働前は `none` / `standard`。現場で稼働したら `direct` / `strict` |
-
-   設定後に `MirumeAI/.github` の `scripts/ci/org_audit.py`（読み取りだけ）を実行し、所見に出ないことを確かめる。
-   値の意味は `MirumeAI/development-docs` の `00_management/repository_management.md`
-4. Team の権限を確認する（`developers=write` / `maintainers=admin`）
-5. `versions.yaml` の commit SHA を埋める
-6. `CLAUDE.md` を置く（正本は `MirumeAI/development-docs`）
-7. `config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で機体へ配る
+1. `versions.yaml` に、使う Core の commit SHA を書く
+2. `config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で機体へ配る
+3. 現場で稼働したら、分類の `production_impact` と `governance_profile` を `direct` と `strict` に変える（Organization の管理者が行う）。稼働前は `none` と `standard`
 
 ## 参照
 

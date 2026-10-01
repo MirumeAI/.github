@@ -75,6 +75,13 @@ jobs:
       - name: 複製の照合そのもの
         run: python scripts/ci/test_copy_sync.py
 
+      # **顧客案件の Repository を作る道具が、 漏れなく作ること。**
+      # 手で作ると、 main を守る hook、 Team の権限、 Squash だけにする
+      # 設定、 Dependabot Alerts が漏れても気づけなかった。 作った中身が
+      # 新しい Repository の最初の CI を通ることまで確かめる（gh は差し替え）。
+      - name: 顧客案件の Repository を作る道具
+        run: python scripts/ci/test_new_customer_repo.py
+
       # **版と配置の記録の検査そのもの。**
       # 「deployed_release に書いた版が無い」「rollback が今の版と同じ」は
       # 必要になった瞬間まで気づけない。 見つける側が壊れたら意味が無い。

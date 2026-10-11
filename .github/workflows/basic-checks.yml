@@ -93,6 +93,10 @@ jobs:
       # あった（必要な順番が逆）。
       # **再利用 workflow には入れない。** 顧客 Repository の config/ には
       # PLC の IP が正当に入るため、 毎回 NG になって誰も見なくなる。
+      # **顧客の名前の登録表は渡さない（この workflow は secret を使わない）。**
+      # PR の code が動くので、 書き込み権限で workflow を変えれば secret を
+      # 読み出せてしまう。 名前の照合は、 手元の登録表か、 main の検査だけが
+      # 登録表を読む仕組みで行う（ここでは「照合していません」と出る）。
       - name: 現場の値が混ざっていないか
         run: python scripts/ci/customer_data_check.py
 

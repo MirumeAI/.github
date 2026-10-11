@@ -1,3 +1,8 @@
 # Python が自動生成するもの。 追跡すると Pull Request の差分に毎回出る。
 __pycache__/
 *.py[cod]
+
+# 顧客の登録表（顧客の名前の一覧）。 正式な置き場所はリポジトリの外
+# （~/.config/mirumeai/customer_registry.txt など）。 誤ってここへ置いても
+# commit しないようにする（検査も、 リポジトリの中の登録表は断る）。
+customer_registry*

@@ -56,8 +56,11 @@ CI の記録は外から見えることがあり、 公開のリポジトリで�
 
   ・登録表がリポジトリの中にあれば断る（commit されるのを防ぐ）。 非公開の
     リポジトリで置くと決めたときだけ `--allow-registry-in-repo` で許す
-  ・登録表の場所も中身も、 出力に書かない（登録表の何行目かだけを書く）。
-    中身を場所の欄へ渡す取り違えでも、 名前が記録に出ないように
+  ・登録表の場所も中身も OS の例外の文も、 出力に書かない（登録表の何行目かと、
+    決まった言葉だけを書く）。 場所の欄の値は **ファイルに触る前に形を確かめ**、
+    改行や NUL などの制御文字を含む値・長すぎる値・`base64:` や `#` で始まる値は、
+    中身の取り違えとして止める。 `--registry ""` も、 指定されたものとして止める。
+    どれも終了コード 2
   ・登録表が無ければ語の照合を飛ばし、 **飛ばしたことを必ず出力する**
     （黙って合格にしない）。 `--require-registry` を付けると、 無いときに
     終了コード 2 で止める。 **登録表を渡す仕組みでは必ず付ける**（渡し損ねを
@@ -75,9 +78,12 @@ import argparse
 import base64
 import os
 import re
+import stat
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
+from typing import NoReturn
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -124,19 +130,26 @@ class Name:
     読み込みで落ちる。
     """
 
-    __slots__ = ("line", "text", "_pat")
+    __slots__ = ("line", "text", "_pat", "_nfc_pat")
 
     def __init__(self, line: int, text: str) -> None:
         self.line = line
         self.text = text
+        self._pat = self._compile(text)
+        # 出力の道を伏せるときは NFC に揃えて探す（NFD の道でも伏せる）。
+        # 中身の照合は揃えない（照合の範囲を変えない）。
+        nfc = unicodedata.normalize("NFC", text)
+        self._nfc_pat = self._pat if nfc == text else self._compile(nfc)
+
+    @staticmethod
+    def _compile(text: str) -> "re.Pattern[str]":
         # 英字だけの語は **語として** 探す。 部分一致にすると、 語が
         # ほかの語の一部になっているところ（例: `fact` と `factory`）を拾う
         # （実在の名前で、 実際に 6 ファイルを誤検出した）。
         if text.isascii():
-            self._pat = re.compile(
+            return re.compile(
                 r"(?<![A-Za-z])" + re.escape(text) + r"(?![A-Za-z])", re.I)
-        else:
-            self._pat = re.compile(re.escape(text))
+        return re.compile(re.escape(text))
 
     def __repr__(self) -> str:
         return f"Name(line={self.line})"
@@ -151,15 +164,38 @@ _REGISTRY: "tuple[Name, ...]" = ()
 
 
 class RegistryError(Exception):
-    """登録表を使えない（見つからない・空・リポジトリの中にある）。
+    """登録表を使えない。 終了コード 2 で止める。
 
-    **文に、 登録表の場所も中身も入れない。**
+    **文は決まった言葉だけにする。** 登録表の場所・中身・OS の例外の文を
+    入れない。 場所の欄へ中身を取り違えて渡しても、 場所に名前が入って
+    いても、 記録に出ないように。
     """
+
+
+#: 場所として受ける値の上限。 これを超える値、 改行や NUL などの制御文字を
+#: 含む値、 `base64:` や `#` で始まる値は、 中身の取り違えとして **ファイルに
+#: 触る前に** 止める（長い値を場所として触ると、 OS の例外の文に値が出る）。
+_MAX_PATH_CHARS = 1024
+_MAX_PATH_PART_BYTES = 255
+#: 登録表のファイルの大きさの上限（語の一覧には十分に大きい）。
+_MAX_REGISTRY_BYTES = 1_000_000
 
 
 def _inside(path: Path, root: Path) -> bool:
     p, r = path.resolve(), root.resolve()
     return p == r or r in p.parents
+
+
+def _looks_like_a_path(value: str) -> bool:
+    """場所として受けた値を、 ファイルに触らずに確かめる。"""
+    if not value.strip() or len(value) > _MAX_PATH_CHARS:
+        return False
+    if value.startswith((REGISTRY_ENV_PREFIX, "#")):
+        return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        return False
+    return all(len(part.encode("utf-8", "surrogateescape")) <= _MAX_PATH_PART_BYTES
+               for part in value.split("/"))
 
 
 def parse_registry(text: str) -> "tuple[Name, ...]":
@@ -180,22 +216,40 @@ def _names(text: str, label: str) -> "tuple[Name, ...]":
     return names
 
 
-def load_registry(path: Path, *, root: "Path | None" = None,
+def load_registry(path: "str | os.PathLike[str]", *, root: "Path | None" = None,
                   allow_in_repo: bool = False,
                   label: str = "顧客の登録表") -> "tuple[Name, ...]":
-    """登録表のファイルを読む。 `label` は、 エラーの文で登録表を指す言葉。"""
+    """登録表のファイルを読む。 `label` は、 エラーの文で登録表を指す決まった言葉。
+
+    **どこで失敗しても、 文に場所も中身も OS の例外の文も入れない。** 確かめる順:
+    場所の形 → 在るか・ファイルか → リポジトリの中か → 大きさ → 文字の形。
+    「リポジトリの中にあります」は、 そこに本当にファイルがあるときだけ言う。
+    """
+    value = os.fspath(path)
+    if not _looks_like_a_path(value):
+        raise RegistryError(f"{label}の場所が正しくありません")
     root = ROOT if root is None else root
-    if not allow_in_repo and _inside(path, root):
-        raise RegistryError(
-            f"{label}がリポジトリの中にあります。 commit すると中身が外へ出るので、"
-            " リポジトリの外へ置いてください（非公開のリポジトリで置くと決めた"
-            "場合だけ --allow-registry-in-repo を付ける）")
-    if not path.is_file():
-        raise RegistryError(f"{label}が見つかりません")
     try:
-        text = path.read_text(encoding="utf-8-sig")
+        p = Path(value).expanduser()
+        st = p.stat()
+        if not stat.S_ISREG(st.st_mode):
+            raise RegistryError(f"{label}を読めません（ファイルではありません）")
+        if not allow_in_repo and _inside(p, root):
+            raise RegistryError(
+                f"{label}がリポジトリの中にあります。 commit すると中身が外へ出るので、"
+                " リポジトリの外へ置いてください（非公開のリポジトリで置くと決めた"
+                "場合だけ --allow-registry-in-repo を付ける）")
+        if st.st_size > _MAX_REGISTRY_BYTES:
+            raise RegistryError(f"{label}の形式が正しくありません（大きすぎます）")
+        data = p.read_bytes()
+    except RegistryError:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        raise RegistryError(f"{label}を読めません（無い・権限が無いなど）") from None
+    try:
+        text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise RegistryError(f"{label}を UTF-8 として読めません") from None
+        raise RegistryError(f"{label}の形式が正しくありません（UTF-8 ではありません）") from None
     return _names(text, label)
 
 
@@ -213,29 +267,44 @@ def decode_registry(value: str, *, label: str = "顧客の登録表") -> "tuple[
     return _names(text, label)
 
 
+def _default_registry() -> "str | None":
+    """決まった場所の登録表。 無ければ None。 在るのに確かめられないときは止める。"""
+    try:
+        p = DEFAULT_REGISTRY.expanduser()
+    except RuntimeError:                       # HOME が分からない
+        return None
+    try:
+        p.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, ValueError):
+        raise RegistryError("決まった場所の登録表を読めません（権限が無いなど）") from None
+    return str(p)
+
+
 def resolve_registry(arg: "str | None", *, allow_in_repo: bool = False
                      ) -> "tuple[tuple[Name, ...], str] | None":
-    """使う登録表と、 どこから読んだか（出力に書く言葉）。 無ければ None。
+    """使う登録表と、 どこから読んだか（出力に書く決まった言葉）。 無ければ None。
 
     引数か環境変数で指定されたものが使えなければ止める（指定したのに
-    黙って飛ばさない）。 決まった場所は、 あるときだけ使う。
+    黙って飛ばさない）。 **`--registry ""` のように空で指定されたときも、
+    指定されたものとして止める**（ほかの探し方へ進まない）。 決まった場所は、
+    あるときだけ使う。
     """
-    if arg:
-        src = "引数 --registry のファイル"
-        return load_registry(Path(arg).expanduser(), allow_in_repo=allow_in_repo,
-                             label=src), src
+    if arg is not None:
+        src = "引数 --registry の登録表"
+        return load_registry(arg, allow_in_repo=allow_in_repo, label=src), src
     f = os.environ.get(REGISTRY_FILE_ENV, "").strip()
     if f:
-        src = f"環境変数 {REGISTRY_FILE_ENV} のファイル"
-        return load_registry(Path(f).expanduser(), allow_in_repo=allow_in_repo,
-                             label=src), src
+        src = f"環境変数 {REGISTRY_FILE_ENV} の登録表"
+        return load_registry(f, allow_in_repo=allow_in_repo, label=src), src
     content = os.environ.get(REGISTRY_ENV, "").strip()
     if content:
-        src = f"環境変数 {REGISTRY_ENV}"
+        src = f"環境変数 {REGISTRY_ENV} の登録表"
         return decode_registry(content, label=src), src
-    default = DEFAULT_REGISTRY.expanduser()
-    if default.is_file():
-        src = f"決まった場所（{DEFAULT_REGISTRY}）のファイル"
+    default = _default_registry()
+    if default is not None:
+        src = "決まった場所の登録表"
         return load_registry(default, allow_in_repo=allow_in_repo, label=src), src
     return None
 
@@ -290,20 +359,57 @@ def _line(s: str, pos: int) -> int:
     return s.count("\n", 0, pos) + 1
 
 
+#: 出力の道を伏せるときの IP とシリアルの形。 中身の照合（`_IP`・`_SERIAL`）より
+#: 境界を緩める（`_` や英字の隣、 重なった並びでも伏せる）。 出力にだけ使い、
+#: 照合の範囲は変えない。
+_PATH_IP = re.compile(r"(?<!\d)(?=((?:\d{1,3}\.){3}\d{1,3})(?!\d))")
+_PATH_SERIAL = re.compile(r"(?<![A-Z0-9])(?=([A-Z]{2,4}\d{8,}))")
+
+
+def _printable(s: str) -> str:
+    """表示できない文字（制御文字など）を `\\xNN` の形にする（1 か所を 1 行で出す）。"""
+    return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in s)
+
+
+def _merged(spans: "list[tuple[int, int, str]]") -> "list[tuple[int, int, str]]":
+    """重なる範囲を 1 つにまとめる。 印は、 まとめた中でいちばん長い範囲のもの。"""
+    out: "list[tuple[int, int, str]]" = []
+    for a, b, mark in sorted(spans):
+        if out and a < out[-1][1]:
+            pa, pb, pm = out[-1]
+            out[-1] = (pa, max(pb, b), pm if pb - pa >= b - a else mark)
+        else:
+            out.append((a, b, mark))
+    return out
+
+
 def _shown(rel: str) -> str:
     """出力に書くファイルの道。 **道の中の値も伏せる**（顧客の名前を付けた
     ファイルなど。 道を出すと、 中身を伏せても名前が記録に出る）。
 
-    UTF-8 でない道と制御文字（タブ・改行など）は、 表示できる形に直す
-    （1 か所を 1 行で出すため）。
+    **先に値を伏せ、 残りを表示できる形に直す**（逆の順にすると、 制御文字を
+    置き換えた `\\xNN` の英数字が語の境界を壊し、 名前が出た）。 重なって
+    見つかった値（長い語と短い語、 IP と語など）は 1 つにまとめて伏せ、
+    欠片を残さない。 NFD の道も NFC に揃えてから探す。 UTF-8 でない道も
+    落とさずに出す。
     """
     s = rel.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
-    s = "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in s)
-    s = _IP.sub(lambda m: "＜IP＞" if _PRIVATE.match(m.group(0)) else m.group(0), s)
-    s = _SERIAL.sub("＜シリアル＞", s)
+    s = unicodedata.normalize("NFC", s)
+    spans = []
+    for m in _PATH_IP.finditer(s):
+        if _PRIVATE.match(m.group(1)):
+            spans.append((m.start(), m.start() + len(m.group(1)), "＜IP＞"))
+    for m in _PATH_SERIAL.finditer(s):
+        spans.append((m.start(), m.start() + len(m.group(1)), "＜シリアル＞"))
     for n in _REGISTRY:
-        s = n._pat.sub(f"＜登録表の {n.line} 行目＞", s)
-    return s
+        for m in n._nfc_pat.finditer(s):
+            spans.append((m.start(), m.end(), f"＜登録表の {n.line} 行目＞"))
+    out, pos = [], 0
+    for a, b, mark in _merged(spans):
+        out += [_printable(s[pos:a]), mark]
+        pos = b
+    out.append(_printable(s[pos:]))
+    return "".join(out)
 
 
 def check(p: Path, registry: "tuple[Name, ...] | None" = None
@@ -335,9 +441,18 @@ def check(p: Path, registry: "tuple[Name, ...] | None" = None
     return sorted(found)
 
 
+class _Parser(argparse.ArgumentParser):
+    """引数の誤りの文に、 渡された値を入れない（登録表の中身を位置の引数などへ
+    取り違えて渡しても、 argparse の「unrecognized arguments: ...」で出さない）。"""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(2, "NG: 引数が正しくありません（--help で使い方を見る）\n")
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = _Parser(description=__doc__,
+                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--warn-only", action="store_true")
     ap.add_argument("--registry", metavar="FILE",
                     help="顧客の登録表（リポジトリの外のファイル）")
@@ -356,6 +471,9 @@ def main() -> int:
     except RegistryError as e:
         print(f"NG: {e}")
         return EXIT_REGISTRY
+    except Exception:  # noqa: BLE001  予期しない誤りでも、 場所・中身・例外の文を出さない
+        print("NG: 顧客の登録表を読み込めません（予期しない誤り。 場所と中身は出しません）")
+        return EXIT_REGISTRY
     if got is None:
         if a.require_registry:
             print("NG: 顧客の登録表がありません（--require-registry）。 --registry、"
@@ -369,7 +487,7 @@ def main() -> int:
                       "どれかで渡すと照合します）")
     else:
         _REGISTRY, src = got
-        names_note = f"顧客に固有の語: 登録表（{src}）の {len(_REGISTRY)} 件と照合しました"
+        names_note = f"顧客に固有の語: {src}の {len(_REGISTRY)} 件と照合しました"
 
     files = tracked()
     bad: "dict[str, list[tuple[int, str]]]" = {}

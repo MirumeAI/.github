@@ -27,15 +27,20 @@ Private 側では実際に 3 回混入した。 どれも説明文・テスト�
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
+import io
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -80,6 +85,11 @@ REGISTRY = (
 #: どこにも無い架空の語（照合して 0 件になる登録表に使う。 実行するときに組み立てる）。
 NOWHERE = "ZZQX" + "_NOWHERE_" + "QXZZ"
 
+#: 場所の欄へ取り違えて渡す、 長い架空の登録表（実行するときに組み立てる）。
+#: 長い値を場所として触ると、 OS の例外の文（名前が長すぎる）に値が出ていた。
+LONG_REGISTRY = REGISTRY + "".join(f"FICT_{i:04d}_CO\n" for i in range(300))
+LONG_ONE_LINE = " ".join(f"FICT_{i:04d}_CO" for i in range(60))
+
 #: 出力に出てはいけない値（どの試験でも、 出力にこれが無いことを見る）。
 NOT_SHOWN = (SITE_IP_192, SITE_IP_10, SITE_IP_172, LINK_LOCAL, SERIAL,
              "EXAMPLE_CUSTOMER", "架空精機")
@@ -110,6 +120,21 @@ def _hits(body: str, registry: "tuple" = (), name: str = "zz_probe.md") -> list:
             return C.check(p, registry)
         finally:
             C.ROOT, C._ALLOW_CACHE = orig, allow
+
+
+def _secret_uses(text: str) -> "list[str]":
+    """workflow の中で secret に触る所。 コメントの行は見ない。
+
+    `${{ }}` の式の中の `secrets`（`secrets.X`・`secrets['X']`・`toJSON(secrets)`
+    など）、 式の外の `secrets.`・`secrets[`、 `secrets:` の受け渡し
+    （`secrets: inherit` など）を拾う。
+    """
+    body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    found = [e for e in re.findall(r"\$\{\{(.*?)\}\}", body, re.S)
+             if re.search(r"\bsecrets\b", e, re.I)]
+    found += re.findall(r"\bsecrets\s*[.\[]", body, re.I)
+    found += re.findall(r"^\s*secrets\s*:", body, re.M)
+    return found
 
 
 def _step(name: str = STEP) -> "list[str]":
@@ -274,9 +299,19 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
         """
         named = self.td / "EXAMPLE_CUSTOMER"
         named.mkdir()
+        loop = named / "loop"
+        os.symlink(loop, loop)
         cases = {
             "見つからない": lambda: C.load_registry(named / "none.txt", root=self.repo),
-            "中身を場所として渡した": lambda: C.load_registry(Path(REGISTRY), root=self.repo),
+            "中身を場所として渡した": lambda: C.load_registry(REGISTRY, root=self.repo),
+            "長い中身を場所として渡した":
+                lambda: C.load_registry(LONG_ONE_LINE, root=Path("/nonexistent")),
+            "NUL を含む場所": lambda: C.load_registry("EXAMPLE_CUSTOMER" + chr(0),
+                                                    root=self.repo),
+            "base64 の値を場所として渡した": lambda: C.load_registry(_b64(REGISTRY),
+                                                             root=self.repo),
+            "ディレクトリ": lambda: C.load_registry(named, root=self.repo),
+            "symlink のループ": lambda: C.load_registry(loop, root=self.repo),
             "空": lambda: C.load_registry(_registry(named, "# 無い\n"), root=self.repo),
             "リポジトリの中": lambda: C.load_registry(_registry(self.repo), root=self.repo),
         }
@@ -284,8 +319,9 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
             with self.subTest(case=label):
                 with self.assertRaises(C.RegistryError) as cm:
                     call()
-                for v in ("EXAMPLE_CUSTOMER", "架空精機", str(self.td)):
+                for v in ("EXAMPLE_CUSTOMER", "架空精機", "FICT_0", str(self.td), "Errno"):
                     self.assertNotIn(v, str(cm.exception))
+                self.assertIsNone(cm.exception.__cause__)
 
     def test_values_in_file_paths_are_hidden(self) -> None:
         """**出力に書くファイルの道の中の値も伏せる**（顧客の名前を付けたファイルなど）。"""
@@ -300,12 +336,74 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
                          "見本の IP まで伏せています")
 
 
-class TheCommandLineTest(unittest.TestCase):
-    """script を実際に流して、 登録表の探し方と出力を確かめる（一時の git リポジトリ）。"""
+class PathsInTheOutputAreRedactedTest(unittest.TestCase):
+    """**出力に書くファイルの道の中の値を、 欠片も残さず伏せる。**
+
+    以前は、 `_` の隣の IP・シリアル、 制御文字の隣の名前、 重なる語、 NFD の
+    道で値が出た（制御文字を先に置き換えると、 `\\xNN` の英数字が語の境界を
+    壊した）。
+    """
+
+    def shown(self, rel: str, registry: str = REGISTRY) -> str:
+        orig, C._REGISTRY = C._REGISTRY, C.parse_registry(registry)
+        try:
+            return C._shown(rel)
+        finally:
+            C._REGISTRY = orig
+
+    def test_values_next_to_underscores_dots_and_controls(self) -> None:
+        cases = {
+            f"site_{SITE_IP_192}.md": "site_＜IP＞.md",
+            f"host.{SITE_IP_172}.md": "host.＜IP＞.md",
+            f"1.{SITE_IP_192}.md": "1.＜IP＞.md",
+            f"a{chr(1)}{SITE_IP_10}.md": "a\\x01＜IP＞.md",
+            f"cam_{SERIAL}.md": "cam_＜シリアル＞.md",
+            f"{SERIAL}_front.md": "＜シリアル＞_front.md",
+            f"{chr(11)}EXAMPLE_CUSTOMER.md": "\\x0b＜登録表の 3 行目＞.md",
+            f"x{chr(10)}EXAMPLE_CUSTOMER.md": "x\\x0a＜登録表の 3 行目＞.md",
+            f"tab{chr(9)}name.md": "tab\\x09name.md",
+            "docs/192.0.2.20/a.md": "docs/192.0.2.20/a.md",
+        }
+        for rel, want in cases.items():
+            with self.subTest(rel=repr(rel)):
+                self.assertEqual(self.shown(rel), want)
+
+    def test_overlapping_terms_leave_no_fragments(self) -> None:
+        """長い語と短い語、 一部だけ重なる語。 登録の順に関係なく、 欠片を残さない。"""
+        reg = "EXAMPLE\nEXAMPLE_CUSTOMER\n架空\n架空精機\nORBIT DYN\nDYN WORKS\n"
+        self.assertEqual(self.shown("EXAMPLE_CUSTOMER/架空精機.md", reg),
+                         "＜登録表の 2 行目＞/＜登録表の 4 行目＞.md")
+        self.assertEqual(self.shown("ORBIT DYN WORKS.md", reg), "＜登録表の 5 行目＞.md")
+        rev = "".join(ln + "\n" for ln in reversed(reg.splitlines()))
+        for rel in ("EXAMPLE_CUSTOMER/架空精機.md", "ORBIT DYN WORKS.md"):
+            with self.subTest(rel=rel):
+                got = self.shown(rel, rev)
+                for piece in ("EXAMPLE", "CUSTOMER", "架空", "精機", "ORBIT", "DYN", "WORKS"):
+                    self.assertNotIn(piece, got)
+
+    def test_nfd_paths_are_hidden(self) -> None:
+        """道と登録表で Unicode の形（NFC と NFD）が違っても伏せる。"""
+        name = "架空ガス"
+        nfd = unicodedata.normalize("NFD", name)
+        self.assertNotEqual(nfd, name, "試験の前提（濁点が分かれる）が崩れています")
+        self.assertEqual(self.shown(f"docs/{nfd}.md", f"{name}\n"),
+                         "docs/＜登録表の 1 行目＞.md")
+        self.assertEqual(self.shown(f"docs/{name}.md", f"{nfd}\n"),
+                         "docs/＜登録表の 1 行目＞.md")
+
+    def test_the_content_check_is_unchanged(self) -> None:
+        """道を伏せる形を緩めても、 中身の照合の範囲は変えない（main と同じ）。"""
+        self.assertEqual(_hits(f"host_{SITE_IP_10}\n"), [])
+        self.assertEqual(_hits(f"cam_{SERIAL}\n"), [])
+
+
+class _TempRepo:
+    """一時の git リポジトリに script を写して流す土台（これ自体は試験を持たない）。"""
 
     def setUp(self) -> None:
         base = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, base, True)
+        self.base = base
         self.repo = base / "repo"
         (self.repo / "scripts" / "ci").mkdir(parents=True)
         shutil.copy2(HERE / "customer_data_check.py", self.repo / "scripts" / "ci")
@@ -318,18 +416,32 @@ class TheCommandLineTest(unittest.TestCase):
         self.home = base / "home"
         self.home.mkdir()
 
-    def run_check(self, *args: str, env: "dict | None" = None) -> "tuple[int, str]":
+    def run_check(self, *args: str, env: "dict | None" = None,
+                  cwd: "Path | None" = None) -> "tuple[int, str]":
+        """script を流す。 `cwd` を渡すと、 そこから流す（リポジトリの外からなど）。"""
         e = dict(os.environ, HOME=str(self.home))
         e.pop(C.REGISTRY_ENV, None)
         e.pop(C.REGISTRY_FILE_ENV, None)
         e.update(env or {})
-        r = subprocess.run([sys.executable, "scripts/ci/customer_data_check.py", *args],
-                           cwd=self.repo, capture_output=True, text=True, env=e)
+        script = self.repo / "scripts" / "ci" / "customer_data_check.py"
+        r = subprocess.run([sys.executable, str(script), *args],
+                           cwd=cwd or self.repo, capture_output=True, text=True, env=e)
         return r.returncode, r.stdout + r.stderr
 
     def assertNothingShown(self, out: str) -> None:
         for v in NOT_SHOWN:
             self.assertNotIn(v, out, "値が出力に出ています")
+
+    def assertStopsSafely(self, code: int, out: str, *hidden: str) -> None:
+        """終了コード 2 で止まり、 値・場所・OS の例外の文・traceback を出さない。"""
+        self.assertEqual(code, C.EXIT_REGISTRY, out)
+        self.assertNothingShown(out)
+        for v in (*hidden, str(self.base), "Traceback", "Errno", "FICT_0"):
+            self.assertNotIn(v, out)
+
+
+class TheCommandLineTest(_TempRepo, unittest.TestCase):
+    """script を実際に流して、 登録表の探し方と出力を確かめる（一時の git リポジトリ）。"""
 
     def test_without_a_registry_it_says_names_were_not_checked(self) -> None:
         """手元では **黙って合格にしない。** 照合していないことを出力して 0 で終わる。"""
@@ -351,14 +463,14 @@ class TheCommandLineTest(unittest.TestCase):
         code, out = self.run_check(
             env={C.REGISTRY_FILE_ENV: str(_registry(self.outside))})
         self.assertEqual(code, 1, out)
-        self.assertIn(f"登録表（環境変数 {C.REGISTRY_FILE_ENV} のファイル）の 3 件", out)
+        self.assertIn(f"環境変数 {C.REGISTRY_FILE_ENV} の登録表の 3 件", out)
 
     def test_the_contents_can_come_from_the_environment(self) -> None:
         """CI は secret の中身を環境変数で渡す（ファイルに書き出さない）。"""
         code, out = self.run_check("--require-registry",
                                    env={C.REGISTRY_ENV: _b64(REGISTRY)})
         self.assertEqual(code, 1, out)
-        self.assertIn(f"登録表（環境変数 {C.REGISTRY_ENV}）の 3 件", out)
+        self.assertIn(f"環境変数 {C.REGISTRY_ENV} の登録表の 3 件", out)
         self.assertNothingShown(out)
         self.assertNotIn(_b64(REGISTRY)[len(C.REGISTRY_ENV_PREFIX):], out)
 
@@ -415,6 +527,8 @@ class TheCommandLineTest(unittest.TestCase):
                                                     encoding="utf-8")
         (self.repo / "EXAMPLE_CUSTOMER_notes.md").write_text(
             f"nas = {SITE_IP_172}\n", encoding="utf-8")
+        (self.repo / f"cam_{SERIAL}_{SITE_IP_192}.md").write_text(
+            f"plc = {SITE_IP_10}\n", encoding="utf-8")
         for extra in ((), ("--warn-only",)):
             with self.subTest(args=extra):
                 code, out = self.run_check("--registry", str(_registry(self.outside)),
@@ -424,7 +538,8 @@ class TheCommandLineTest(unittest.TestCase):
                              "シリアルらしき並び  file=site.md  line=3",
                              "顧客に固有の語（登録表の 5 行目）  file=site.md  line=4",
                              "シリアルらしき並び  file=＜IP＞.md  line=1",
-                             "現場の IP らしきもの  file=＜登録表の 3 行目＞_notes.md  line=1"):
+                             "現場の IP らしきもの  file=＜登録表の 3 行目＞_notes.md  line=1",
+                             "現場の IP らしきもの  file=cam_＜シリアル＞_＜IP＞.md  line=1"):
                     self.assertIn(want, out)
                 self.assertNothingShown(out)
 
@@ -492,6 +607,142 @@ class TheCommandLineTest(unittest.TestCase):
         code, out = self.run_check()
         self.assertEqual(code, 1, out)
         self.assertIn(f"file=latin1_{chr(0xFFFD)}.md  line=1", out)
+
+
+class TheRegistryInputIsCheckedTest(_TempRepo, unittest.TestCase):
+    """**登録表を誤って渡しても、 中身・場所・OS の例外の文を出さずに 2 で止まる。**
+
+    以前は、 中身を `--registry` へ取り違えて渡すと、 リポジトリの外から流した
+    ときに OS の例外（名前が長すぎる）の文として中身が stderr に出た。 直下から
+    流すと「リポジトリの中にあります」と、 別の理由を案内していた。
+    """
+
+    #: 場所の欄へ取り違えて渡す中身（どれも、 ファイルに触る前に止める）。
+    #: NUL は argv と環境変数に入れられないので、 関数を直に呼ぶ試験で見る。
+    CONTENTS = {
+        "短い中身（改行入り）": REGISTRY,
+        "非常に長い中身": LONG_REGISTRY,
+        "改行の無い長い中身": LONG_ONE_LINE,
+        "区切りの多い長い値": "/".join(f"FICT_{i:04d}_CO" for i in range(120)),
+        "base64: で始まる値": _b64(REGISTRY),
+        "# で始まる値": "# 架空の登録表 EXAMPLE_CUSTOMER",
+        "制御文字を含む値": "EXAMPLE_CUSTOMER" + chr(1) + "架空精機",
+    }
+
+    def test_contents_given_as_the_place_stop_safely(self) -> None:
+        """引数でも場所の環境変数でも、 リポジトリの直下からでも外からでも、
+        `--allow-registry-in-repo` を付けても、 中身を出さずに 2 で止まる。"""
+        payload = _b64(REGISTRY)[len(C.REGISTRY_ENV_PREFIX):]
+        for label, value in self.CONTENTS.items():
+            for cwd in (self.repo, self.outside):
+                for extra in ((), ("--allow-registry-in-repo",)):
+                    for how, args, env in (("引数", ("--registry", value), None),
+                                           ("環境変数", (), {C.REGISTRY_FILE_ENV: value})):
+                        with self.subTest(case=label, cwd=cwd.name, extra=bool(extra),
+                                          how=how):
+                            code, out = self.run_check(*args, *extra, env=env, cwd=cwd)
+                            self.assertStopsSafely(code, out, payload)
+                            self.assertIn("場所が正しくありません", out)
+
+    def test_unreadable_or_invalid_files_stop_safely(self) -> None:
+        """無い・ディレクトリ・symlink のループ・読めない・入れない場所。 2 で止まり、
+        場所も OS の例外の文も出さない。"""
+        named = self.outside / "EXAMPLE_CUSTOMER_dir"
+        named.mkdir()
+        loop_a, loop_b = named / "loop_a", named / "loop_b"
+        os.symlink(loop_b, loop_a)
+        os.symlink(loop_a, loop_b)
+        cases = {"無い": named / "none.txt", "ディレクトリ": named, "symlink のループ": loop_a}
+        if os.geteuid() != 0:                  # root は権限に関係なく読めてしまう
+            unreadable = _registry(named)
+            unreadable.chmod(0)
+            self.addCleanup(unreadable.chmod, 0o600)
+            locked = named / "locked"
+            locked.mkdir()
+            _registry(locked)
+            locked.chmod(0)
+            self.addCleanup(locked.chmod, 0o700)
+            cases.update({"読めないファイル": unreadable,
+                          "入れない場所の中": locked / "customer_registry.txt"})
+        for label, path in cases.items():
+            for cwd in (self.repo, self.outside):
+                with self.subTest(case=label, cwd=cwd.name):
+                    code, out = self.run_check("--registry", str(path), cwd=cwd)
+                    self.assertStopsSafely(code, out, "EXAMPLE_CUSTOMER_dir")
+                    self.assertIn("読めません", out)
+                    self.assertNotIn("リポジトリの中", out)
+                    if label == "ディレクトリ":
+                        self.assertIn("ファイルではありません", out)
+
+    def test_a_registry_with_a_bad_format_stops(self) -> None:
+        """大きすぎる登録表・UTF-8 でない登録表も、 中身を出さずに 2 で止まる。"""
+        big = self.outside / "big_registry.txt"
+        big.write_text("EXAMPLE_CUSTOMER\n" + "#" * C._MAX_REGISTRY_BYTES, encoding="utf-8")
+        latin = self.outside / "latin_registry.txt"
+        latin.write_bytes(b"EXAMPLE_CUSTOMER\n" + bytes([0xE9, 0xFF]) + b"\n")
+        for path, why in ((big, "大きすぎます"), (latin, "UTF-8 ではありません")):
+            with self.subTest(case=why):
+                code, out = self.run_check("--registry", str(path))
+                self.assertStopsSafely(code, out)
+                self.assertIn("形式が正しくありません", out)
+                self.assertIn(why, out)
+
+    def test_inside_the_repository_is_said_only_for_real_files(self) -> None:
+        """「リポジトリの中にあります」は、 そこに本当にファイルがあるときだけ言う。"""
+        code, out = self.run_check("--registry", "missing_registry.txt")
+        self.assertStopsSafely(code, out)
+        self.assertIn("読めません", out)
+        self.assertNotIn("リポジトリの中", out)
+        code, out = self.run_check("--registry", str(_registry(self.repo)))
+        self.assertStopsSafely(code, out)
+        self.assertIn("リポジトリの中にあります", out)
+
+    def test_an_empty_registry_argument_stops(self) -> None:
+        """`--registry ""` は「指定されなかった」にしない。 ほかの探し方へ進まず 2 で止まる。"""
+        place = self.home / ".config" / "mirumeai"
+        place.mkdir(parents=True)
+        _registry(place)
+        env = {C.REGISTRY_FILE_ENV: str(_registry(self.outside)),
+               C.REGISTRY_ENV: _b64(REGISTRY)}
+        for value in ("", "   "):
+            with self.subTest(value=repr(value)):
+                code, out = self.run_check("--registry", value, env=env)
+                self.assertStopsSafely(code, out)
+                self.assertIn("引数 --registry の登録表の場所が正しくありません", out)
+
+    def test_argument_errors_do_not_echo_values(self) -> None:
+        """引数の誤り（中身を位置の引数へ渡すなど）でも、 渡した値を出さない。"""
+        for args in ((REGISTRY,), (LONG_ONE_LINE,), (f"--require-registry={REGISTRY}",)):
+            with self.subTest(n=len(args[0])):
+                code, out = self.run_check(*args)
+                self.assertStopsSafely(code, out)
+                self.assertIn("引数が正しくありません", out)
+
+    def test_an_unreadable_default_place_stops(self) -> None:
+        """決まった場所を確かめられないとき（権限が無いなど）も、 場所を出さずに止める。"""
+        if os.geteuid() == 0:
+            self.skipTest("root は権限に関係なく読めてしまう")
+        place = self.home / ".config" / "mirumeai"
+        place.mkdir(parents=True)
+        _registry(place)
+        place.chmod(0)
+        self.addCleanup(place.chmod, 0o700)
+        code, out = self.run_check()
+        self.assertStopsSafely(code, out)
+        self.assertIn("決まった場所の登録表を読めません", out)
+
+    def test_unexpected_errors_stop_without_details(self) -> None:
+        """登録表の読み込みで予期しない誤りが起きても、 文を出さずに 2 で止まる。"""
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise ValueError(f"{REGISTRY} {self.base}")
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(C, "resolve_registry", boom), \
+                mock.patch.object(C, "_ALLOW_CACHE", {}), \
+                mock.patch.object(sys, "argv", ["customer_data_check.py"]), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = C.main()
+        self.assertStopsSafely(code, out.getvalue() + err.getvalue())
 
 
 class TheAllowListNeedsAReasonTest(unittest.TestCase):
@@ -576,10 +827,39 @@ class ItRunsOnThisRepositoryTest(unittest.TestCase):
             text = wf.read_text(encoding="utf-8")
             with self.subTest(workflow=wf.name):
                 self.assertNotIn(C.REGISTRY_ENV, text)
-                self.assertNotIn("secrets.", text)
-                self.assertNotIn("secrets: inherit", text)
+                self.assertEqual(_secret_uses(text), [])
                 self.assertNotIn("pull_request_target", text)
                 self.assertNotIn("workflow_run", text)
+
+    def test_the_secret_check_sees_every_form(self) -> None:
+        """secret の書き方の違い（`secrets.X`・`secrets['X']`・`toJSON(secrets)`・
+        `secrets: inherit` など）を、 どれも見つける。 見つけ損ねると、 通常の CI へ
+        secret を足せてしまう。"""
+        used = ["x: ${{ secrets.X }}", "x: ${{ secrets['X'] }}", 'x: ${{ secrets["X"] }}',
+                "x: ${{ secrets[format('{0}', 'X')] }}", "x: ${{ toJSON(secrets) }}",
+                "x: ${{\n  secrets.X\n}}", "run: echo ${{ secrets . X }}",
+                "x: ${{ SECRETS.X }}", "    secrets: inherit", "    secrets:\n      X: y"]
+        for snippet in used:
+            with self.subTest(snippet=snippet):
+                self.assertTrue(_secret_uses(snippet), "secret の使い方を見逃しています")
+        unused = ["# secrets.X は使わない", "x: ${{ github.token }}",
+                  "- name: secret を使わない段", "x: ${{ env.MY_SECRETS }}"]
+        for snippet in unused:
+            with self.subTest(snippet=snippet):
+                self.assertEqual(_secret_uses(snippet), [])
+
+    def test_a_registry_left_in_the_repository_is_ignored(self) -> None:
+        """誤ってリポジトリへ置いた登録表を commit しない（.gitignore）。 正式な
+        置き場所はリポジトリの外。 追跡しているファイルまで無視しないこと。"""
+        root = str(HERE.parents[1])
+        for rel in ("customer_registry.txt", "sub/dir/customer_registry.txt",
+                    "customer_registry.txt.bak"):
+            with self.subTest(path=rel):
+                r = subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=root)
+                self.assertEqual(r.returncode, 0, f"{rel} を無視していません")
+        ignored = subprocess.run(["git", "ls-files", "-ci", "--exclude-standard"],
+                                 cwd=root, capture_output=True, text=True, check=True)
+        self.assertEqual(ignored.stdout, "", "追跡しているファイルまで無視しています")
 
     def test_no_registry_is_kept_in_this_repository(self) -> None:
         """**公開のこのリポジトリに、 顧客の名前の登録表を置かない。**"""

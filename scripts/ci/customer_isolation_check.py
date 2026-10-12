@@ -30,17 +30,22 @@
 
     層 1  決まった場所から識別子を取り出して、 宣言と照らす（カメラの IP と
           製造番号、 PLC の宛先と番地、 トリガ）。 補いとして、 決まった場所の
-          外の IPv4 と `trig_` で始まる語も照らす
-    S1    config/ の下のファイルが、 Core が読む決まった名前か、 宣言した
-          追加のファイルか（説明の .md と空の .gitkeep は除く）。 config/pdm/ は、
-          配る道具が同じ並びのまま配る .json と .txt（defaults/ は除く）。 その
-          中の面ごとの設定の置き場は、 ファイルの名前が宣言の面か（S3）も見る
-    S2    PLC・NAS・AI を使うかが宣言と同じか。 PLC を使わないなら
-          `plc` は `{"enabled": false}` だけ
-    S3    構成の名前（`_profile`）・flow・カメラ・面が宣言の中か
-    S4    deploy/ と versions.yaml が触れる設定のファイルが、 実在して
-          許されているか。 deploy/ の中の値は **参考として出すだけ**
-          （強制するかは、 既存の案件で報告だけの形で流した結果を見て決める）
+          外の IPv4 と `trig_` で始まる語も照らす（JSON の鍵と値、 .txt の中、
+          ファイルの名前）
+    S1    config/ の下は、 Core が読む決まった名前と、 宣言した追加のファイルだけ
+          （説明の .md と空の .gitkeep は除く）。 撮像側の置き場は決まった 4 つと、
+          面ごとの `<面>.json`・`<面>__region*.json`。 PDM の置き場は、 面ごとの
+          設定の置き場（ファイルの名前が宣言の面か。 S3）と `align_reference.txt`。
+          `defaults/` は Core の既定の置き場なので、 宣言しても許さない
+    S2    PLC・NAS・AI を使うかが宣言と同じか。 PLC を使わないなら `plc` は
+          `{"enabled": false}` だけ。 `nas.enabled` を書いていなければ、 照らさずに
+          そう言う（推測しない）
+    S3    構成の名前（`_profile`）・検査の性質（`flow` か `inspection`）・カメラ・面が
+          宣言の中か
+    S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道と、
+          `config` で始まる `.json` の名前）が、 実在して許されているか。 deploy/ の
+          中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
+          既存の案件で報告だけの形で流した結果を見て決める）
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
 Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）は除かない。**
@@ -54,11 +59,16 @@ Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）
 **宣言の増え方**: `--base-ref` を渡すと、 基準の commit の宣言と比べて、
 種類ごとの増減の **数だけ** を出す。 増えていれば `PROFILE EXPANSION DETECTED`。
 設定と宣言の両方へ同じ誤った値を足すと、 照合では見つからない。 その形を
-レビューで目立たせるためのもので、 これだけでは不合格にしない。
+レビューで目立たせるためのもので、 これだけでは不合格にしない（CI では、 決まった
+文だけを注意 `::warning::` としても出す）。
 
 **PR の中身は、 データとして読むだけで実行しない。** 使う git の命令は
-`ls-files` と `cat-file` だけ。 宣言は別名（`*`）・同じ鍵の重複・資格情報らしい
-鍵と値を断り、 大きさの上限を超えるものは読まない。
+`ls-files` と `cat-file` だけ。 宣言は、 文字でない鍵・別名（`*`）・同じ鍵の重複・
+資格情報らしい鍵と値を断り、 大きさの上限を超えるものは読まない。 設定の JSON も
+同じ鍵の重複を断る（後に書いた値だけが読まれ、 先の値が照らされずに残る）。
+
+**これは事故を止める検査で、 悪意のある変更を止める境界ではない。** PR の CI は
+PR の側の workflow で動くので、 PR はこの検査を外せる。 宣言の変更はレビューで見る。
 
 PyYAML が要る（`python -m pip install pyyaml`）。 無ければ終了コード 2 で止める。
 """
@@ -95,8 +105,9 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_DEPTH = 64
 #: 宣言の 1 つの文字列の長さの上限。
 MAX_TEXT = 512
-#: 網で許すときの、 いちばん広い網。 これより広い網は断る。
+#: 網で許すときの、 いちばん広い網と、 網の数の上限。 これを超える宣言は断る。
 MIN_PREFIX = 24
+MAX_NETWORKS = 32
 #: 出力する所見の行の上限（数は必ず全部出す）。
 MAX_SHOWN = 200
 
@@ -107,14 +118,21 @@ IA_DIR = "config/image-acquisition/"
 IA_MAIN = IA_DIR + "config.json"
 IA_FIXED = ("config.json", "pdm_guard_policy.json", "recipe.json", "machine.json")
 #: 学習・評価側（PDM）の設定の置き場。 配る道具は、 ここの .json と .txt を同じ
-#: 並びのまま配る（`defaults/` と `.` で始まるものは配らない）。
+#: 並びのまま配る（`defaults/` と `.` で始まるものは配らない）。 **配られても、
+#: PDM が読む名前とは限らない**ので、 許すのは PDM が読む決まった名前だけ。
 PDM_DIR = "config/pdm/"
 PDM_SUFFIXES = (".json", ".txt")
 #: 面ごとの設定の置き場。 ファイルの名前は `<面>` か `<面>__region...`。 面は、
 #: 面の名前か、 その末尾の `_<数字>` を落とした基の名前（配る道具と同じ）。
 PDM_FACE_DIRS = ("adaptive_mask", "align", "bbox_acquire", "good_pool", "region_split")
+#: PDM の置き場の根にある、 決まった名前（基準のロット）。
+PDM_FIXED = ("align_reference.txt",)
 
-#: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。
+#: S4 で読む、 根の決まった名前（deploy/ の下のほかに）。
+S4_FILES = ("versions.yaml",)
+
+#: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。 トリガの項目の
+#: 中の鍵は道の形でも信号とみなす（この一覧に無い信号が Core に増えても落とさない）。
 CORE_TRIG_KEYS = frozenset({"trig_bit", "trig_ready"})
 #: 宣言に置いてはいけない鍵（資格情報）。 大文字と小文字、 `_` や `-` を除いて比べる。
 CREDENTIAL_WORDS = ("password", "passwd", "passphrase", "secret", "token",
@@ -122,14 +140,13 @@ CREDENTIAL_WORDS = ("password", "passwd", "passphrase", "secret", "token",
 
 #: 出力にそのまま出す欄の名前（この検査が読む Core の設定の鍵）。 ほかは `<*>`。
 SHOWN_KEYS = frozenset({
-    "_profile", "flow", "camera", "shot", "face_dict", "plc", "nas", "ai",
-    "enabled", "address", "host", "port", "ip_address", "serial_number",
-    "triggers", "shot_request", "result_slot", "data", "start", "end", "bit",
-    *CORE_TRIG_KEYS})
+    "_profile", "flow", "inspection", "camera", "shot", "face_dict", "plc", "nas",
+    "ai", "enabled", "address", "host", "port", "ip_address", "serial_number",
+    "triggers", "shot_request", "data", "start", "end", "bit", *CORE_TRIG_KEYS})
 #: 出力にそのまま出すファイルの道の部品。 ほかは `<伏せ#n>`。
 SHOWN_PARTS = frozenset({
     "config", "image-acquisition", "pdm", "deploy", "defaults", "versions.yaml",
-    PROFILE, "README.md", ".gitkeep", *IA_FIXED, *PDM_FACE_DIRS})
+    PROFILE, "README.md", ".gitkeep", *IA_FIXED, *PDM_FACE_DIRS, *PDM_FIXED})
 SHOWN_SUFFIXES = (".json", ".txt", ".md", ".yaml", ".yml", ".service", ".sh",
                   ".py", ".conf", ".ini", ".toml", ".cfg", ".env")
 
@@ -143,12 +160,13 @@ WHAT = {
     "S2-nas": "nas.enabled が宣言（capabilities.nas）と違う",
     "S2-ai": "ai.enabled が宣言（capabilities.ai）と違う",
     "S3-profile": "宣言に無い構成の名前（_profile）",
-    "S3-flow": "flow が宣言（project.flow）と違う",
+    "S3-flow": "検査の性質（flow か inspection）が宣言（project）と違う",
     "S3-camera": "宣言に無いカメラの id",
     "S3-face": "宣言に無い面の名前（face_dict の鍵）",
     "S3-face-file": "宣言に無い面の名前の、 面ごとの設定のファイル",
     "S4-missing": "参照している設定のファイルが無い",
     "S4-not-allowed": "参照している設定のファイルが、 許されていない",
+    "S4-link": "deploy/ か versions.yaml がリンク（読まずに断る）",
     "L1-endpoint": "宣言に無い宛先（IP・host）",
     "L1-serial": "宣言に無い製造番号",
     "L1-plc-endpoint": "宣言に無い PLC の宛先",
@@ -156,18 +174,22 @@ WHAT = {
     "L1-trigger": "宣言に無いトリガの識別子",
     "L1-name": "宣言に無いトリガ・面の名前らしき語",
 }
-#: 参考として出すもの（不合格にしない）。
+#: 参考として出すもの（不合格にしない）。 deploy/ と、 説明の .md の中の値。
 NOTE = {
-    "deploy-endpoint": "deploy/ の中の、 宣言に無い IP らしきもの",
-    "deploy-name": "deploy/ の中の、 宣言に無いトリガ・面の名前らしき語",
+    "note-endpoint": "宣言に無い IP らしきもの（deploy/ か説明の .md の中。 参考）",
+    "note-name": "宣言に無いトリガ・面の名前らしき語（deploy/ か説明の .md の中。 参考）",
 }
 
 _A = "A-Za-z0-9_"
-#: IPv4 らしき並び（後ろに `/<数>` があれば網）。 5 つ以上の数の並び（版の番号など）は拾わない。
-_IPV4 = re.compile(r"(?<![0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})(?:/([0-9]{1,2}))?(?!\.?[0-9])")
+#: IPv4 らしき並び。 後ろに `/<数>` があれば網（`/1/...` のような URL の道は網とみなさない）。
+#: 5 つ以上の数の並び（版の番号など）は拾わない。
+_IPV4 = re.compile(r"(?<![0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})"
+                   r"(?:/([0-9]{1,2})(?![0-9/]))?(?!\.?[0-9])")
 _TRIG = re.compile(rf"(?<![{_A}])trig_[{_A}]*[A-Za-z0-9]")
 #: deploy/ と versions.yaml の中の、 設定のファイルへの参照（道と、 config で始まる名前）。
-_REF_PATH = re.compile(rf"(?<![{_A}.-])config/[\w./-]*?\.(?:json|txt)(?![{_A}-]|\.[{_A}])")
+#: 前に `/` がある道（配置先の絶対の道など）は、 この Repository の道とみなさない
+#: （前を見る文字の組を本体と揃え、 長い行で時間が 2 乗で増えないようにする）。
+_REF_PATH = re.compile(rf"(?<![{_A}./-])config/[\w./-]*?\.(?:json|txt)(?![{_A}-]|\.[{_A}])")
 _REF_NAME = re.compile(rf"(?<![{_A}./-])config(?:\.[\w-]+)*\.json(?![{_A}-]|\.[{_A}])")
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
@@ -213,16 +235,19 @@ CATEGORIES = (
 _TOP_KEYS = ("schema_version", "project", "capabilities", "equipment", "endpoints",
              "plc", "triggers", "faces", "config_files", "extensions")
 #: 誤りの文に出してよい、 宣言の決まった鍵（知らない鍵は出さない）。
-_SCHEMA_WORDS = frozenset(_TOP_KEYS) | {"flow", "profiles", "nas", "ai", "cameras",
-                                        "id", "ip", "serial", "network", "reason",
-                                        "addresses", "extra", "path"}
+_SCHEMA_WORDS = frozenset(_TOP_KEYS) | {"flow", "inspection", "profiles", "nas", "ai",
+                                        "cameras", "id", "ip", "serial", "network",
+                                        "reason", "addresses", "extra", "path"}
 
 
 class Profile:
     """宣言を読んだもの。 種類ごとの値の集まり（比べる形に直したもの）。"""
 
     def __init__(self) -> None:
-        self.flow = ""
+        #: 検査の性質。 Core と同じく `flow`（見本の組み合わせの名前）か
+        #: `inspection`（軸ごと）のどちらか一方。
+        self.flow: "str | None" = None
+        self.inspection: "dict | None" = None
         self.caps: "dict[str, bool]" = {}
         self.sets: "dict[str, set]" = {k: set() for k in CATEGORIES}
         self.networks: "list[ipaddress.IPv4Network]" = []
@@ -315,7 +340,10 @@ def _compose(text: str, yaml) -> "tuple[object, dict]":
                 raise Stop("profile-yaml", f"別名（*）は使えません（{line} 行目）")
             return super().compose_node(parent, index)
 
-    loader = _Loader(text)
+    try:
+        loader = _Loader(text)              # 使えない文字（制御文字など）はここで断られる
+    except yaml.YAMLError:
+        raise Stop("profile-yaml", "宣言を YAML として読めません（使えない文字があります）") from None
     try:
         node = loader.get_single_node()
         if node is None:
@@ -348,7 +376,9 @@ def _inspect(node, path: tuple, lines: dict, yaml, depth: int) -> None:
             kl = k.start_mark.line + 1
             if k.tag == "tag:yaml.org,2002:merge":
                 raise Stop("profile-yaml", f"`<<` は使えません（{kl} 行目）")
-            if not isinstance(k, yaml.ScalarNode):
+            # **鍵は文字だけ。** 数や真偽の鍵は、 誤りの文の場所の欄に値として出てしまう
+            # （製造番号や番地を鍵として書き誤ったときなど）。
+            if not isinstance(k, yaml.ScalarNode) or k.tag != "tag:yaml.org,2002:str":
                 raise Stop("profile-yaml", f"鍵は文字にしてください（{kl} 行目）")
             if _credential_key(k.value) or _secret_value(k.value):
                 raise Stop("profile-credential",
@@ -381,7 +411,8 @@ def parse_profile(text: str, yaml) -> Profile:
             bad(path, "対応表（鍵: 値）にしてください")
         for k in v:
             if k not in keys:
-                bad(path + (k,), "知らない鍵です")
+                # 文字でない鍵は読み込みで断っている。 念のため、 ここでも文字にして伏せる
+                bad(path + (k if isinstance(k, str) else "<*>",), "知らない鍵です")
         for k in required:
             if k not in v:
                 bad(path, f"{k} がありません")
@@ -395,6 +426,11 @@ def parse_profile(text: str, yaml) -> Profile:
         return v
 
     def text_(path: tuple, v) -> str:
+        # YAML では、 引用符の無い数や true・false は文字にならない（先頭の 0 も消える）
+        if isinstance(v, bool):
+            bad(path, "true・false として読まれています。 文字なら引用符で囲んでください")
+        if isinstance(v, (int, float)):
+            bad(path, "数として読まれています。 文字なら引用符で囲んでください")
         if not isinstance(v, str) or not v.strip():
             bad(path, "空でない文字にしてください")
         if len(v) > MAX_TEXT or any(ord(c) < 0x20 or ord(c) == 0x7F for c in v):
@@ -408,8 +444,6 @@ def parse_profile(text: str, yaml) -> Profile:
 
     def texts(cat: str, path: tuple, v, norm=None, what: str = "") -> None:
         for i, item in enumerate(listed(path, v)):
-            if cat == "plc.addresses" and isinstance(item, int) and not isinstance(item, bool):
-                item = str(item)                     # YAML では引用符が無いと数になる
             s = text_(path + (i,), item)
             if norm is not None:
                 s = norm(s)
@@ -424,8 +458,19 @@ def parse_profile(text: str, yaml) -> Profile:
         bad(("schema_version",), "知らない形です（知っているのは "
             + ", ".join(map(str, SCHEMA_VERSIONS)) + "）")
 
-    proj = mapping(("project",), top["project"], ("flow", "profiles"), ("flow",))
-    p.flow = text_(("project", "flow"), proj["flow"])
+    proj = mapping(("project",), top["project"], ("flow", "inspection", "profiles"))
+    if ("flow" in proj) == ("inspection" in proj):
+        bad(("project",), "flow か inspection のどちらか一方を書いてください（Core と同じ決まり）")
+    if "flow" in proj:
+        p.flow = text_(("project", "flow"), proj["flow"])
+    else:
+        ins = proj["inspection"]
+        if not isinstance(ins, dict) or not ins:
+            bad(("project", "inspection"), "軸ごとの対応表にしてください")
+        for k, v in ins.items():
+            if not isinstance(v, bool):
+                text_(("project", "inspection", k), v)
+        p.inspection = dict(ins)
     texts("project.profiles", ("project", "profiles"), proj.get("profiles"))
 
     caps = mapping(("capabilities",), top["capabilities"], ("plc", "nas", "ai"),
@@ -460,6 +505,8 @@ def parse_profile(text: str, yaml) -> Profile:
                 bad(at + ("network",), "IPv4 の網（例: 192.0.2.0/28。 端の数は 0）にしてください")
             if net.prefixlen < MIN_PREFIX:
                 bad(at + ("network",), f"網が広すぎます（/{MIN_PREFIX} より狭くしてください）")
+            if len(p.networks) >= MAX_NETWORKS:
+                bad(at, f"網は {MAX_NETWORKS} 個までにしてください（ちょうどの値で書く）")
             add("endpoints.network", at + ("network",), str(net))
             p.networks.append(net)
             continue
@@ -491,6 +538,8 @@ def parse_profile(text: str, yaml) -> Profile:
         if (posixpath.normpath(path) != path or not path.startswith("config/")
                 or "\\" in path or ".." in path.split("/")):
             bad(at + ("path",), "config/ の下の、 そのままの道（.. や // を使わない）にしてください")
+        if path.startswith(PDM_DIR + "defaults/"):
+            bad(at + ("path",), "config/pdm/defaults/ は Core の既定の置き場なので、 宣言できません")
         add("config_files.extra", at + ("path",), path)
     return p
 
@@ -512,7 +561,7 @@ def _schema_path(path: tuple) -> str:
 def list_files(root: Path) -> "list[str]":
     """config/・deploy/・versions.yaml の、 追跡しているもの + まだ add していない新しいもの。
 
-    git のリポジトリでなければ、 フォルダをたどる（リンクはたどらない）。
+    git のリポジトリでなければ、 フォルダをたどる（リンクはたどらず、 一覧に載せて断る）。
     """
     specs = ("config", "deploy", "versions.yaml")
     if (root / ".git").exists():
@@ -524,8 +573,11 @@ def list_files(root: Path) -> "list[str]":
                 raise Stop("git", "git の一覧を読めません")
             seen.update(raw for raw in r.stdout.split(b"\0") if raw)
         return sorted(os.fsdecode(raw) for raw in seen)
-    out = ["versions.yaml"] if (root / "versions.yaml").exists() else []
+    out = ["versions.yaml"] if os.path.lexists(root / "versions.yaml") else []
     for top in ("config", "deploy"):
+        if os.path.islink(root / top):
+            out.append(top)                  # 根の外を読まない
+            continue
         for d, dirs, files in os.walk(root / top):
             rel_d = Path(d).relative_to(root).as_posix()
             links = [n for n in dirs if os.path.islink(os.path.join(d, n))]
@@ -552,6 +604,7 @@ class JsonDoc:
     """設定の JSON 1 つ。 構造（dict）と、 鍵と値の 1 つずつの行。"""
 
     def __init__(self, rel: str, text: str) -> None:
+        self.rel = rel
         try:
             self.data = json.loads(text)
             pairs = json.loads(text, object_pairs_hook=_Pairs)
@@ -572,12 +625,19 @@ class JsonDoc:
     def _walk(self, node, path: tuple, it, depth: int) -> bool:
         """並びのまま鍵と値を並べ、 字句の列と行を合わせる。 合わなければ False。"""
         if depth > MAX_DEPTH:
-            raise Stop("config-json", "設定の JSON の入れ子が深すぎます")
+            raise Stop("config-json", "設定の JSON の入れ子が深すぎます", self.rel)
         ok = True
         if isinstance(node, _Pairs):
+            seen = set()
             for k, v in node:
                 tok = next(it, None)
                 ok = ok and tok is not None and tok[0].startswith('"')
+                # **同じ鍵を断る。** 読まれるのは後に書いた値だけで、 先の値（別の案件の
+                # 表など）が照らされずに残る（宣言の YAML と同じ決まり）。
+                if k in seen:
+                    at = f"（{tok[1]} 行目）" if ok and tok else ""
+                    raise Stop("config-json", f"同じ鍵が 2 回あります{at}", self.rel)
+                seen.add(k)
                 self.entries.append(("key", path + (k,), k, tok[1] if tok else None))
                 ok = self._walk(v, path + (k,), it, depth + 1) and ok
         elif isinstance(node, list):
@@ -599,9 +659,10 @@ class JsonDoc:
 def _is_ia_config(rel: str, data) -> bool:
     """撮像側の案件の設定らしいもの（決まった場所の照合と S2・S3 を当てる）。
 
-    置き場所によらない（別の場所へ写した構成も見る）。
+    撮像側の置き場の外へ写した構成も見る。 ただし PDM の置き場の JSON は PDM の
+    形なので除く（PDM の `camera` などの節を、 撮像側の設定と取り違えない）。
     """
-    return rel == IA_MAIN or (isinstance(data, dict)
+    return rel == IA_MAIN or (not rel.startswith(PDM_DIR) and isinstance(data, dict)
                               and any(k in data for k in ("camera", "shot", "face_dict", "plc")))
 
 
@@ -617,10 +678,11 @@ def _is_trigger_entry(v) -> bool:
 
 
 def _scalar_text(v) -> "str | None":
-    """照らす値の文字（数で書かれた番号・番地も文字にする）。 空や真偽は None。"""
+    """照らす値の文字（数や小数で書かれた番号・番地も文字にして、 素通りさせない）。
+    空や真偽は None。"""
     if isinstance(v, bool):
         return None
-    if isinstance(v, int):
+    if isinstance(v, (int, float)):
         return str(v)
     return v if isinstance(v, str) and v else None
 
@@ -643,6 +705,8 @@ class Checker:
         self.root, self.prof = root, prof
         self.findings: "list[Finding]" = []
         self.notes: "list[Finding]" = []
+        #: 書いていないので照らさなかったもの（推測しない）。 (能力の名前, ファイル)
+        self.skipped: "list[tuple[str, str]]" = []
         self.used: "dict[str, set]" = {k: set() for k in CATEGORIES}
         self.files: "list[str]" = []
         self.allowed: "set[str]" = set()
@@ -671,16 +735,19 @@ class Checker:
             return h is not None and self._use_endpoint(h)
         if _generic_ip(ip):
             return True
-        if prefix is not None and int(prefix) != 32:
+        if prefix is not None:
             try:
                 net = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
             except ValueError:
                 return False
-            hit = [n for n in self.prof.networks if net.subnet_of(n)]
-        elif self._use_endpoint(ip):
+            # 端の数が 0 なら網。 `192.0.2.10/24` のような書き方は、 その IP として照らす
+            if str(net.network_address) == ip and net.prefixlen < 32:
+                hit = [n for n in self.prof.networks if net.subnet_of(n)]
+                self.used["endpoints.network"].update(str(n) for n in hit)
+                return bool(hit)
+        if self._use_endpoint(ip):
             return True
-        else:
-            hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]
+        hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]
         self.used["endpoints.network"].update(str(n) for n in hit)
         return bool(hit)
 
@@ -695,10 +762,12 @@ class Checker:
         return True
 
     def name_ok(self, token: str) -> bool:
-        """`trig_` で始まる語が、 宣言したトリガ・面か（`<名>__region...` の形も）。"""
+        """`trig_` で始まる語が、 宣言したトリガ・面か。 `<名>__region...` は前半を見る
+        （`__` の後ろが region で始まるときだけ。 `<名>__<別の名前>` は通さない）。"""
         if token in CORE_TRIG_KEYS:
             return True
-        for t in (token, token.split("__", 1)[0]):
+        head, sep, rest = token.partition("__")
+        for t in ((token, head) if sep and rest.startswith("region") else (token,)):
             if t in self._names:
                 for cat in ("triggers", "faces"):
                     self.used[cat].update(x for x in self.prof[cat] if t in (x, _base(x)))
@@ -707,13 +776,12 @@ class Checker:
 
     def generic(self, rel: str, kind: str, path: tuple, value, line,
                 code_ip: str, code_name: str, sink: "list[Finding]") -> None:
-        """決まった場所の外の値を照らす（補い）: IPv4 と `trig_` で始まる語。"""
+        """決まった場所の外を照らす（補い）: IPv4 と `trig_` で始まる語。 鍵も値も見る。"""
         if not isinstance(value, str):
             return
-        if kind == "value":
-            for m in _IPV4.finditer(value):
-                if not self.endpoint_ok(m.group(1), m.group(2)):
-                    sink.append(Finding(code_ip, rel, line, path))
+        for m in _IPV4.finditer(value):
+            if not self.endpoint_ok(m.group(1), m.group(2)):
+                sink.append(Finding(code_ip, rel, line, path))
         for m in _TRIG.finditer(value):
             if not self.name_ok(m.group(0)):
                 sink.append(Finding(code_name, rel, line, path))
@@ -725,6 +793,8 @@ class Checker:
         name = rel.rsplit("/", 1)[-1]
         if os.path.islink(self.root / rel):
             return "S1-link"
+        if rel.startswith(PDM_DIR + "defaults/"):
+            return "S1-defaults"                         # 宣言しても許さない
         if name == ".gitkeep":
             return None if (self.root / rel).stat().st_size == 0 else "S1-file"
         if name.endswith(".md"):
@@ -739,13 +809,16 @@ class Checker:
                 return None
             return "S1-file"
         if rel.startswith(PDM_DIR):
-            sub = rel[len(PDM_DIR):]
-            if sub.startswith("defaults/"):
-                return "S1-defaults"
-            if any(part.startswith(".") for part in sub.split("/")):
-                return "S1-file"
-            return None if sub.endswith(PDM_SUFFIXES) else "S1-file"
-        return "S1-file"
+            parts = rel[len(PDM_DIR):].split("/")
+            if any(part.startswith(".") for part in parts):
+                return "S1-file"                         # 配る道具が黙って飛ばす
+            if not rel.endswith(PDM_SUFFIXES):
+                return "S1-file"                         # 配る道具が配らない
+            if len(parts) == 1 and parts[0] in PDM_FIXED:
+                return None
+            if parts[0] in PDM_FACE_DIRS:
+                return None                              # 名前は S3 で照らす
+        return "S1-file"                                 # 決まった置き場の外
 
     def _face_file_name(self, stem: str) -> bool:
         """面ごとの設定のファイルの名前（`<面>` か `<面>__region...`）が宣言の面か。"""
@@ -762,43 +835,53 @@ class Checker:
         if not isinstance(d, dict):
             raise Stop("config-field", "設定の全体が対応表ではありません", rel)
 
-        # S2: 使うかどうか。 **書いていないものを推測しない**（主の設定は必ず書く）。
+        # S2: 使うかどうか。 **書いていないものを推測しない。** 主の設定で、 Core の
+        # 配る道具も止める形（節が無い、 plc.enabled・ai.enabled が真偽でない）は 2 で止める。
         for cap in ("plc", "nas", "ai"):
-            sec = d.get(cap)
-            if sec is None and not main:
+            if cap not in d and not main:
                 continue
+            sec = d.get(cap)
             enabled = sec.get("enabled") if isinstance(sec, dict) else None
-            if main and not isinstance(enabled, bool):
-                raise Stop("config-field",
-                           f"{cap}.enabled を true か false で書いてください（書いていないと、"
-                           " 宣言と照らせません。 推測しません）", rel)
             line = doc.line("key", (cap,))
-            if cap == "plc" and not prof.caps["plc"]:
-                # **PLC を使わない案件に、 PLC の表を残さない**（起きたことの 2 つ目）。
-                if not (isinstance(sec, dict) and list(sec) == ["enabled"]
-                        and sec["enabled"] is False):
-                    self.add("S2-plc", rel, line, ("plc",))
-            elif cap == "plc":
-                if main and enabled is not True:
+            if main and cap not in d:
+                raise Stop("config-field", f"{cap} の節がありません（Core の配る道具も止める形です）", rel)
+            if main and cap != "nas" and not isinstance(enabled, bool):
+                raise Stop("config-field", f"{cap}.enabled を true か false で書いてください"
+                           "（Core の配る道具も止める形です）", rel)
+            if cap == "plc":
+                if not prof.caps["plc"]:
+                    # **PLC を使わない案件に、 PLC の表を残さない**（起きたことの 2 つ目）。
+                    if not (isinstance(sec, dict) and list(sec) == ["enabled"]
+                            and sec["enabled"] is False):
+                        self.add("S2-plc", rel, line, ("plc",))
+                elif main and enabled is not True:
                     self.add("S2-plc-enabled", rel, line, ("plc", "enabled"))
-            elif isinstance(enabled, bool) and enabled is not prof.caps[cap]:
+            elif not isinstance(enabled, bool):
+                self.skipped.append((cap, rel))          # 照らさずに、 そう言う
+            elif enabled is not prof.caps[cap]:
                 self.add(f"S2-{cap}", rel, doc.line("value", (cap, "enabled")) or line,
                          (cap, "enabled"))
 
-        # S3: 構成の名前と flow
+        # S3: 構成の名前と、 検査の性質（Core と同じく flow か inspection のどちらか一方）
         if "_profile" in d:
             v = d["_profile"]
             if isinstance(v, str) and v in prof["project.profiles"]:
                 self.used["project.profiles"].add(v)
             else:
                 self.add("S3-profile", rel, doc.line("value", ("_profile",)), ("_profile",))
-        if (main or "flow" in d) and d.get("flow") != prof.flow:
+        has_flow, has_ins = "flow" in d, "inspection" in d
+        if main and has_flow == has_ins:
+            raise Stop("config-field", "flow か inspection のどちらか一方を書いてください"
+                       "（Core の配る道具も止める形です）", rel)
+        if has_flow and d["flow"] != prof.flow:
             self.add("S3-flow", rel, doc.line("value", ("flow",))
                      or doc.line("key", ("flow",)), ("flow",))
+        if has_ins and d["inspection"] != prof.inspection:
+            self.add("S3-flow", rel, doc.line("key", ("inspection",)), ("inspection",))
 
-        # 層 1: PLC の宛先（host と port の組で照らす）
+        # 層 1: PLC の宛先（host と port の組で照らす。 ほかの鍵の値は補いで照らす）
         addr = _get(d, ("plc", "address"))
-        if isinstance(addr, dict) and ("host" in addr or "port" in addr):
+        if isinstance(addr, dict) and addr:
             host, port = addr.get("host"), addr.get("port")
             e = (_norm_endpoint(f"{host}:{port}") if isinstance(host, str)
                  and isinstance(port, int) and not isinstance(port, bool) else None)
@@ -852,8 +935,12 @@ class Checker:
                 and _is_trigger_entry(_get(doc.data, path))):
             self.member("triggers", path[-1], "L1-trigger", rel, line, path)
             return True
-        # 層 1: PLC の宛先（ia_config で照らした）と番地
-        if kind == "value" and path[:2] == ("plc", "address") and n == 3:
+        # トリガの項目の中の鍵は信号の名前（道の形で決まる。 `trig_` で始まっても名前ではない）
+        if (kind == "key" and n >= 4 and path[-3] == "shot_request"
+                and _is_trigger_entry(_get(doc.data, path[:-1]))):
+            return True
+        # 層 1: PLC の宛先（ia_config で host と port の組を照らした）と番地
+        if kind == "value" and n == 3 and path[1] == "address" and path[2] in ("host", "port"):
             return True
         if kind == "value" and isinstance(path[-1], str) and path[-1] in ("data", "start", "end"):
             s = _scalar_text(value)
@@ -911,8 +998,11 @@ class Checker:
             else:
                 self.add(code, rel)
             name = rel.rsplit("/", 1)[-1]
-            if code == "S1-link" or not (root / rel).is_file() \
-                    or name.endswith(".md") or name == ".gitkeep":
+            if code == "S1-link" or not (root / rel).is_file() or name == ".gitkeep":
+                continue
+            if name.endswith(".md"):
+                # **参考だけ**: 説明の中の値（別の Repository から写すと、 説明にも値が入る）
+                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)
                 continue
             self.counts["config"] += 1
             parts = rel.split("/")
@@ -928,27 +1018,27 @@ class Checker:
             if name.endswith(".json"):
                 docs[rel] = JsonDoc(rel, _read(root, rel))
             elif name.endswith(".txt") or rel in self.prof["config_files.extra"]:
-                text = _read(root, rel)
-                if "\0" not in text:
-                    self.text_lines(rel, text, "L1-endpoint", "L1-name", self.findings)
+                # NUL を含んでも読む（NUL で中身を照らさせないようにしない）
+                self.text_lines(rel, _read(root, rel), "L1-endpoint", "L1-name", self.findings)
         for rel, doc in docs.items():
             if _is_ia_config(rel, doc.data):
                 self.ia_config(rel, doc, rel == IA_MAIN)
             self.entries(rel, doc)
         for rel in self.files:
-            if rel != "versions.yaml" and not (rel.startswith("deploy/")
-                                               and not rel.endswith(".md")):
+            if not (rel in S4_FILES or rel == "deploy" or rel.startswith("deploy/")):
                 continue
             p = root / rel
-            if os.path.islink(p) or not p.is_file():
+            if os.path.islink(p):
+                self.add("S4-link", rel)
+                continue
+            if not p.is_file():
                 continue
             text = _read(root, rel)
-            if "\0" in text:
-                continue
-            self.refs(rel, text)
+            if not rel.endswith(".md"):
+                self.refs(rel, text)
             if rel.startswith("deploy/"):
                 # **参考だけ**（不合格にしない）。 強制するかは、 既存の案件の結果を見て決める。
-                self.text_lines(rel, text, "deploy-endpoint", "deploy-name", self.notes)
+                self.text_lines(rel, text, "note-endpoint", "note-name", self.notes)
 
 
 # ---------------------------------------------------------------- 出力
@@ -1037,10 +1127,10 @@ def expansion(root: Path, base: "str | None", head: Profile, yaml) -> "list[str]
                 return ["宣言の増減: 比べていません（基準の宣言を読めません）"]
             try:
                 old = parse_profile(blob.stdout.decode("utf-8-sig"), yaml)
-            except (Stop, UnicodeDecodeError):
+            except Exception:  # noqa: BLE001  形の誤り・使えない文字など。 比べないだけ
                 return ["宣言の増減: 比べていません（基準の宣言が、 今の決まりでは読めません）"]
-    except (OSError, ValueError):
-        return ["宣言の増減: 比べていません（git を使えません）"]
+    except Exception:  # noqa: BLE001  git を使えないなど。 比べないだけ（照合の結果は変えない）
+        return ["宣言の増減: 比べていません（基準の宣言を取り出せません）"]
 
     out = [f"宣言の増減（基準 {base[:12]} と比べた数。 値は出しません）:"]
     grew = old is None
@@ -1059,9 +1149,10 @@ def expansion(root: Path, base: "str | None", head: Profile, yaml) -> "list[str]
         if b != head.caps[k]:
             out.append(f"  capabilities.{k}: {_tf(b)} → {_tf(head.caps[k])}")
             changed, grew = True, grew or head.caps[k] is True
-    if old is not None and old.flow != head.flow:
-        out.append("  project.flow: 変わりました（値は出しません）")
-        changed = True
+    if old is not None and (old.flow, old.inspection) != (head.flow, head.inspection):
+        # 検査の性質を変えると、 別の案件の構成も通りうる（増えたものとして目立たせる）
+        out.append("  project の検査の性質（flow・inspection）: 変わりました（値は出しません）")
+        changed = grew = True
     if not changed:
         out.append("  変化なし")
     if grew:
@@ -1154,13 +1245,22 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
     if unused:
         print("注意: 宣言して使っていないもの（落としません。 要らなければ宣言から消す）: "
               + "・".join(f"{c} {n}" for c, n in unused))
+    for cap, rel in sorted(set(ck.skipped)):
+        print(f"注意: {cap}.enabled が書かれていないので、 使うかどうかを宣言と照らしていません"
+              f"（推測しません）  file={masks.path(rel)}")
     if notes:
-        print(f"参考（強制しません。 deploy/ の中の値を照らした結果 {len(notes)} か所）:")
+        print(f"参考（強制しません。 deploy/ と説明の .md の中の値を照らした結果 {len(notes)} か所）:")
         for f in notes[:MAX_SHOWN]:
             print("  " + _show(f, masks, "参考", NOTE))
 
-    for ln in expansion(root, base, prof, yaml):
+    lines = expansion(root, base, prof, yaml)
+    for ln in lines:
         print(ln)
+    if os.environ.get("GITHUB_ACTIONS") == "true" \
+            and any(ln.startswith("PROFILE EXPANSION DETECTED") for ln in lines):
+        # PR の画面でも目立たせる（決まった文だけ。 値は入れない）
+        print("::warning title=customer-profile.yaml::PROFILE EXPANSION DETECTED"
+              "（宣言が増えています。 増えた値がこの案件のものかをレビューで確かめてください）")
 
     if not found:
         print("結果: PASS（終了コード 0）")

@@ -101,12 +101,6 @@ jobs:
           CI_ROOT: ${{ github.workspace }}/target
         run: python validators/scripts/ci/release_record_check.py
 
-      - name: guard-main.sh の回帰テスト
-        if: ${{ inputs.run-guard-test }}
-        env:
-          CI_ROOT: ${{ github.workspace }}/target
-        run: bash validators/scripts/ci/test_guard_main.sh
-
       # **別の案件の値が混ざっていないか**（customer-profile.yaml との照合）。
       # 顧客 Repository の最初の登録で、 別の案件の構成のファイルと PLC の表が
       # 入り、 名前の検査にも配る道具の確かめにも見つからなかった。
@@ -116,6 +110,8 @@ jobs:
       # PR のときは基準の commit を取り、 宣言の増減を数だけ出す。 取れなくても
       # 照合は行う（増減は「比べていません」と出る）。 基準の commit は、 式を
       # run の中に書かず、 環境変数で渡す。
+      # **呼び出し側の hook を流す段（guard の回帰テスト）より前に置く。** hook は
+      # PR の中身なので、 その後の段は書き換えられた環境で動きうる。
       - name: 別の案件の値の混入（customer-profile.yaml との照合）
         if: ${{ inputs.run-isolation-check }}
         env:
@@ -129,3 +125,9 @@ jobs:
           else
             python validators/scripts/ci/customer_isolation_check.py
           fi
+
+      - name: guard-main.sh の回帰テスト
+        if: ${{ inputs.run-guard-test }}
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+        run: bash validators/scripts/ci/test_guard_main.sh

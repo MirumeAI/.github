@@ -13,8 +13,9 @@
 
   ・IP は文書用の網（RFC 5737）。 **検査はこの網を除かない**ので、 B の宛先として
     働く。 名前の検査（customer_data_check.py）は、 この網を見本として通す
-  ・製造番号・番地・構成の名前は `EXAMPLE`・`example` を含む形。 トリガと面は
-    `trig_example_` で始まる形
+  ・製造番号・番地・構成の名前・検査の性質は `EXAMPLE`・`example` を含む形。
+    トリガと面は `trig_example_` で始まる形。 PLC の表の向きや信号の名前も架空
+    （検査は形で読むので、 Core の名前を写さない）
 
 どの場面でも **出力に値が出ないこと** を見る。 最後に、 検査の守りを 1 つずつ
 壊して、 どれかの場面が落ちることを確かめる（変異の試験。 撮像側と PDM の
@@ -25,6 +26,7 @@ PyYAML が要る。 CI（環境変数 CI がある）で無ければ、 飛ば�
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -35,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -61,12 +64,14 @@ def _ip(net: int, host: int) -> str:
 
 #: 案件 A（PLC なし・カメラ 1 台）
 A_PROFILE = "example-" + "a"
+A_FLOW = "example-flow-" + "a"
 A_IP = _ip(0, 10)
 A_SERIAL = "EXAMPLE-SN-" + "0001"
 A_TRIGGER = "trig_example_" + "a_top"
 
 #: 案件 B（PLC あり・カメラ 5 台）。 面を分けて撮る（`_1`・`_2`）面を持つ。
 B_PROFILE = "example-" + "b"
+B_FLOW = "example-flow-" + "b"
 B_IPS = [_ip(1, 20 + i) for i in range(5)]
 B_SERIALS = ["EXAMPLE-SN-" + f"{100 + i:04d}" for i in range(5)]
 B_PLC_HOST = _ip(2, 5)
@@ -76,13 +81,17 @@ B_GROUP = "group_example_" + "1"
 #: 混ざった構成のファイルの名前（B の構成の名前を含む）。
 B_FILE = "config." + B_PROFILE + ".json"
 
-#: 宣言に書いてはいけない値（試験の中だけで組み立てる）。
+#: 宣言に書いてはいけない値と、 鍵に書き誤った数（試験の中だけで組み立てる）。
 CREDENTIAL = "example-" + "not-a-real-password"
 TOKEN = "ghp" + "_" + "Ab3" * 12
+NUMBER_KEY = "8642" + "0"
+HEX_KEY, HEX_VALUE = "0x1519" + "3", str(0x15193)
+NUMBER_SERIAL = "1234" + "5678"
+FLOAT_SERIAL = "1357" + "9"
 
 
 def b_plc(enabled: bool = True) -> dict:
-    """B の PLC の表（信号の名前は架空。 形だけ Core と同じ）。"""
+    """B の PLC の表。 向き・信号・群の名前は架空（形だけ Core と同じ）。"""
     n = iter(range(100, 1000))
 
     def sig() -> dict:
@@ -91,11 +100,11 @@ def b_plc(enabled: bool = True) -> dict:
     return {
         "enabled": enabled,
         "address": {"host": B_PLC_HOST, "port": B_PLC_PORT},
-        "plc_to_pc": {
+        "to_pc_example": {
             "shot_request": {t: {"trig_bit": sig()} for t in B_TRIGGERS},
-            "result_slot": {B_GROUP: {"device": sig(), "triggers": list(B_TRIGGERS)}},
+            "slots_example": {B_GROUP: {"device": sig(), "triggers": list(B_TRIGGERS)}},
         },
-        "pc_to_plc": {
+        "to_plc_example": {
             "example_signal": sig(),
             "shot_request": {"example_ready": sig(),
                              **{t: {"trig_ready": sig()} for t in B_TRIGGERS}},
@@ -113,14 +122,15 @@ def _addresses(node) -> "list[str]":
 B_ADDRS = _addresses(b_plc())
 
 #: 出力に出てはいけない値（どの場面でも見る）。
-NOT_SHOWN = (A_PROFILE, A_IP, A_SERIAL, A_TRIGGER, B_PROFILE, *B_IPS, *B_SERIALS,
-             B_PLC_HOST, *B_TRIGGERS, B_GROUP, *B_ADDRS, CREDENTIAL, TOKEN)
+NOT_SHOWN = (A_PROFILE, A_FLOW, A_IP, A_SERIAL, A_TRIGGER, B_PROFILE, B_FLOW, *B_IPS,
+             *B_SERIALS, B_PLC_HOST, *B_TRIGGERS, B_GROUP, *B_ADDRS, CREDENTIAL, TOKEN,
+             NUMBER_KEY, HEX_KEY, HEX_VALUE, NUMBER_SERIAL, FLOAT_SERIAL)
 
 
 def a_config() -> dict:
     return {
         "_profile": A_PROFILE,
-        "flow": "label",
+        "flow": A_FLOW,
         "camera": {"camera1": {"camera_type": "area", "ip_address": A_IP,
                                "serial_number": A_SERIAL}},
         "shot": {"camera1": {"camera_type": "area", "triggers": [A_TRIGGER]}},
@@ -136,7 +146,7 @@ def a_config() -> dict:
 def a_profile() -> dict:
     return {
         "schema_version": 1,
-        "project": {"flow": "label", "profiles": [A_PROFILE]},
+        "project": {"flow": A_FLOW, "profiles": [A_PROFILE]},
         "capabilities": {"plc": False, "nas": False, "ai": True},
         "equipment": {"cameras": [{"id": "camera1", "ip": A_IP, "serial": A_SERIAL}]},
         "triggers": [A_TRIGGER],
@@ -147,7 +157,7 @@ def a_profile() -> dict:
 def b_config() -> dict:
     return {
         "_profile": B_PROFILE,
-        "flow": "metal",
+        "flow": B_FLOW,
         "camera": {f"camera{i + 1}": {"ip_address": B_IPS[i], "serial_number": B_SERIALS[i]}
                    for i in range(5)},
         "shot": {f"camera{i + 1}": {"triggers": [B_TRIGGERS[i % len(B_TRIGGERS)]]}
@@ -162,7 +172,7 @@ def b_config() -> dict:
 def b_profile() -> dict:
     return {
         "schema_version": 1,
-        "project": {"flow": "metal", "profiles": [B_PROFILE]},
+        "project": {"flow": B_FLOW, "profiles": [B_PROFILE]},
         "capabilities": {"plc": True, "nas": True, "ai": True},
         "equipment": {"cameras": [{"id": f"camera{i + 1}", "ip": B_IPS[i],
                                    "serial": B_SERIALS[i]} for i in range(5)]},
@@ -191,7 +201,7 @@ def a_files(profile: "dict | None" = None, config: "dict | None" = None) -> dict
         "customer-profile.yaml": _yaml(profile or a_profile()),
         "config/README.md": "# config/\n",
         IA + "config.json": _json(config or a_config()),
-        IA + "pdm_guard_policy.json": _json({"local_only": ["127.0.0.1"]}),
+        IA + "pdm_guard_policy.json": _json({"example_local": ["127.0.0.1"]}),
         "config/pdm/capture/.gitkeep": "",
         "config/pdm/bbox_acquire/" + A_TRIGGER + ".json": _json({"bbox": [0, 0, 10, 10]}),
         SERVICE: ("# 案件の設定は config/image-acquisition/config.json\n"
@@ -200,14 +210,15 @@ def a_files(profile: "dict | None" = None, config: "dict | None" = None) -> dict
     }
 
 
-def b_files() -> dict:
+def b_files(config: "dict | None" = None) -> dict:
     """案件 B のリポジトリ（PLC あり）。 面ごとの設定は基の名前でも持つ。"""
     front = B_TRIGGERS[0].rsplit("_", 1)[0]          # 基の名前（末尾の _<数字> を落とす）
     return {
         "customer-profile.yaml": _yaml(b_profile()),
-        IA + "config.json": _json(b_config()),
+        IA + "config.json": _json(config or b_config()),
         "config/pdm/bbox_acquire/" + front + ".json": _json({"bbox": [1, 2, 3, 4]}),
-        "config/pdm/adaptive_mask/" + front + "__region1.json": _json({"of": B_TRIGGERS[0]}),
+        "config/pdm/adaptive_mask/" + front + "__region1.json":
+            _json({"of": B_TRIGGERS[0], "tag": front + "__region1"}),
         "config/pdm/good_pool/" + B_TRIGGERS[2] + "__region1.json":
             _json({"images": [B_TRIGGERS[2] + "/0001.png"]}),
         "config/pdm/align_reference.txt": "EXAMPLE-LOT-0001\n",
@@ -237,7 +248,7 @@ class Link:
 class Scenario:
     """1 つの場面。 `commits` は commit ごとのファイルの全体（最後が検査の相手）。"""
 
-    def __init__(self, name: str, commits: list, exit: int, codes=(), exact: bool = False,
+    def __init__(self, name: str, commits: list, exit: int, codes=(), exact: bool = True,
                  error: "str | None" = None, args=(), texts=(), absent=()) -> None:
         self.name, self.commits, self.exit = name, commits, exit
         self.codes, self.exact, self.error = set(codes), exact, error
@@ -261,149 +272,277 @@ def scenarios() -> "list[Scenario]":
         p.update(kw)
         return p
 
+    def a_with(**changes) -> dict:
+        return _with(a_files(), **changes)
+
     # ---- 指示の 1〜13（起きたことの再現と、 止める場面）
-    add("1. 案件 A の正しい設定（一般の値を含む）", a_files(), 0, exact=True)
-    add("2. A に B の構成のファイルをまるごと足す", _with(a_files(), **{
+    add("1. 案件 A の正しい設定（一般の値を含む）", a_files(), 0)
+    add("2. A に B の構成のファイルをまるごと足す", a_with(**{
         "config__image-acquisition__" + B_FILE: _json(b_config())}), 1,
-        {"S1-file", "S2-plc", "S3-profile", "L1-endpoint", "L1-trigger"})
-    add("2b. 値の無い知らない設定のファイルも黙って通さない", _with(a_files(), **{
-        "config__image-acquisition__settings.json": _json({"memo": "x"})}), 1,
-        {"S1-file"}, exact=True)
+        {"S1-file", "S2-plc", "S2-nas", "S3-profile", "S3-flow", "S3-camera", "S3-face",
+         "L1-endpoint", "L1-serial", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
+    add("2b. 値の無い知らない設定のファイルも黙って通さない", a_with(**{
+        "config__image-acquisition__settings.json": _json({"memo": "x"})}), 1, {"S1-file"})
     add("3. PLC を使わない A に B の PLC の表（enabled は false）",
         a_files(config=a_cfg(plc=b_plc(False))), 1,
         {"S2-plc", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
     cfg = a_config()
     cfg["camera"]["camera1"]["ip_address"] = B_IPS[0]
-    add("4. A のカメラの宛先を B のものにする", a_files(config=cfg), 1,
-        {"L1-endpoint"}, exact=True)
+    add("4. A のカメラの宛先を B のものにする", a_files(config=cfg), 1, {"L1-endpoint"})
     cfg = a_config()
     cfg["shot"]["camera1"]["triggers"].append(B_TRIGGERS[2])
-    add("5. A のトリガに B のものを足す", a_files(config=cfg), 1, {"L1-trigger"}, exact=True)
+    add("5. A のトリガに B のものを足す", a_files(config=cfg), 1, {"L1-trigger"})
     add("6. A の構成の名前を B のものにする", a_files(config=a_cfg(_profile=B_PROFILE)), 1,
-        {"S3-profile"}, exact=True)
-    add("7. deploy と versions.yaml が、 無い設定のファイルに触れる", _with(a_files(), **{
+        {"S3-profile"})
+    add("7. deploy が、 無い設定のファイルに触れる（道）", a_with(**{
         "deploy__image-acquisition__example.service":
-            f"# 案件の設定は config/image-acquisition/{B_FILE}\n",
-        "versions.yaml": f"schema_version: 1\n# {B_FILE} を読む\n"}), 1,
-        {"S4-missing"}, exact=True)
-    add("7b. deploy が、 許されていない設定のファイルに触れる", _with(a_files(), **{
+            f"# 案件の設定は config/image-acquisition/{B_FILE}\n"}), 1, {"S4-missing"})
+    add("7b. deploy が、 許されていない設定のファイルに触れる", a_with(**{
         "config__image-acquisition__settings.json": _json({"memo": "x"}),
         "deploy__image-acquisition__example.service":
             "# 設定は config/image-acquisition/settings.json\n"}), 1,
-        {"S1-file", "S4-not-allowed"}, exact=True)
-    add("8. 宣言が無い", _with(a_files(), **{"customer-profile.yaml": None}), 2,
-        error="profile-missing")
-    add("9. 宣言が YAML として読めない", _with(a_files(), **{
+        {"S1-file", "S4-not-allowed"})
+    add("7c. versions.yaml が、 無い設定のファイルに触れる（名前）", a_with(**{
+        "versions.yaml": f"schema_version: 1\n# {B_FILE} を読む\n"}), 1, {"S4-missing"})
+    add("7d. 配置先の絶対の道は、 この Repository の参照とみなさない", a_with(**{
+        "deploy__image-acquisition__example.service":
+            "ExecStart=/opt/example/config/example.json\n"}), 0)
+    add("7e. deploy の中のリンク", a_with(**{
+        "deploy__image-acquisition__link.service": Link("../../versions.yaml")}), 1,
+        {"S4-link"})
+    add("8. 宣言が無い", a_with(**{"customer-profile.yaml": None}), 2, error="profile-missing")
+    add("9. 宣言が YAML として読めない", a_with(**{
         "customer-profile.yaml": "schema_version: [1\n"}), 2, error="profile-yaml")
-    add("10. 資格情報らしい鍵", _with(a_files(), **{
+    # 生の制御文字（safe_dump は \a の書き方に直すので、 文字で足す）
+    bel = _yaml(a_profile()) + "# example" + chr(7) + "\n"
+    add("9b. 宣言に使えない文字（制御文字）", a_with(**{"customer-profile.yaml": bel}), 2,
+        error="profile-yaml")
+    add("10. 資格情報らしい鍵", a_with(**{
         "customer-profile.yaml": _yaml(a_profile()) + f"password: {CREDENTIAL}\n"}), 2,
         error="profile-credential")
     add("10b. 資格情報らしい値", a_files(profile=a_prof(extensions=[TOKEN])), 2,
         error="profile-credential")
-    add("11. B の正しい設定（PLC の表・Core の鍵・基の名前の面のファイル）", b_files(), 0,
-        exact=True)
-    add("11b. 補い: 決まった場所の外の、 別の案件のトリガ（JSON の鍵）", _with(a_files(), **{
-        "config__image-acquisition__recipe.json": _json({"faces": {B_TRIGGERS[1]: {"n": 1}}})}),
-        1, {"L1-name"}, exact=True)
-    add("11c. 補い: 決まった場所の外の、 別の案件の宛先（JSON の値）", _with(a_files(), **{
-        "config__image-acquisition__machine.json": _json({"nas_host": B_IPS[1]})}), 1,
-        {"L1-endpoint"}, exact=True)
-    add("11d. 補い: .txt の中の、 別の案件のトリガ", _with(a_files(), **{
-        "config__pdm__align_reference.txt": B_TRIGGERS[2] + "\n"}), 1, {"L1-name"}, exact=True)
+    add("10c. 数の鍵（10 進）を、 誤りの文に出さない", a_with(**{
+        "customer-profile.yaml": _yaml(a_profile()) + f"{NUMBER_KEY}: x\n"}), 2,
+        error="profile-yaml")
+    cams = (f"equipment:\n  cameras:\n  - id: camera1\n    ip: {A_IP}\n"
+            f"    serial: {A_SERIAL}\n    {HEX_KEY}: 1\n")
+    no_eq = {k: v for k, v in a_profile().items() if k != "equipment"}
+    add("10d. 数の鍵（16 進・カメラの項目の中）を、 誤りの文に出さない", a_with(**{
+        "customer-profile.yaml": _yaml(no_eq) + cams}), 2, error="profile-yaml")
+    add("11. B の正しい設定（PLC の表・Core の鍵・基の名前の面のファイル）", b_files(), 0)
     # 12 は、 どの場面でも見る（出力に値が出ない）。
     grown = a_prof(endpoints=[_ip(0, 99)],
                    triggers=[A_TRIGGER] + ["trig_example_" + x for x in ("n1", "n2", "n3")])
     add("13. 宣言の増え方は、 種類と数だけを出す", [
         a_files(profile=a_prof(triggers=[A_TRIGGER, "trig_example_old"])),
-        a_files(profile=grown)], 0, exact=True, args=("--base-ref", "{base}"),
+        a_files(profile=grown)], 0, args=("--base-ref", "{base}"),
         texts=("PROFILE EXPANSION DETECTED", "endpoints: +1 / -0", "triggers: +3 / -1"))
 
+    # ---- 層 1 の補い（決まった場所の外）と、 PLC の表の形
+    add("11b. 補い: 決まった場所の外の、 別の案件のトリガ（JSON の鍵）", a_with(**{
+        "config__image-acquisition__recipe.json": _json({"faces": {B_TRIGGERS[1]: {"n": 1}}})}),
+        1, {"L1-name"})
+    add("11c. 補い: 決まった場所の外の、 別の案件の宛先（JSON の値）", a_with(**{
+        "config__image-acquisition__machine.json": _json({"nas_host": B_IPS[1]})}), 1,
+        {"L1-endpoint"})
+    add("11d. 補い: .txt の中の、 別の案件のトリガ", a_with(**{
+        "config__pdm__align_reference.txt": B_TRIGGERS[2] + "\n"}), 1, {"L1-name"})
+    add("11e. 補い: JSON の鍵の中の IP", a_with(**{
+        "config__image-acquisition__machine.json": _json({B_IPS[1]: "x"})}), 1,
+        {"L1-endpoint"})
+    add("11f. 補い: NUL を含む .txt も読む", a_with(**{
+        "config__pdm__align_reference.txt": "EXAMPLE" + chr(0) + B_TRIGGERS[2] + "\n"}), 1,
+        {"L1-name"})
+    add("11g. 補い: <名>__<別の名前> は、 前半だけで通さない", a_with(**{
+        "config__image-acquisition__machine.json":
+            _json({"x": A_TRIGGER + "__" + B_TRIGGERS[0]})}), 1, {"L1-name"})
+    bc = b_config()
+    bc["plc"]["to_pc_example"]["shot_request"][B_TRIGGERS[0]]["trig_example_signal"] = {
+        "bit": 1, "data": B_ADDRS[0]}
+    add("11h. トリガの項目の中の信号は、 trig_ で始まっても名前とみなさない",
+        b_files(config=bc), 0)
+    bc = b_config()
+    bc["plc"]["to_pc_example"]["shot_request"]["trig_example_b_extra"] = {
+        "trig_bit": {"bit": 0, "data": B_ADDRS[0]}}
+    add("11i. 宣言に無い shot_request の項目（トリガ）", b_files(config=bc), 1, {"L1-trigger"})
+    bc = b_config()
+    bc["plc"]["address"]["backup_host"] = _ip(2, 99)
+    add("11j. plc.address の host・port の外の鍵も照らす", b_files(config=bc), 1,
+        {"L1-endpoint"})
+    bc = b_config()
+    bc["plc"]["address"] = {"ip": B_PLC_HOST}
+    add("11k. plc.address が host と port の形でない", b_files(config=bc), 1,
+        {"L1-plc-endpoint"})
+    cfg = a_config()
+    cfg["camera"]["camera1"]["serial_number"] = B_SERIALS[0]
+    add("11l. 製造番号を B のものにする", a_files(config=cfg), 1, {"L1-serial"})
+    cfg = a_config()
+    cfg["camera"]["camera1"]["serial_number"] = float(FLOAT_SERIAL)
+    add("11m. 小数で書いた製造番号も照らす", a_files(config=cfg), 1, {"L1-serial"})
+
     # ---- 宣言の増え方（そのほか）
-    add("13b. 宣言が新しく作られた", [_with(a_files(), **{"customer-profile.yaml": None}),
-                                   a_files()], 0, exact=True, args=("--base-ref", "{base}"),
-        texts=("この変更で作られました", "PROFILE EXPANSION DETECTED"))
-    add("13c. 宣言が変わらない", [a_files(), _with(a_files(), **{"config__README.md": "# x\n"})],
-        0, exact=True, args=("--base-ref", "{base}"), texts=("変化なし",),
-        absent=("PROFILE EXPANSION DETECTED",))
-    add("13d. 基準の commit が手元に無い", a_files(), 0, exact=True,
-        args=("--base-ref", "0" * 40), texts=("比べていません",))
+    add("13b. 宣言が新しく作られた", [a_with(**{"customer-profile.yaml": None}), a_files()], 0,
+        args=("--base-ref", "{base}"), texts=("この変更で作られました", "PROFILE EXPANSION DETECTED"))
+    add("13c. 宣言が変わらない", [a_files(), a_with(**{"config__README.md": "# x\n"})], 0,
+        args=("--base-ref", "{base}"), texts=("変化なし",), absent=("PROFILE EXPANSION DETECTED",))
+    add("13d. 基準の commit が手元に無い", a_files(), 0, args=("--base-ref", "0" * 40),
+        texts=("比べていません",))
     add("13e. --base-ref の形が違う", a_files(), 2, error="usage", args=("--base-ref", "main"))
+    add("13f. 減っただけでは、 増えたと言わない", [
+        a_files(profile=a_prof(triggers=[A_TRIGGER, "trig_example_old"])), a_files()], 0,
+        args=("--base-ref", "{base}"), texts=("triggers: +0 / -1",),
+        absent=("PROFILE EXPANSION DETECTED",))
+    add("13g. 能力が false から true になったら、 増えたと言う", [
+        a_files(), a_files(profile=a_prof(capabilities={"plc": False, "nas": True, "ai": True}),
+                           config=a_cfg(nas={"enabled": True}))], 0,
+        args=("--base-ref", "{base}"),
+        texts=("capabilities.nas: false → true", "PROFILE EXPANSION DETECTED"))
+    other = "example-flow-" + "x"
+    add("13h. 検査の性質が変わったら、 増えたと言う", [
+        a_files(), a_files(profile=a_prof(project={"flow": other, "profiles": [A_PROFILE]}),
+                           config=a_cfg(flow=other))], 0,
+        args=("--base-ref", "{base}"), texts=("変わりました", "PROFILE EXPANSION DETECTED"))
+    add("13i. 基準の宣言が読めない（使えない文字）なら、 比べないだけ", [
+        a_with(**{"customer-profile.yaml": bel}), a_files()], 0,
+        args=("--base-ref", "{base}"), texts=("比べていません",))
 
     # ---- 宛先の決まり（ちょうどの値が原則。 網は理由つきで、 狭いものだけ）
     p = a_profile()
     p["equipment"]["cameras"][0].pop("ip")
     net = {"network": _ip(0, 0) + "/28", "reason": "架空の案件の、 カメラの網"}
-    add("網で許す（理由つき・/28）", a_files(profile=dict(p, endpoints=[net])), 0, exact=True)
+    in_net = dict(p, endpoints=[net])
+    add("網で許す（理由つき・/28）", a_files(profile=in_net), 0)
+    cfg = a_config()
+    cfg["camera"]["camera1"]["ip_address"] = _ip(0, 20)
+    add("宣言した網の外の IP", a_files(profile=in_net, config=cfg), 1, {"L1-endpoint"})
+    add("網の値: 宣言の網の中（/28）は通す", _with(a_files(profile=in_net), **{
+        "config__image-acquisition__machine.json": _json({"allow": _ip(0, 0) + "/28"})}), 0)
+    add("網の値: 宣言の網より広い（/24）は通さない", _with(a_files(profile=in_net), **{
+        "config__image-acquisition__machine.json": _json({"allow": _ip(0, 0) + "/24"})}), 1,
+        {"L1-endpoint"})
+    add("端末の書き方（IP/24）と URL の道は、 その IP として照らす", a_with(**{
+        "config__image-acquisition__machine.json":
+            _json({"if": A_IP + "/24", "url": "rtsp://" + A_IP + "/1/stream"})}), 0)
     add("広すぎる網は断る", a_files(profile=dict(p, endpoints=[
         {"network": "192.0.0.0/16", "reason": "広すぎる"}])), 2, error="profile-schema")
     add("網に理由が無い", a_files(profile=dict(p, endpoints=[{"network": net["network"]}])), 2,
         error="profile-schema")
     add("網を文字で書く", a_files(profile=dict(p, endpoints=[net["network"]])), 2,
         error="profile-schema")
+    many = [{"network": _ip(k // 16, (k % 16) * 16) + "/28", "reason": "架空"} for k in range(33)]
+    add("網が多すぎる", a_files(profile=dict(p, endpoints=many)), 2, error="profile-schema")
 
-    # ---- S1〜S3 のそのほか
-    add("defaults/ に案件の値を置く", _with(a_files(), **{
-        "config__pdm__defaults__x.json": _json({})}), 1, {"S1-defaults"}, exact=True)
-    add("config/ の下のリンク", _with(a_files(), **{
-        "config__image-acquisition__link.json": Link("../../versions.yaml")}), 1,
-        {"S1-link"}, exact=True)
-    add("中身のある .gitkeep", _with(a_files(), **{"config__pdm__capture__.gitkeep": "x\n"}), 1,
-        {"S1-file"}, exact=True)
-    add("宣言に無い面の名前のファイル（config/pdm）", _with(a_files(), **{
-        "config__pdm__region_split__" + B_TRIGGERS[2] + ".json": _json({})}), 1,
-        {"S3-face-file"}, exact=True)
-    add("宣言に無い面の名前のファイル（撮像側の置き場）", _with(a_files(), **{
-        "config__image-acquisition__" + B_TRIGGERS[3] + ".json": _json({})}), 1,
+    # ---- S1（ファイル）
+    add("defaults/ に案件の値を置く", a_with(**{"config__pdm__defaults__x.json": _json({})}), 1,
+        {"S1-defaults"})
+    add("defaults/ は宣言しても許さない", a_files(profile=a_prof(config_files={"extra": [
+        {"path": "config/pdm/defaults/x.json", "reason": "架空"}]})), 2, error="profile-schema")
+    add("config/ の下のリンク", a_with(**{
+        "config__image-acquisition__link.json": Link("../../versions.yaml")}), 1, {"S1-link"})
+    add("中身のある .gitkeep", a_with(**{"config__pdm__capture__.gitkeep": "x\n"}), 1,
         {"S1-file"})
-    cfg = a_config()
-    cfg["face_dict"][B_TRIGGERS[3]] = "面"
-    add("宣言に無い面（face_dict）", a_files(config=cfg), 1, {"S3-face"}, exact=True)
-    cfg = a_config()
-    cfg["camera"]["camera2"] = {"camera_type": "area"}
-    add("宣言に無いカメラ", a_files(config=cfg), 1, {"S3-camera"}, exact=True)
-    add("flow が違う", a_files(config=a_cfg(flow="metal")), 1, {"S3-flow"}, exact=True)
-    add("NAS の有無が宣言と違う", a_files(profile=a_prof(
-        capabilities={"plc": False, "nas": True, "ai": True})), 1, {"S2-nas"}, exact=True)
-    add("AI の有無が宣言と違う", a_files(profile=a_prof(
-        capabilities={"plc": False, "nas": False, "ai": False})), 1, {"S2-ai"}, exact=True)
-    bc = b_config()
-    bc["plc"]["enabled"] = False
-    add("PLC を使う宣言なのに plc.enabled が false",
-        _with(b_files(), **{"config__image-acquisition__config.json": _json(bc)}), 1,
-        {"S2-plc-enabled"}, exact=True)
-    add("PLC を使わない宣言に PLC の宛先", a_files(profile=a_prof(
-        plc={"endpoints": [f"{B_PLC_HOST}:{B_PLC_PORT}"]})), 2, error="profile-schema")
-    add("主の設定が無い", _with(a_files(), **{"config__image-acquisition__config.json": None}),
-        2, error="config-missing")
-    add("主の設定の JSON が壊れている", _with(a_files(), **{
-        "config__image-acquisition__config.json": "{\n"}), 2, error="config-json")
-    add("nas.enabled を書いていない（推測しない）", a_files(config=a_cfg(nas={})), 2,
-        error="config-field")
+    # 面ごとの置き場の中の、 . で始まるもの（配る道具が黙って飛ばす。 名前も面でない）
+    add("config/pdm の . で始まる部品", a_with(**{
+        "config__pdm__bbox_acquire__.hidden.json": _json({})}), 1, {"S1-file", "S3-face-file"})
+    add("config/pdm の .json・.txt 以外", a_with(**{
+        "config__pdm__bbox_acquire__" + A_TRIGGER + ".yaml": "x: 1\n"}), 1, {"S1-file"})
+    add("config/pdm の知らない名前", a_with(**{"config__pdm__unknown_tool.json": _json({})}),
+        1, {"S1-file"})
+    add("決まった置き場の外（config/ の直下）", a_with(**{"config__x.json": _json({})}), 1,
+        {"S1-file"})
+    add("撮像側の置き場の下のフォルダ", a_with(**{
+        "config__image-acquisition__sub__config.json": _json(a_config())}), 1, {"S1-file"})
     extra = {"config_files": {"extra": [{"path": IA + "extra.json", "reason": "架空の追加"}]}}
     add("宣言した追加のファイル", _with(a_files(profile=a_prof(**extra)), **{
-        "config__image-acquisition__extra.json": _json({"memo": "x"})}), 0, exact=True)
+        "config__image-acquisition__extra.json": _json({"memo": "x"})}), 0)
     add("宣言した追加のファイルが無い（注意だけ）", a_files(profile=a_prof(**extra)), 0,
-        exact=True, texts=("宣言して使っていないもの",))
-    add("deploy/ の中の値は参考だけ（不合格にしない）", _with(a_files(), **{
+        texts=("宣言して使っていないもの",))
+    add("宣言の extra の道の形（..）", a_files(profile=a_prof(config_files={"extra": [
+        {"path": IA + "../x.json", "reason": "架空"}]})), 2, error="profile-schema")
+
+    # ---- S2・S3
+    add("宣言に無い面の名前のファイル（config/pdm）", a_with(**{
+        "config__pdm__region_split__" + B_TRIGGERS[2] + ".json": _json({})}), 1, {"S3-face-file"})
+    add("宣言に無い面の名前のファイル（撮像側の置き場）", a_with(**{
+        "config__image-acquisition__" + B_TRIGGERS[3] + ".json": _json({})}), 1,
+        {"S1-file", "L1-name"})
+    cfg = a_config()
+    cfg["face_dict"][B_TRIGGERS[3]] = "面"
+    add("宣言に無い面（face_dict）", a_files(config=cfg), 1, {"S3-face"})
+    cfg = a_config()
+    cfg["camera"]["camera2"] = {"camera_type": "area"}
+    add("宣言に無いカメラ", a_files(config=cfg), 1, {"S3-camera"})
+    add("flow が違う", a_files(config=a_cfg(flow=B_FLOW)), 1, {"S3-flow"})
+    axes = {"axis_example": "value_example", "switch_example": True}
+    ins_cfg = {k: v for k, v in a_config().items() if k != "flow"}
+    ins_cfg["inspection"] = dict(axes)
+    ins_prof = a_prof(project={"inspection": dict(axes), "profiles": [A_PROFILE]})
+    add("inspection で書いた設定（宣言も inspection）", a_files(profile=ins_prof, config=ins_cfg), 0)
+    add("inspection が宣言と違う", a_files(profile=ins_prof, config=dict(
+        ins_cfg, inspection=dict(axes, switch_example=False))), 1, {"S3-flow"})
+    add("flow と inspection の両方を書いた設定", a_files(config=dict(a_config(), inspection=axes)),
+        2, error="config-field")
+    add("flow も inspection も無い設定", a_files(config={
+        k: v for k, v in a_config().items() if k != "flow"}), 2, error="config-field")
+    add("宣言に flow と inspection の両方", a_files(profile=a_prof(
+        project={"flow": A_FLOW, "inspection": axes, "profiles": [A_PROFILE]})), 2,
+        error="profile-schema")
+    add("NAS の有無が宣言と違う", a_files(profile=a_prof(
+        capabilities={"plc": False, "nas": True, "ai": True})), 1, {"S2-nas"})
+    add("AI の有無が宣言と違う", a_files(profile=a_prof(
+        capabilities={"plc": False, "nas": False, "ai": False})), 1, {"S2-ai"})
+    add("nas.enabled を書いていない（照らさずに、 そう言う）", a_files(config=a_cfg(nas={})), 0,
+        texts=("照らしていません",))
+    add("nas の節が無い", a_files(config={k: v for k, v in a_config().items() if k != "nas"}),
+        2, error="config-field")
+    bc = b_config()
+    bc["plc"]["enabled"] = False
+    add("PLC を使う宣言なのに plc.enabled が false", b_files(config=bc), 1, {"S2-plc-enabled"})
+    add("PLC を使わない宣言に PLC の宛先", a_files(profile=a_prof(
+        plc={"endpoints": [f"{B_PLC_HOST}:{B_PLC_PORT}"]})), 2, error="profile-schema")
+    add("主の設定が無い", a_with(**{"config__image-acquisition__config.json": None}), 2,
+        error="config-missing")
+    add("主の設定の JSON が壊れている", a_with(**{
+        "config__image-acquisition__config.json": "{\n"}), 2, error="config-json")
+    add("名前に値を含む壊れた JSON でも、 道を伏せる", a_with(**{
+        "config__image-acquisition__" + B_FILE: "{\n"}), 2, error="config-json")
+    hidden = _json(a_config()).replace(
+        '"plc": {', '"plc": ' + json.dumps(b_plc(False)) + ',\n  "plc": {', 1)
+    add("設定の JSON の同じ鍵（PLC の表を、 後の enabled: false で隠す）", a_with(**{
+        "config__image-acquisition__config.json": hidden}), 2, error="config-json")
+    add("PDM の JSON の camera の節は、 撮像側の設定とみなさない", a_with(**{
+        "config__pdm__bbox_acquire__" + A_TRIGGER + ".json":
+            _json({"camera": {"cam_example": {}}})}), 0)
+
+    # ---- 参考（不合格にしない）と、 報告だけ
+    add("deploy/ の中の値は参考だけ（不合格にしない）", a_with(**{
         "deploy__image-acquisition__example.service": f"Environment=HOST={B_IPS[0]}\n"}), 0,
-        exact=True, texts=("参考（強制しません",))
+        texts=("参考（強制しません",))
+    add("説明の .md の中の値は参考だけ（不合格にしない）", a_with(**{
+        "config__image-acquisition__notes.md": f"{B_IPS[0]} と {B_TRIGGERS[0]}\n"}), 0,
+        texts=("参考（強制しません",))
     cfg = a_config()
     cfg["shot"]["camera1"]["triggers"].append(B_TRIGGERS[2])
     add("--report-only は 0 で終える（所見は出す）", a_files(config=cfg), 0, {"L1-trigger"},
-        exact=True, args=("--report-only",), texts=("REPORT ONLY",))
+        args=("--report-only",), texts=("REPORT ONLY",))
 
     # ---- 宣言の形
     prof_text = _yaml(a_profile())
-    add("同じ鍵が 2 回", _with(a_files(), **{
+    add("同じ鍵が 2 回（宣言）", a_with(**{
         "customer-profile.yaml": prof_text + f"triggers: [{B_TRIGGERS[0]}]\n"}), 2,
         error="profile-yaml")
-    add("知らない鍵（鍵の名前も出さない）", _with(a_files(), **{
+    add("知らない鍵（鍵の名前も出さない）", a_with(**{
         "customer-profile.yaml": prof_text + f"{B_TRIGGERS[1]}: 1\n"}), 2,
         error="profile-schema")
     no_faces = {k: v for k, v in a_profile().items() if k not in ("triggers", "faces")}
-    add("別名（*）は使わない", _with(a_files(), **{
+    add("別名（*）は使わない", a_with(**{
         "customer-profile.yaml": _yaml(no_faces)
         + f"triggers: &t [{A_TRIGGER}]\nfaces: *t\n"}), 2, error="profile-yaml")
+    num = a_profile()
+    num["equipment"]["cameras"][0]["serial"] = int(NUMBER_SERIAL)
+    add("数で書いた製造番号は、 引用符で囲むよう言う", a_files(profile=num), 2,
+        error="profile-schema", texts=("引用符",))
     return s
 
 
@@ -421,6 +560,16 @@ def _git(root: Path, *args: str) -> str:
                           text=True, env=_GIT_ENV).stdout.strip()
 
 
+def _write(root: Path, snap: dict) -> None:
+    for rel, body in snap.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(body, Link):
+            os.symlink(body.target, p)
+        else:
+            p.write_text(body, encoding="utf-8")
+
+
 def _build(root: Path, commits: list) -> "list[str]":
     root.mkdir(parents=True)
     _git(root, "init", "-q")
@@ -433,13 +582,7 @@ def _build(root: Path, commits: list) -> "list[str]":
                 shutil.rmtree(p)
             else:
                 p.unlink()
-        for rel, body in snap.items():
-            p = root / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            if isinstance(body, Link):
-                os.symlink(body.target, p)
-            else:
-                p.write_text(body, encoding="utf-8")
+        _write(root, snap)
         _git(root, "add", "-A")
         _git(root, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
              "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "snapshot")
@@ -455,7 +598,7 @@ def setUpModule() -> None:                                   # noqa: N802
     base = tempfile.mkdtemp()
     _TMP.append(base)
     for i, sc in enumerate(SCENARIOS):
-        root = Path(base) / f"s{i:02d}"
+        root = Path(base) / f"s{i:03d}"
         try:
             REPOS[sc.name] = (root, _build(root, sc.commits))
         except OSError:
@@ -470,7 +613,7 @@ def tearDownModule() -> None:                                # noqa: N802
 def run_in(mod, root: Path, args=()) -> "tuple[int, str]":
     """検査を同じプロセスで流す（変異の試験で何度も流すため）。"""
     buf = io.StringIO()
-    saved = os.environ.pop("CI_ROOT", None)
+    saved = {k: os.environ.pop(k, None) for k in ("CI_ROOT", "GITHUB_ACTIONS")}
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             try:
@@ -478,8 +621,7 @@ def run_in(mod, root: Path, args=()) -> "tuple[int, str]":
             except SystemExit as e:
                 code = e.code
     finally:
-        if saved is not None:
-            os.environ["CI_ROOT"] = saved
+        os.environ.update({k: v for k, v in saved.items() if v is not None})
     return code, buf.getvalue()
 
 
@@ -505,8 +647,8 @@ def problems(mod, sc: Scenario) -> "list[str]":
     leaked = sum(1 for v in NOT_SHOWN if v in out)
     if leaked:
         p.append(f"値が出力に出ています（{leaked} 種類）")
-    if "Traceback" in out:
-        p.append("Traceback が出ています")
+    if "Traceback" in out or "ERROR [internal]" in out:
+        p.append("予期しない誤りで止まりました")
     return p
 
 
@@ -562,6 +704,40 @@ class SyntheticScenariosTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("ERROR [yaml-missing]", out)
 
+    def test_the_expansion_is_also_a_warning_in_actions(self) -> None:
+        """宣言が増えたら、 Actions では決まった文の注意（::warning::）も出す。 値は入れない。"""
+        sc = next(s for s in SCENARIOS if s.name.startswith("13. "))
+        root, shas = REPOS[sc.name]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = I.main(["--root", str(root), "--base-ref", shas[0]])
+        warn = [ln for ln in buf.getvalue().splitlines() if ln.startswith("::")]
+        self.assertEqual(code, 0)
+        self.assertEqual(len(warn), 1)
+        self.assertTrue(warn[0].startswith("::warning title=customer-profile.yaml::PROFILE EXPANSION"))
+        self.assertFalse([v for v in NOT_SHOWN if v in buf.getvalue()])
+
+    def test_a_symlinked_config_outside_git_is_not_followed(self) -> None:
+        """git でないフォルダでも、 config/ そのもののリンクをたどって根の外を読まない。"""
+        with tempfile.TemporaryDirectory() as td:
+            outside, root = Path(td) / "outside", Path(td) / "repo"
+            _write(outside, {k[len("config/"):]: v for k, v in a_files().items()
+                             if k.startswith("config/")})
+            _write(root, {k: v for k, v in a_files().items() if not k.startswith("config/")})
+            os.symlink(outside, root / "config")
+            self.assertIn("config", I.list_files(root))
+            code, out = run_in(I, root)
+        self.assertEqual(code, 2)
+        self.assertIn("ERROR [config-missing]", out)
+
+    def test_long_reference_lines_stay_fast(self) -> None:
+        """deploy の長い行でも、 参照の探し方の時間が 2 乗で増えない。"""
+        started = time.monotonic()
+        I._REF_PATH.findall("config/" * 50000)
+        I._REF_NAME.findall("config." * 50000)
+        self.assertLess(time.monotonic() - started, 5.0)
+
 
 #: (説明, 置換前, 置換後)。 置換前は検査の中に **1 か所だけ** あること。
 #: **足すときは末尾に足す**（撮像側・PDM の表と同じ。 別々の作業が同じ行を触らない）。
@@ -592,7 +768,7 @@ MUTATIONS = [
     ("S3: 構成の名前を照らさない",
      'if isinstance(v, str) and v in prof["project.profiles"]:', "if True:"),
     ("S4: 参照を照らさない",
-     "            self.refs(rel, text)\n", "            pass\n"),
+     "                self.refs(rel, text)\n", "                pass\n"),
     ("宣言の増え方: 増えても言わない",
      "    if grew:\n", "    if False:\n"),
     ("宣言: 別名（*）を通す",
@@ -600,13 +776,94 @@ MUTATIONS = [
     ("宣言: 同じ鍵の重複を通す",
      "            if k.value in seen:\n", "            if False:\n"),
     ("S2: NAS・AI の有無を照らさない",
-     "elif isinstance(enabled, bool) and enabled is not prof.caps[cap]:", "elif False:"),
+     "            elif enabled is not prof.caps[cap]:\n", "            elif False:\n"),
     ("S3: 面ごとの設定のファイルの名前を照らさない",
      'if len(parts) != 4 or not self._face_file_name(parts[3].rsplit(".", 1)[0]):',
      "if False:"),
     ("S4: deploy/ の中の値を参考でなく不合格にする",
      "    if not found:\n        print(\"結果: PASS",
      "    if not found and not notes:\n        print(\"結果: PASS"),
+    ("宣言: 数の鍵を通す（誤りの文に値が出る）",
+     'if not isinstance(k, yaml.ScalarNode) or k.tag != "tag:yaml.org,2002:str":',
+     "if not isinstance(k, yaml.ScalarNode):"),
+    ("設定: JSON の同じ鍵を通す",
+     "                if k in seen:\n", "                if False:\n"),
+    ("S1: config/pdm の . で始まる部品を通す",
+     'if any(part.startswith(".") for part in parts):', "if False:"),
+    ("S1: config/pdm の .json・.txt 以外を通す",
+     "if not rel.endswith(PDM_SUFFIXES):", "if False:"),
+    ("S1: config/pdm の知らない名前を通す",
+     "            if parts[0] in PDM_FACE_DIRS:\n", "            if True:\n"),
+    ("S1: 決まった置き場の外を通す",
+     'return "S1-file"                                 # 決まった置き場の外', "return None"),
+    ("S1: 撮像側の置き場の下のフォルダを通す",
+     'if rel.startswith(IA_DIR) and "/" not in rel[len(IA_DIR):]:',
+     "if rel.startswith(IA_DIR):"),
+    ("宣言: defaults/ の下を追加のファイルとして許す",
+     'if path.startswith(PDM_DIR + "defaults/"):', "if False:"),
+    ("層 1: 製造番号を照らさない",
+     '                self.member("equipment.cameras.serial", s, "L1-serial", rel, line, path)\n',
+     "                pass\n"),
+    ("S4: config で始まる名前の参照を見ない",
+     "            for m in _REF_NAME.finditer(ln):\n", "            for m in []:\n"),
+    ("S4: versions.yaml を読まない",
+     'S4_FILES = ("versions.yaml",)', "S4_FILES = ()"),
+    ("S4: 配置先の絶対の道を、 この Repository の参照とみなす",
+     'rf"(?<![{_A}./-])config/', 'rf"(?<![{_A}.-])config/'),
+    ("網: 宣言した網の外の IP を通す",
+     "hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]",
+     "hit = list(self.prof.networks)"),
+    ("網: 宣言より広い網の値を通す",
+     "hit = [n for n in self.prof.networks if net.subnet_of(n)]",
+     "hit = list(self.prof.networks)"),
+    ("網: 網の数の上限を外す",
+     "if len(p.networks) >= MAX_NETWORKS:", "if False:"),
+    ("出力: 止めたときのファイルの道を伏せない",
+     'where = "" if e.rel is None else f"  file={masks.path(e.rel)}"',
+     'where = "" if e.rel is None else f"  file={e.rel}"'),
+    ("宣言の増え方: 減ったものを数えない",
+     "added, removed = len(head[cat] - before), len(before - head[cat])",
+     "added, removed = len(head[cat] - before), 0"),
+    ("宣言の増え方: 能力が増えても言わない",
+     "changed, grew = True, grew or head.caps[k] is True", "changed, grew = True, grew"),
+    ("宣言の増え方: 検査の性質が変わっても言わない",
+     "changed = grew = True", "changed = True"),
+    ("層 1: shot_request の項目をトリガとして照らさない",
+     "and _is_trigger_entry(_get(doc.data, path))):", "and False):"),
+    ("層 1: トリガの項目の中の信号を、 名前として照らす",
+     "and _is_trigger_entry(_get(doc.data, path[:-1]))):", "and False):"),
+    ("層 1: __ の後ろが region でなくても、 前半だけを見る",
+     'for t in ((token, head) if sep and rest.startswith("region") else (token,)):',
+     "for t in (token, head):"),
+    ("層 1: <名>__region の語を、 前半で見ない",
+     'for t in ((token, head) if sep and rest.startswith("region") else (token,)):',
+     "for t in (token,):"),
+    ("層 1: plc.address の host・port の外の鍵を照らさない",
+     'if kind == "value" and n == 3 and path[1] == "address" and path[2] in ("host", "port"):',
+     'if kind == "value" and n == 3 and path[1] == "address":'),
+    ("層 1: plc.address が host と port の形でなくても通す",
+     "if isinstance(addr, dict) and addr:",
+     'if isinstance(addr, dict) and ("host" in addr or "port" in addr):'),
+    ("層 1: JSON の鍵の中の IP を照らさない",
+     "        for m in _IPV4.finditer(value):\n",
+     '        for m in (() if kind == "key" else _IPV4.finditer(value)):\n'),
+    ("層 1: 小数で書いた製造番号を照らさない",
+     "    if isinstance(v, (int, float)):\n        return str(v)",
+     "    if isinstance(v, int):\n        return str(v)"),
+    ("S2: nas.enabled を照らさなかったことを言わない",
+     "self.skipped.append((cap, rel))", "pass"),
+    ("S3: inspection を照らさない",
+     'if has_ins and d["inspection"] != prof.inspection:', "if False:"),
+    ("S3: flow を照らさない",
+     'if has_flow and d["flow"] != prof.flow:', "if False:"),
+    ("S3: flow と inspection の両方・どちらも無い設定を通す",
+     "if main and has_flow == has_ins:", "if False:"),
+    ("参考: 説明の .md の中の値を照らさない",
+     '                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)\n',
+     "                pass\n"),
+    ("PDM の置き場の JSON を、 撮像側の設定とみなす",
+     "return rel == IA_MAIN or (not rel.startswith(PDM_DIR) and isinstance(data, dict)",
+     "return rel == IA_MAIN or (isinstance(data, dict)"),
 ]
 
 
@@ -663,16 +920,40 @@ class SyntheticValuesTest(unittest.TestCase):
 
 
 class ItDoesNotRunTheTargetTest(unittest.TestCase):
-    """**PR の中身を実行しない。** 使う git の命令は、 一覧と読み出しだけ。"""
+    """**PR の中身を実行しない。** 外の命令は git の一覧と読み出しだけ（構文の木で見る）。"""
+
+    ALLOWED_GIT = {"ls-files", "cat-file"}
 
     def test_only_reading_git_commands(self) -> None:
-        src = CHECKER.read_text(encoding="utf-8")
-        used = set(re.findall(r'\["git", "([a-z-]+)"', src))
-        used |= set(re.findall(r'_git\(root, "([a-z-]+)"', src))
-        self.assertTrue(used)
-        self.assertLessEqual(used, {"ls-files", "cat-file"})
-        for word in ("exec(", "eval(", "import_module", "runpy", "shell=True", "os.system"):
-            self.assertNotIn(word, src)
+        tree = ast.parse(CHECKER.read_text(encoding="utf-8"))
+        runs, helper_calls = [], []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            name = (f"{f.value.id}.{f.attr}" if isinstance(f, ast.Attribute)
+                    and isinstance(f.value, ast.Name) else getattr(f, "id", ""))
+            self.assertNotIn(name, {"eval", "exec", "compile", "__import__", "os.system",
+                                    "os.popen", "subprocess.Popen", "subprocess.call",
+                                    "subprocess.check_call", "subprocess.check_output",
+                                    "importlib.import_module", "runpy.run_path"})
+            if name == "subprocess.run":
+                runs.append(node)
+            if name == "_git":
+                helper_calls.append(node)
+        self.assertTrue(runs)
+        for node in runs:
+            cmd = node.args[0]
+            self.assertIsInstance(cmd, ast.List)
+            self.assertEqual(ast.literal_eval(cmd.elts[0]), "git")
+            second = cmd.elts[1]
+            if isinstance(second, ast.Starred):          # _git の中（呼ぶ側を下で見る）
+                continue
+            self.assertIn(ast.literal_eval(second), self.ALLOWED_GIT)
+            self.assertFalse([k for k in node.keywords if k.arg == "shell"])
+        self.assertTrue(helper_calls)
+        for node in helper_calls:
+            self.assertIn(ast.literal_eval(node.args[1]), self.ALLOWED_GIT)
 
 
 def _workflow(name: str) -> dict:
@@ -702,6 +983,13 @@ class WorkflowTest(unittest.TestCase):
         others = [s for s in self.steps if s is not mine[0]]
         self.assertFalse([s for s in others if "run-isolation-check" in json.dumps(s)])
         self.assertFalse([s for s in others if "customer_isolation" in json.dumps(s)])
+
+    def test_it_runs_before_the_callers_hook(self) -> None:
+        """呼び出し側の hook を流す段（guard の回帰テスト）より前に照らす。"""
+        names = [s.get("run", "") for s in self.steps]
+        mine = next(i for i, r in enumerate(names) if self.STEP_RUN in r)
+        guard = next(i for i, r in enumerate(names) if "test_guard_main.sh" in r)
+        self.assertLess(mine, guard)
 
     def test_it_reads_only_and_gets_no_secret(self) -> None:
         self.assertEqual(self.wf.get("permissions"), {"contents": "read"})

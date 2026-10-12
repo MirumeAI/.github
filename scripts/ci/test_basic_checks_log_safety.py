@@ -7,6 +7,13 @@
 そのまま出していたので、 それが CI の記録に残った。 名前に改行と `::warning::`
 を入れたファイルでは、 記録の上で Actions の命令として読まれる行も出た。
 
+決まり:
+  ・道は、 **どの Repository でも**、 決まった名前の外を `<redacted#n>` にする
+    （Repository の種類では分けない。 CI でも手元でも既定は伏せる）
+  ・元の道を出すのは、 手元で `--show-paths` を付けたときだけ。 CI の中
+    （`GITHUB_ACTIONS=true` か `CI=true`）では断る
+  ・誤りの文は、 種類と行（と列）だけ
+
 ここでは **架空の値だけ**を使う（IP は文書用の網）。 場面ごとに「安全か」を
 判定し、 最後に検査の守りを 1 つずつ壊した版で同じ場面を流して、 判定が
 落ちることも確かめる（壊しても通る試験は、 何も確かめていない）。
@@ -34,12 +41,21 @@ try:
 finally:
     sys.path.pop(0)
 
-#: 顧客案件の Repository に見える origin（架空）と、 道をそのまま出す共通の
-#: Repository（actions/checkout が付ける形は `.git` なし）。
+#: 顧客案件の Repository に見える origin（架空）。
 CUSTOMER = "https://github.com/MirumeAI/customer-synthetic-example.git"
-OPEN = "https://github.com/MirumeAI/PDM"
 
-#: 架空の値。 **どれも記録に出てはいけない。**
+#: **どの Repository でも同じに伏せる**ことを確かめる origin（共通の Repository は
+#: actions/checkout が付ける形を含む）。
+ORIGINS = {
+    "顧客案件": CUSTOMER,
+    "PDM（CI の形）": "https://github.com/MirumeAI/PDM",
+    "Image-Acquisition-PDM": "https://github.com/MirumeAI/Image-Acquisition-PDM.git",
+    "development-docs": "https://github.com/MirumeAI/development-docs",
+    ".github（ssh）": "git@github.com:MirumeAI/.github.git",
+    "origin なし": None,
+}
+
+#: 架空の値。 **どれも記録に出てはいけない**（大文字と小文字は区別しない）。
 SYN = {
     "ip": "192.0.2.77",
     "serial": "SN-SYNTH-0042",
@@ -64,6 +80,7 @@ IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 def _env(extra: "dict | None" = None, root: "Path | None" = None) -> dict:
+    """子の環境。 **親の CI の印は渡さない**（手元として流す）。 要る場面だけ足す。"""
     e = {k: v for k, v in os.environ.items()
          if k not in ("GITHUB_ACTIONS", "CI", "PYTHONWARNINGS")}
     if root is not None:
@@ -78,8 +95,7 @@ def _out(r: subprocess.CompletedProcess) -> str:
 
 
 def run(files: dict, origin: "str | None" = CUSTOMER, args: tuple = (),
-        env: "dict | None" = None, checker: Path = CHECKER,
-        more_origins: tuple = ()) -> tuple:
+        env: "dict | None" = None, checker: Path = CHECKER, ci: bool = False) -> tuple:
     """一時の Git Repository を作って検査を流す。 (終了コード, 出力)。"""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td) / "repo"
@@ -87,9 +103,6 @@ def run(files: dict, origin: "str | None" = CUSTOMER, args: tuple = (),
         subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
         if origin:
             subprocess.run(["git", "remote", "add", "origin", origin],
-                           cwd=root, check=True)
-        for url in more_origins:
-            subprocess.run(["git", "config", "--add", "remote.origin.url", url],
                            cwd=root, check=True)
         for rel, body in files.items():
             p = root / rel
@@ -99,14 +112,18 @@ def run(files: dict, origin: "str | None" = CUSTOMER, args: tuple = (),
             else:
                 p.write_text(body, encoding="utf-8")
         subprocess.run(["git", "add", "-A", "-f"], cwd=root, check=True)
+        extra = dict(env or {})
+        if ci:
+            extra["GITHUB_ACTIONS"] = "true"
         r = subprocess.run([sys.executable, str(checker), *args],
-                           capture_output=True, env=_env(env, root))
+                           capture_output=True, env=_env(extra, root))
         return r.returncode, _out(r)
 
 
 def leaked(out: str) -> list:
-    """記録に出た架空の値の**種類**（値は返さない）。"""
-    return [k for k, v in SYN.items() if v in out]
+    """記録に出た架空の値の**種類**（値は返さない。 大文字と小文字は区別しない）。"""
+    low = out.lower()
+    return [k for k, v in SYN.items() if v.lower() in low]
 
 
 def command_lines(out: str) -> int:
@@ -152,6 +169,11 @@ def safe_redacted(code: int, out: str) -> bool:
 
 BAD_YAML = (f"plc:\n  host: {SYN['ip']}\n  addr: [{SYN['plc']}\n"
             f"  trig: {SYN['trigger']}: x: y\n")
+PATH_NAMES = {
+    f"{FACE_DIR}/{SYN['trigger']}_{SYN['equipment']}.json": '{"a": 1,}\n',
+    f"{FACE_DIR}/{SYN['plc']}.json": "",
+    f"docs/{SYN['serial']}.md": "",
+}
 
 
 def sc_yaml_value(checker=CHECKER):
@@ -162,8 +184,7 @@ def sc_yaml_value(checker=CHECKER):
 def sc_yaml_alias_tag(checker=CHECKER):
     """A: 別名とタグ。 ComposerError・ConstructorError の文には名前がそのまま入る。"""
     return run({"configs/alias.yaml": f"a: *{SYN['alias']}\n",
-                "configs/tag.yaml": f"b: !{SYN['tag']} x\n"},
-               origin=OPEN, checker=checker)
+                "configs/tag.yaml": f"b: !{SYN['tag']} x\n"}, checker=checker)
 
 
 def sc_json_value(checker=CHECKER):
@@ -183,12 +204,14 @@ def sc_python_warning(checker=CHECKER):
 
 
 def sc_path_names(checker=CHECKER):
-    """B: 道の中に面・トリガ・機器・製造番号の形の名前がある。"""
-    return run({
-        f"{FACE_DIR}/{SYN['trigger']}_{SYN['equipment']}.json": '{"a": 1,}\n',
-        f"{FACE_DIR}/{SYN['plc']}.json": "",
-        f"docs/{SYN['serial']}.md": "",
-    }, checker=checker)
+    """B: 道の中に面・トリガ・機器・製造番号の形の名前がある（顧客案件・手元）。"""
+    return run(PATH_NAMES, checker=checker)
+
+
+def sc_open_repo_in_ci(checker=CHECKER):
+    """B: 共通の Repository の CI でも伏せる（Repository の種類で分けない）。"""
+    return run(PATH_NAMES, origin="https://github.com/MirumeAI/PDM", ci=True,
+               checker=checker)
 
 
 def sc_suffix(checker=CHECKER):
@@ -237,75 +260,6 @@ def sc_not_git(checker=CHECKER):
         return r.returncode, _out(r)
 
 
-def sc_injection_open(checker=CHECKER):
-    """命令の注入。 道をそのまま出す Repository でも、 命令として読まれないこと。"""
-    return run({"cfg/\n::warning::INJECTED.json": "{bad\n",
-                "cfg/##[add-mask]x.json": "{bad\n",
-                "cfg/\u202ertl.json": "{bad\n"}, origin=OPEN, checker=checker)
-
-
-def sc_root_command(checker=CHECKER):
-    """根に置いた `::warning ...` の名前（改行が無いので `::` の置き換えだけが守り）。"""
-    return run({"::warning title=x::A.json": "{bad\n"}, origin=OPEN,
-               checker=checker)
-
-
-def sc_controls(checker=CHECKER):
-    """復帰・ESC・U+0085・U+2028・U+2029 を含む名前。"""
-    return run({"c1\r::warning::R.json": "{bad\n",
-                "c2\x1b[31mE.json": "{bad\n",
-                "c3\x85::warning::N.json": "{bad\n",
-                "c4\u2028::warning::L.json": "{bad\n",
-                "c5\u2029::warning::P.json": "{bad\n"}, origin=OPEN,
-               checker=checker)
-
-
-def sc_non_utf8_name(checker=CHECKER):
-    """UTF-8 でない名前。 止まらずに検査し、 その文字を無害な形で出す。"""
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td) / "repo"
-        root.mkdir()
-        subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
-        subprocess.run(["git", "remote", "add", "origin", OPEN], cwd=root, check=True)
-        with open(os.path.join(os.fsencode(root), b"bad\xff.json"), "wb") as f:
-            f.write(b"{bad\n")
-        subprocess.run(["git", "add", "-A", "-f"], cwd=root, check=True)
-        r = subprocess.run([sys.executable, str(checker)],
-                           capture_output=True, env=_env(None, root))
-        return r.returncode, _out(r)
-
-
-def sc_no_origin(checker=CHECKER):
-    """どの Repository か分からないときは伏せる。"""
-    return run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"}, origin=None,
-               checker=checker)
-
-
-def sc_profile_on_open_origin(checker=CHECKER):
-    """宣言（customer-profile.yaml）があれば、 origin が共通の名前でも伏せる。"""
-    return run({"customer-profile.yaml": "schema_version: 1\n",
-                f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"}, origin=OPEN,
-               checker=checker)
-
-
-def sc_lookalike_origin(checker=CHECKER):
-    """別のホストの道に `github.com/<共通の Repository>` を含むだけの origin。"""
-    return run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"},
-               origin="https://evil.example/github.com/MirumeAI/PDM", checker=checker)
-
-
-def sc_two_origins(checker=CHECKER):
-    """origin の URL が 2 つ（1 つ目が共通の Repository）。 分からないものとして伏せる。"""
-    return run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"}, origin=OPEN,
-               more_origins=(CUSTOMER,), checker=checker)
-
-
-def sc_show_paths_in_ci(checker=CHECKER):
-    return run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"},
-               args=("--show-paths",), env={"GITHUB_ACTIONS": "true"},
-               checker=checker)
-
-
 def sc_unreadable(checker=CHECKER):
     """読めないファイルがあっても、 種類だけを出して残りを見る。"""
     with tempfile.TemporaryDirectory() as td:
@@ -327,6 +281,57 @@ def sc_unreadable(checker=CHECKER):
         return r.returncode, _out(r)
 
 
+# 命令の注入は、 元の道を出す形（手元の --show-paths）で確かめる。 伏せる形では
+# 名前そのものが出ないので、 無害にする守りを確かめられない。
+
+def sc_injection_raw(checker=CHECKER):
+    return run({"cfg/\n::warning::INJECTED.json": "{bad\n",
+                "cfg/##[add-mask]x.json": "{bad\n",
+                "cfg/\u202ertl.json": "{bad\n"}, args=("--show-paths",),
+               checker=checker)
+
+
+def sc_root_command(checker=CHECKER):
+    """根に置いた `::warning ...` の名前（改行が無いので `::` の置き換えだけが守り）。"""
+    return run({"::warning title=x::A.json": "{bad\n"}, args=("--show-paths",),
+               checker=checker)
+
+
+def sc_controls(checker=CHECKER):
+    """復帰・ESC・U+0085・U+2028・U+2029 を含む名前。"""
+    return run({"c1\r::warning::R.json": "{bad\n",
+                "c2\x1b[31mE.json": "{bad\n",
+                "c3\x85::warning::N.json": "{bad\n",
+                "c4\u2028::warning::L.json": "{bad\n",
+                "c5\u2029::warning::P.json": "{bad\n"}, args=("--show-paths",),
+               checker=checker)
+
+
+def sc_non_utf8_name(checker=CHECKER):
+    """UTF-8 でない名前。 止まらずに検査し、 その文字を無害な形で出す。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+        with open(os.path.join(os.fsencode(root), b"bad\xff.json"), "wb") as f:
+            f.write(b"{bad\n")
+        subprocess.run(["git", "add", "-A", "-f"], cwd=root, check=True)
+        r = subprocess.run([sys.executable, str(checker), "--show-paths"],
+                           capture_output=True, env=_env(None, root))
+        return r.returncode, _out(r)
+
+
+def sc_show_paths_github(checker=CHECKER):
+    """CI の印が GITHUB_ACTIONS だけのとき。"""
+    return run(PATH_NAMES, args=("--show-paths",), env={"GITHUB_ACTIONS": "true"},
+               checker=checker)
+
+
+def sc_show_paths_ci(checker=CHECKER):
+    """CI の印が CI だけのとき。"""
+    return run(PATH_NAMES, args=("--show-paths",), env={"CI": "true"}, checker=checker)
+
+
 class ContentIsNotPrintedTest(unittest.TestCase):
     """**誤りの文に、 入力の行とパーサの文脈を出さない。** 種類と位置だけ。"""
 
@@ -339,15 +344,15 @@ class ContentIsNotPrintedTest(unittest.TestCase):
     @unittest.skipUnless(HAVE_YAML, "PyYAML が無い")
     def test_alias_and_tag_names_are_not_printed(self) -> None:
         code, out = sc_yaml_alias_tag()
-        self.assertTrue(safe(code, out), (code, leaked(out)))
-        self.assertIn("configs/alias.yaml:1: YAML として読めない（ComposerError", out)
-        self.assertIn("configs/tag.yaml:1: YAML として読めない（ConstructorError", out)
+        self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
+        self.assertRegex(out, r"configs/<redacted#\d+>\.yaml:1: YAML として読めない（ComposerError")
+        self.assertRegex(out, r"configs/<redacted#\d+>\.yaml:1: YAML として読めない（ConstructorError")
 
     @unittest.skipUnless(HAVE_YAML, "PyYAML が無い")
-    def test_the_same_holds_where_paths_are_open(self) -> None:
-        code, out = run({"configs/params.yaml": BAD_YAML}, origin=OPEN)
+    def test_content_is_not_printed_even_with_show_paths(self) -> None:
+        code, out = run({"configs/params.yaml": BAD_YAML}, args=("--show-paths",))
         self.assertTrue(safe(code, out), (code, leaked(out)))
-        self.assertIn("configs/params.yaml:", out)   # 道は既存のとおり出る
+        self.assertIn("configs/params.yaml:", out)   # 道は出て、 中身は出ない
 
     def test_json_python_shell_show_only_the_position(self) -> None:
         for name, sc, pat in (
@@ -377,7 +382,7 @@ class ContentIsNotPrintedTest(unittest.TestCase):
 
 
 class PathsAreRedactedTest(unittest.TestCase):
-    """**顧客案件の Repository と、 分からない Repository では道を伏せる。**"""
+    """**どの Repository でも、 CI でも手元でも、 既定で道を伏せる。**"""
 
     def test_names_in_paths_are_redacted(self) -> None:
         code, out = sc_path_names()
@@ -385,6 +390,16 @@ class PathsAreRedactedTest(unittest.TestCase):
         # 決まった名前は残り、 案件に固有の部分は番号になる
         self.assertIn("config/pdm/<redacted#1>/bbox_acquire/<redacted#2>.json", out)
         self.assertIn("docs/<redacted#", out)
+
+    def test_every_repository_is_redacted_by_default(self) -> None:
+        """Repository の種類で分けない（共通の Repository の CI も伏せる）。"""
+        for label, origin in ORIGINS.items():
+            for ci in (False, True):
+                with self.subTest(origin=label, ci=ci):
+                    code, out = run(PATH_NAMES, origin=origin, ci=ci)
+                    self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
+                    self.assertIn("<redacted#", out)
+                    self.assertNotIn("注意: --show-paths", out)
 
     def test_values_shaped_like_suffixes_are_dropped(self) -> None:
         code, out = sc_suffix()
@@ -404,49 +419,19 @@ class PathsAreRedactedTest(unittest.TestCase):
         self.assertIn("config/pdm/<redacted#1>/bbox_acquire/<redacted#2>.json:1:", out)
         self.assertNotIn("<redacted#3>", out)
 
-    def test_an_unknown_repository_is_redacted(self) -> None:
-        code, out = sc_no_origin()
-        self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
-        self.assertIn("<redacted#", out)
-
-    def test_a_declaration_forces_redaction(self) -> None:
-        code, out = sc_profile_on_open_origin()
-        self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
-
-    def test_lookalike_and_multiple_origins_are_redacted(self) -> None:
-        for name, sc in (("別のホスト", sc_lookalike_origin), ("URL が 2 つ", sc_two_origins)):
-            with self.subTest(origin=name):
-                code, out = sc()
-                self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
-                self.assertIn("<redacted#", out)
-        code, out = run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"},
-                        origin="/srv/mirror/github.com/MirumeAI/PDM")
-        self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
-
-    def test_open_repositories_keep_paths(self) -> None:
-        """共通の Repository では、 既存のとおり道をそのまま出す（CI の形・https・ssh）。"""
-        for origin in (OPEN, "https://github.com/MirumeAI/PDM.git",
-                       "git@github.com:MirumeAI/Image-Acquisition-PDM.git"):
-            with self.subTest(origin=origin):
-                code, out = run({"tools/broken.json": "{bad\n"}, origin=origin)
-                self.assertEqual(code, 1)
-                self.assertIn("tools/broken.json:1: JSON として読めない", out)
-                self.assertNotIn("<redacted#", out)
-
-    def test_no_customer_repository_is_open(self) -> None:
-        for name in BC.OPEN_PATH_REPOS:
-            self.assertFalse(name.split("/", 1)[1].startswith("customer-"), name)
-
     def test_show_paths_is_refused_in_ci(self) -> None:
-        code, out = sc_show_paths_in_ci()
-        self.assertTrue(safe(code, out, want=2), (code, leaked(out)))
-        self.assertIn("CI では使えません", out)
+        for env in ({"GITHUB_ACTIONS": "true"}, {"CI": "1"}, {"CI": "true"}, {"CI": "TRUE"}):
+            with self.subTest(env=env):
+                code, out = run(PATH_NAMES, args=("--show-paths",), env=env)
+                self.assertTrue(safe(code, out, want=2), (code, leaked(out)))
+                self.assertIn("CI では使えません", out)
 
     def test_show_paths_works_by_hand(self) -> None:
         code, out = run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"},
                         args=("--show-paths",))
         self.assertEqual(code, 1)
         self.assertIn(SYN["trigger"], out)    # 手元では元の道を見られる
+        self.assertIn("注意: --show-paths で元の道を出しています（手元専用", out)
 
 
 class NoTracebackTest(unittest.TestCase):
@@ -455,7 +440,8 @@ class NoTracebackTest(unittest.TestCase):
     def test_nul_in_python(self) -> None:
         code, out = sc_nul_python()
         self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
-        self.assertIn("構文エラー（ValueError", out)
+        # 3.10 は ValueError、 3.12 からは SyntaxError
+        self.assertRegex(out, r"構文エラー（(ValueError|SyntaxError)")
 
     def test_not_a_git_repository(self) -> None:
         code, out = sc_not_git()
@@ -467,15 +453,15 @@ class NoTracebackTest(unittest.TestCase):
         code, out = sc_unreadable()
         self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
         self.assertIn("検査できない（PermissionError）", out)
-        # 残りのファイルも見る（顧客案件の Repository なので、 名前は伏せて出る）
+        # 残りのファイルも見る（名前は伏せて出る）
         self.assertRegex(out, r"<redacted#\d+>\.json:1: JSON として読めない")
 
 
 class NoWorkflowCommandTest(unittest.TestCase):
     """**名前に改行・`::`・`##[`・制御文字・書式の文字があっても、 命令として読まれない。**"""
 
-    def test_injection_where_paths_are_open(self) -> None:
-        code, out = sc_injection_open()
+    def test_injection_with_show_paths(self) -> None:
+        code, out = sc_injection_raw()
         self.assertTrue(safe(code, out), (code, command_lines(out), raw_controls(out)))
         self.assertIn("\\u000a", out)          # 改行は見える形で残る
         self.assertIn("\\u202e", out)
@@ -497,7 +483,7 @@ class NoWorkflowCommandTest(unittest.TestCase):
 
     def test_injection_where_paths_are_redacted(self) -> None:
         code, out = run({"cfg/\n::warning::INJECTED.json": "{bad\n",
-                         "cfg/##[add-mask]x.json": "{bad\n"})
+                         "cfg/##[add-mask]x.json": "{bad\n"}, ci=True)
         self.assertTrue(safe_redacted(code, out), (code, command_lines(out)))
         self.assertNotIn("INJECTED", out)
 
@@ -505,13 +491,14 @@ class NoWorkflowCommandTest(unittest.TestCase):
 class RegressionTest(unittest.TestCase):
 
     def test_a_clean_repository_passes(self) -> None:
-        for origin in (CUSTOMER, OPEN, None):
-            with self.subTest(origin=origin):
-                code, out = run({"README.md": "ok\n", "config/config.json": "{}\n"},
-                                origin=origin)
-                self.assertEqual(code, 0, out)
-                self.assertIn("OK: 問題なし", out)
-                self.assertNotIn("<redacted#", out)
+        for label, origin in ORIGINS.items():
+            for ci in (False, True):
+                with self.subTest(origin=label, ci=ci):
+                    code, out = run({"README.md": "ok\n", "config/config.json": "{}\n"},
+                                    origin=origin, ci=ci)
+                    self.assertEqual(code, 0, out)
+                    self.assertIn("OK: 問題なし", out)
+                    self.assertNotIn("<redacted#", out)
 
 
 # ---- 守りを 1 つずつ壊した版 ----
@@ -555,6 +542,9 @@ MUTANTS = [
     ("道を伏せない",
      "        if self.open_paths:\n",
      "        if True:\n", sc_path_names, safe_redacted),
+    ("既定で道を出す",
+     "    open_paths = show_paths\n",
+     "    open_paths = True\n", sc_open_repo_in_ci, safe_redacted),
     ("拡張子を一覧で絞らない",
      "            if suffix not in SAFE_SUFFIXES:\n",
      "            if False:\n", sc_suffix, safe_redacted),
@@ -588,7 +578,7 @@ MUTANTS = [
      'f"（いまは {len(v)} 文字）"', 'f"（いまは {v[:40]!r}）"', sc_version, _safe1),
     ("命令を無害にしない",
      "def neutral(text: str) -> str:\n",
-     "def neutral(text: str) -> str:\n    return text\n", sc_injection_open, _safe1),
+     "def neutral(text: str) -> str:\n    return text\n", sc_injection_raw, _safe1),
     ("行頭の :: を崩さない",
      r'.replace("::", ":\\u003a")', "", sc_root_command, _safe1),
     ("行と段落の区切りを無害にしない",
@@ -605,22 +595,10 @@ MUTANTS = [
     ("traceback を出す",
      "    except Exception as e:\n        # **traceback",
      "    except ZeroDivisionError as e:\n        # **traceback", sc_not_git, _safe2),
-    ("分からないときに道を出す",
-     "    return origin_repo(root) in OPEN_PATH_REPOS\n",
-     "    return True\n", sc_no_origin, safe_redacted),
-    ("origin をホストに固定しない",
-     r"^(?:https://(?:[^/@\s]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)",
-     r"github\.com[:/]+", sc_lookalike_origin, safe_redacted),
-    ("origin が複数でも決める",
-     "    if len(urls) != 1:\n        return None\n",
-     "    if not urls:\n        return None\n", sc_two_origins, safe_redacted),
-    ("宣言を見ない",
-     '    if (root / "customer-profile.yaml").is_file():\n',
-     "    if False:\n", sc_profile_on_open_origin, safe_redacted),
-    ("CI で --show-paths を許す",
-     '    if show_paths and (os.environ.get("GITHUB_ACTIONS") == "true"\n',
-     '    if False and (os.environ.get("GITHUB_ACTIONS") == "true"\n', sc_show_paths_in_ci,
-     _safe2),
+    ("GITHUB_ACTIONS を CI と見ない",
+     'os.environ.get("GITHUB_ACTIONS") == "true"', "False", sc_show_paths_github, _safe2),
+    ("CI=true を CI と見ない",
+     'os.environ.get("CI", "").lower() in ("1", "true")', "False", sc_show_paths_ci, _safe2),
 ]
 if not IS_ROOT:
     MUTANTS.append(

@@ -29,11 +29,18 @@ CHECKER = HERE / "basic_checks.py"
 _AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 _GH = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 
-#: 道をそのまま出す共通の Repository として流す。 顧客案件の Repository と、
-#: どの Repository か分からないとき（origin が無い一時の Repository）は、
-#: 道を伏せる（#50、 `test_basic_checks_log_safety.py`）。 ここでは、
-#: 見つけたファイルの道が出ることまで確かめたい。
-OPEN_ORIGIN = "https://github.com/MirumeAI/PDM.git"
+#: 見つけたファイルの道が出ることまで確かめたいので、 手元専用の `--show-paths`
+#: を付けて流す。 既定では、 どの Repository でも道を伏せる（#50、
+#: `test_basic_checks_log_safety.py`）。 CI の中では `--show-paths` を断るので、
+#: 子には CI の印を渡さない（手元として流す）。
+SHOW_PATHS = ["--show-paths"]
+
+
+def local_env(root: Path) -> dict:
+    env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "CI")}
+    env["CI_ROOT"] = str(root)
+    return env
+
 
 #: 検出されるべき見本。
 SAMPLES = {
@@ -49,16 +56,13 @@ class SecretScanCoversEveryTextFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
-            subprocess.run(["git", "remote", "add", "origin", OPEN_ORIGIN],
-                           cwd=root, check=True)
             for rel, body in files.items():
                 p = root / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(body, encoding="utf-8")
             subprocess.run(["git", "add", "-A", "-f"], cwd=root, check=True)
-            env = dict(os.environ, CI_ROOT=str(root))
-            r = subprocess.run([sys.executable, str(CHECKER)],
-                               capture_output=True, text=True, env=env)
+            r = subprocess.run([sys.executable, str(CHECKER), *SHOW_PATHS],
+                               capture_output=True, text=True, env=local_env(root))
             return r.stdout + r.stderr
 
     def test_each_kind_is_found(self) -> None:
@@ -139,8 +143,6 @@ class NewFilesAreCheckedBeforeAddTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
-            subprocess.run(["git", "remote", "add", "origin", OPEN_ORIGIN],
-                           cwd=root, check=True)
             if ignore:
                 (root / ".gitignore").write_text(ignore, encoding="utf-8")
             (root / "README.md").write_text("ok\n", encoding="utf-8")
@@ -150,9 +152,9 @@ class NewFilesAreCheckedBeforeAddTest(unittest.TestCase):
                 p_ = root / rel
                 p_.parent.mkdir(parents=True, exist_ok=True)
                 p_.write_text(body, encoding="utf-8")
-            env = dict(os.environ, CI_ROOT=str(root))
-            r = subprocess.run([sys.executable, str(HERE / checker)],
-                               capture_output=True, text=True, env=env)
+            extra = SHOW_PATHS if checker == "basic_checks.py" else []
+            r = subprocess.run([sys.executable, str(HERE / checker), *extra],
+                               capture_output=True, text=True, env=local_env(root))
             return r.stdout + r.stderr
 
     def test_a_new_file_is_checked_by_basic_checks(self) -> None:

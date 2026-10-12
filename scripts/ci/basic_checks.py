@@ -22,16 +22,17 @@ PyYAML の誤りの文（該当行の抜き出しを含む）や `bash -n` の�
 
   ・誤りの文は、 どの Repository でも種類と行（と列）だけにする。
     入力の行・パーサの文脈・`VERSION` の中身・例外の文は出さない
-  ・道は、 顧客の値を持たない共通の Repository（`OPEN_PATH_REPOS`）の
-    ときだけそのまま出す。 それ以外と、 どの Repository か分からない
-    ときは、 決まった名前（`GENERIC_PARTS`）の外を `<redacted#n>` にする。
+  ・道は、 **どの Repository でも**（CI では必ず）、 決まった名前
+    （`GENERIC_PARTS`）の外を `<redacted#n>` にする。 Repository の種類
+    （顧客か共通か）では分けない。 種類の判断を誤ると、 道がそのまま出るため。
     拡張子は決まった一覧（`SAFE_SUFFIXES`）のときだけ残し、 番号は誤りを
     出すファイルにだけ振る
   ・出す行は、 制御文字と Actions の命令として読まれる並び（`::`・`##[`）を
     無害にしてから出す。 想定外の例外でも traceback は出さない（終了コード 2）
 
-手元で、 伏せた道の元を知りたいときだけ `--show-paths` を付ける
-（CI では使えない）。
+元の道を出すのは、 手元で `--show-paths` を付けたときだけ。 CI の中
+（`GITHUB_ACTIONS=true` か `CI=true`）では断る。 出した道は、 Issue・
+Pull Request・CI の記録に貼らない。
 """
 from __future__ import annotations
 
@@ -82,16 +83,6 @@ TEXT_SUFFIXES = {".py", ".sh", ".md", ".json", ".yml", ".yaml", ".txt", ".cfg",
 #: 中身が読めてテキストなら見る、 という判断にする。
 MAX_SECRET_SCAN_BYTES = 2 * 1024 * 1024
 
-#: 道をそのまま出してよい Repository（顧客の値を持たない共通のもの）。
-#: **ここに無い Repository と、 どの Repository か分からないときは伏せる。**
-#: 顧客案件の Repository（`customer-<会社>-<部品>`）を足してはいけない。
-OPEN_PATH_REPOS = {
-    "mirumeai/.github",
-    "mirumeai/development-docs",
-    "mirumeai/pdm",
-    "mirumeai/image-acquisition-pdm",
-}
-
 #: 伏せるときにも、 そのまま出してよい道の部分。 どの案件にも共通の置き場と
 #: 決まった名前だけを書く。 **案件に固有の名前（面・トリガ・機器・資料の名前）は
 #: 書かない。** 書いていない部分は `<redacted#n>` になる。
@@ -126,10 +117,6 @@ SAFE_SUFFIXES = frozenset(TEXT_SUFFIXES | {
     ".pdf", ".xlsx", ".docx", ".pptx", ".lic",
 })
 
-#: `origin` の URL から Repository を取る。 **GitHub のホストの位置に固定する。**
-#: どこかに `github.com/` を含むだけの URL（別のホストや手元の写しの道）は、
-#: 分からないものとして伏せる。 actions/checkout は `https://github.com/<owner>/<name>`。
-_GITHUB_REPO = re.compile(r"^(?:https://(?:[^/@\s]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/*$")
 
 
 def neutral(text: str) -> str:
@@ -150,32 +137,10 @@ def neutral(text: str) -> str:
     return "".join(out).replace("::", ":\\u003a").replace("##[", "#\\u0023[")
 
 
-def origin_repo(root: Path) -> "str | None":
-    """`owner/name`（小文字）。 分からなければ None。
-
-    `origin` の URL は複数書けるので、 1 つでないときも分からないものとする
-    （`--get` は最後の 1 つだけを返す）。
-    """
-    try:
-        got = subprocess.run(["git", "config", "--get-all", "remote.origin.url"],
-                             cwd=root, capture_output=True, text=True,
-                             errors="replace").stdout
-    except OSError:
-        return None
-    urls = [u.strip() for u in got.splitlines() if u.strip()]
-    if len(urls) != 1:
-        return None
-    m = _GITHUB_REPO.search(urls[0])
-    if not m:
-        return None
-    return f"{m.group(1)}/{m.group(2)}".lower()
-
-
-def opens_paths(root: Path) -> bool:
-    """道をそのまま出してよいか。 **分からなければ出さない。**"""
-    if (root / "customer-profile.yaml").is_file():
-        return False
-    return origin_repo(root) in OPEN_PATH_REPOS
+def in_ci() -> bool:
+    """CI の中か。 GitHub Actions は `GITHUB_ACTIONS=true`、 多くの CI は `CI=true`。"""
+    return (os.environ.get("GITHUB_ACTIONS") == "true"
+            or os.environ.get("CI", "").lower() in ("1", "true"))
 
 
 class FileIds:
@@ -377,15 +342,15 @@ def check_file(root: Path, rel: Path, rid: LazyId, yaml, counts: dict,
 def main(argv: "list[str] | None" = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     show_paths = "--show-paths" in args
-    if show_paths and (os.environ.get("GITHUB_ACTIONS") == "true"
-                       or os.environ.get("CI", "").lower() in ("1", "true")):
+    if show_paths and in_ci():
         print("ERROR: --show-paths は CI では使えません（CI の記録に道が残るため）")
         return 2
 
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     ignores = load_ignores(root)
     files = tracked_files(root, ignores)
-    open_paths = show_paths or opens_paths(root)
+    # **元の道を出すのは、 手元で --show-paths を付けたときだけ。**
+    open_paths = show_paths
     rid_of = FileIds(open_paths)
     errors: list[str] = []
     counts = {"py": 0, "json": 0, "yaml": 0, "sh": 0}
@@ -418,6 +383,9 @@ def main(argv: "list[str] | None" = None) -> int:
             errors.append("VERSION: 版だけを1行で書いてください"
                           "（前後の空白や複数行は不可）")
 
+    if open_paths:
+        print("注意: --show-paths で元の道を出しています（手元専用。"
+              "Issue・Pull Request・CI の記録に貼らない）")
     print(f"検査: {len(files)} ファイル "
           f"(py={counts['py']} json={counts['json']} yaml={counts['yaml']} sh={counts['sh']})")
     if yaml is None:

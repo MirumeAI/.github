@@ -29,6 +29,12 @@ CHECKER = HERE / "basic_checks.py"
 _AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 _GH = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 
+#: 道をそのまま出す共通の Repository として流す。 顧客案件の Repository と、
+#: どの Repository か分からないとき（origin が無い一時の Repository）は、
+#: 道を伏せる（#50、 `test_basic_checks_log_safety.py`）。 ここでは、
+#: 見つけたファイルの道が出ることまで確かめたい。
+OPEN_ORIGIN = "https://github.com/MirumeAI/PDM.git"
+
 #: 検出されるべき見本。
 SAMPLES = {
     ".env": f"AWS_ACCESS_KEY_ID={_AWS}\n",
@@ -43,6 +49,8 @@ class SecretScanCoversEveryTextFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+            subprocess.run(["git", "remote", "add", "origin", OPEN_ORIGIN],
+                           cwd=root, check=True)
             for rel, body in files.items():
                 p = root / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +139,8 @@ class NewFilesAreCheckedBeforeAddTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+            subprocess.run(["git", "remote", "add", "origin", OPEN_ORIGIN],
+                           cwd=root, check=True)
             if ignore:
                 (root / ".gitignore").write_text(ignore, encoding="utf-8")
             (root / "README.md").write_text("ok\n", encoding="utf-8")

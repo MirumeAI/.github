@@ -33,6 +33,11 @@ on:
         type: boolean
         required: false
         default: true
+      run-isolation-check:
+        description: "別の案件の値が混ざっていないかを、 根の customer-profile.yaml（この案件の宣言）と照らすか。 宣言を置いた顧客 Repository だけで true にする。"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -101,3 +106,26 @@ jobs:
         env:
           CI_ROOT: ${{ github.workspace }}/target
         run: bash validators/scripts/ci/test_guard_main.sh
+
+      # **別の案件の値が混ざっていないか**（customer-profile.yaml との照合）。
+      # 顧客 Repository の最初の登録で、 別の案件の構成のファイルと PLC の表が
+      # 入り、 名前の検査にも配る道具の確かめにも見つからなかった。
+      # 宣言を置いて run-isolation-check を true にした Repository だけで動く
+      # （既定は false。 今の呼び出し側は何も変わらない）。 登録表も secret も
+      # 使わず、 呼び出し側の中身はデータとして読むだけで実行しない。
+      # PR のときは基準の commit を取り、 宣言の増減を数だけ出す。 取れなくても
+      # 照合は行う（増減は「比べていません」と出る）。 基準の commit は、 式を
+      # run の中に書かず、 環境変数で渡す。
+      - name: 別の案件の値の混入（customer-profile.yaml との照合）
+        if: ${{ inputs.run-isolation-check }}
+        env:
+          CI_ROOT: ${{ github.workspace }}/target
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            git -C "$CI_ROOT" fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" \
+              || echo "基準の commit を取れませんでした（宣言の増減は比べません）"
+            python validators/scripts/ci/customer_isolation_check.py --base-ref "$BASE_SHA"
+          else
+            python validators/scripts/ci/customer_isolation_check.py
+          fi

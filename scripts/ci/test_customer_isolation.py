@@ -84,10 +84,10 @@ B_FILE = "config." + B_PROFILE + ".json"
 #: 宣言に書いてはいけない値と、 鍵に書き誤った数（試験の中だけで組み立てる）。
 CREDENTIAL = "example-" + "not-a-real-password"
 TOKEN = "ghp" + "_" + "Ab3" * 12
-NUMBER_KEY = "8642" + "0"
-HEX_KEY, HEX_VALUE = "0x1519" + "3", str(0x15193)
-NUMBER_SERIAL = "1234" + "5678"
-FLOAT_SERIAL = "1357" + "9"
+NUMBER_KEY = "86420" + "24680"
+HEX_KEY, HEX_VALUE = "0x7531" + "eca8642", str(0x7531eca8642)
+NUMBER_SERIAL = "12345" + "67890"
+FLOAT_SERIAL = "13579" + "13579"
 
 
 def b_plc(enabled: bool = True) -> dict:
@@ -307,6 +307,14 @@ def scenarios() -> "list[Scenario]":
     add("7d. 配置先の絶対の道は、 この Repository の参照とみなさない", a_with(**{
         "deploy__image-acquisition__example.service":
             "ExecStart=/opt/example/config/example.json\n"}), 0)
+    add("7f. ./ と ../ で始まる、 この Repository の中の参照も照らす", a_with(**{
+        "deploy__image-acquisition__example.service":
+            f"ExecStart=/usr/bin/true --c ./config/image-acquisition/{B_FILE}\n"
+            f"ExecStartPre=/bin/cp ../../config/image-acquisition/{B_FILE} /tmp/x\n"}), 1,
+        {"S4-missing"})
+    add("7g. deploy そのものがリンク", _with(a_files(), **{
+        "deploy__image-acquisition__example.service": None, "deploy": Link("config")}), 1,
+        {"S4-link"})
     add("7e. deploy の中のリンク", a_with(**{
         "deploy__image-acquisition__link.service": Link("../../versions.yaml")}), 1,
         {"S4-link"})
@@ -360,8 +368,8 @@ def scenarios() -> "list[Scenario]":
     bc = b_config()
     bc["plc"]["to_pc_example"]["shot_request"][B_TRIGGERS[0]]["trig_example_signal"] = {
         "bit": 1, "data": B_ADDRS[0]}
-    add("11h. トリガの項目の中の信号は、 trig_ で始まっても名前とみなさない",
-        b_files(config=bc), 0)
+    add("11h. トリガの項目の中の、 Core の一覧に無い trig_ の鍵も照らす",
+        b_files(config=bc), 1, {"L1-name"})
     bc = b_config()
     bc["plc"]["to_pc_example"]["shot_request"]["trig_example_b_extra"] = {
         "trig_bit": {"bit": 0, "data": B_ADDRS[0]}}
@@ -436,6 +444,10 @@ def scenarios() -> "list[Scenario]":
     # ---- S1（ファイル）
     add("defaults/ に案件の値を置く", a_with(**{"config__pdm__defaults__x.json": _json({})}), 1,
         {"S1-defaults"})
+    add("defaults/ の空の .gitkeep と説明の README.md は通す", a_with(**{
+        "config__pdm__defaults__.gitkeep": "", "config__pdm__defaults__README.md": "# x\n"}), 0)
+    add("align_reference.txt は PDM の置き場の根だけ", a_with(**{
+        "config__pdm__capture__align_reference.txt": "EXAMPLE-LOT-0001\n"}), 1, {"S1-file"})
     add("defaults/ は宣言しても許さない", a_files(profile=a_prof(config_files={"extra": [
         {"path": "config/pdm/defaults/x.json", "reason": "架空"}]})), 2, error="profile-schema")
     add("config/ の下のリンク", a_with(**{
@@ -460,6 +472,8 @@ def scenarios() -> "list[Scenario]":
         texts=("宣言して使っていないもの",))
     add("宣言の extra の道の形（..）", a_files(profile=a_prof(config_files={"extra": [
         {"path": IA + "../x.json", "reason": "架空"}]})), 2, error="profile-schema")
+    add("宣言の extra の道の形（//）", a_files(profile=a_prof(config_files={"extra": [
+        {"path": IA + "/x.json", "reason": "架空"}]})), 2, error="profile-schema")
 
     # ---- S2・S3
     add("宣言に無い面の名前のファイル（config/pdm）", a_with(**{
@@ -496,6 +510,8 @@ def scenarios() -> "list[Scenario]":
         texts=("照らしていません",))
     add("nas の節が無い", a_files(config={k: v for k, v in a_config().items() if k != "nas"}),
         2, error="config-field")
+    add("ai.enabled を書いていない（Core も止める形）", a_files(config=a_cfg(ai={})), 2,
+        error="config-field")
     bc = b_config()
     bc["plc"]["enabled"] = False
     add("PLC を使う宣言なのに plc.enabled が false", b_files(config=bc), 1, {"S2-plc-enabled"})
@@ -510,7 +526,19 @@ def scenarios() -> "list[Scenario]":
     hidden = _json(a_config()).replace(
         '"plc": {', '"plc": ' + json.dumps(b_plc(False)) + ',\n  "plc": {', 1)
     add("設定の JSON の同じ鍵（PLC の表を、 後の enabled: false で隠す）", a_with(**{
-        "config__image-acquisition__config.json": hidden}), 2, error="config-json")
+        "config__image-acquisition__config.json": hidden}), 2, error="config-json",
+        texts=("同じ鍵が 2 回あります（",))
+    add("PDM の置き場に置いた撮像側の構成（_profile・plc を持つ）も照らす", a_with(**{
+        "config__pdm__bbox_acquire__" + A_TRIGGER + ".json": _json({
+            "_profile": B_PROFILE,
+            "plc": {"enabled": False, "address": {"host": "example-host", "port": 1}}})}), 1,
+        {"S2-plc", "S3-profile", "L1-plc-endpoint"})
+    add("PDM の置き場に置いた PLC の表（IP も trig_ の語も無い）も照らす", a_with(**{
+        "config__pdm__bbox_acquire__" + A_TRIGGER + ".json": _json({"plc": {
+            "enabled": False, "address": {"host": "example-host", "port": 1},
+            "to_pc_example": {"shot_request": {"example_trigger_b": {
+                "sig_example": {"bit": 0, "data": "EXAMPLE_ADDR_900"}}}}}})}), 1,
+        {"S2-plc", "L1-plc-endpoint", "L1-trigger", "L1-plc-address"})
     add("PDM の JSON の camera の節は、 撮像側の設定とみなさない", a_with(**{
         "config__pdm__bbox_acquire__" + A_TRIGGER + ".json":
             _json({"camera": {"cam_example": {}}})}), 0)
@@ -543,6 +571,10 @@ def scenarios() -> "list[Scenario]":
     num["equipment"]["cameras"][0]["serial"] = int(NUMBER_SERIAL)
     add("数で書いた製造番号は、 引用符で囲むよう言う", a_files(profile=num), 2,
         error="profile-schema", texts=("引用符",))
+    add("真偽で書いた値も、 引用符で囲むよう言う", a_files(profile=a_prof(triggers=[True])), 2,
+        error="profile-schema", texts=("引用符",))
+    add("宣言の inspection が対応表でない", a_files(profile=a_prof(
+        project={"inspection": "example", "profiles": [A_PROFILE]})), 2, error="profile-schema")
     return s
 
 
@@ -733,10 +765,13 @@ class SyntheticScenariosTest(unittest.TestCase):
 
     def test_long_reference_lines_stay_fast(self) -> None:
         """deploy の長い行でも、 参照の探し方の時間が 2 乗で増えない。"""
-        started = time.monotonic()
-        I._REF_PATH.findall("config/" * 50000)
-        I._REF_NAME.findall("config." * 50000)
-        self.assertLess(time.monotonic() - started, 5.0)
+        e = chr(0xE9)                                    # Unicode の字（英数字の外）
+        for line in ("config/" * 50000, "config." * 50000,
+                     ("config/" + e) * 50000, (e + "config.x") * 50000):
+            started = time.monotonic()
+            I._REF_PATH.findall(line)
+            I._REF_NAME.findall(line)
+            self.assertLess(time.monotonic() - started, 5.0)
 
 
 #: (説明, 置換前, 置換後)。 置換前は検査の中に **1 か所だけ** あること。
@@ -809,7 +844,7 @@ MUTATIONS = [
     ("S4: versions.yaml を読まない",
      'S4_FILES = ("versions.yaml",)', "S4_FILES = ()"),
     ("S4: 配置先の絶対の道を、 この Repository の参照とみなす",
-     'rf"(?<![{_A}./-])config/', 'rf"(?<![{_A}.-])config/'),
+     'rf"(?<![{_A}./-])(?:', 'rf"(?<![{_A}.-])(?:'),
     ("網: 宣言した網の外の IP を通す",
      "hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]",
      "hit = list(self.prof.networks)"),
@@ -830,8 +865,6 @@ MUTATIONS = [
      "changed = grew = True", "changed = True"),
     ("層 1: shot_request の項目をトリガとして照らさない",
      "and _is_trigger_entry(_get(doc.data, path))):", "and False):"),
-    ("層 1: トリガの項目の中の信号を、 名前として照らす",
-     "and _is_trigger_entry(_get(doc.data, path[:-1]))):", "and False):"),
     ("層 1: __ の後ろが region でなくても、 前半だけを見る",
      'for t in ((token, head) if sep and rest.startswith("region") else (token,)):',
      "for t in (token, head):"),
@@ -861,9 +894,21 @@ MUTATIONS = [
     ("参考: 説明の .md の中の値を照らさない",
      '                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)\n',
      "                pass\n"),
-    ("PDM の置き場の JSON を、 撮像側の設定とみなす",
-     "return rel == IA_MAIN or (not rel.startswith(PDM_DIR) and isinstance(data, dict)",
-     "return rel == IA_MAIN or (isinstance(data, dict)"),
+    ("PDM の置き場の JSON を、 撮像側の鍵の全部で撮像側の設定とみなす",
+     "keys = _IA_ONLY_KEYS if rel.startswith(PDM_DIR) else _IA_KEYS",
+     "keys = _IA_KEYS"),
+    ("PDM の置き場に置いた撮像側の構成を照らさない",
+     "keys = _IA_ONLY_KEYS if rel.startswith(PDM_DIR) else _IA_KEYS",
+     "keys = () if rel.startswith(PDM_DIR) else _IA_KEYS"),
+    ("S4: ./ と ../ で始まる参照を数えない",
+     "(?:\\.\\.?/){{0,16}}(config/", "(config/"),
+    ("S2: 主の設定の plc.enabled・ai.enabled が真偽でなくても止めない",
+     'if main and cap != "nas" and not isinstance(enabled, bool):', "if False:"),
+    ("S4: deploy そのもののリンクを見ない",
+     'rel in S4_FILES or rel == "deploy" or rel.startswith("deploy/")',
+     'rel in S4_FILES or rel.startswith("deploy/")'),
+    ("S1: align_reference.txt を根でなくても許す",
+     "if len(parts) == 1 and parts[0] in PDM_FIXED:", "if parts[-1] in PDM_FIXED:"),
 ]
 
 

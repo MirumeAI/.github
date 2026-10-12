@@ -42,8 +42,9 @@
           そう言う（推測しない）
     S3    構成の名前（`_profile`）・検査の性質（`flow` か `inspection`）・カメラ・面が
           宣言の中か
-    S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道と、
-          `config` で始まる `.json` の名前）が、 実在して許されているか。 deploy/ の
+    S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道。 `./`・
+          `../` で始まるものも含む。 それと `config` で始まる `.json` の名前）が、
+          実在して許されているか。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
 
@@ -131,8 +132,9 @@ PDM_FIXED = ("align_reference.txt",)
 #: S4 で読む、 根の決まった名前（deploy/ の下のほかに）。
 S4_FILES = ("versions.yaml",)
 
-#: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。 トリガの項目の
-#: 中の鍵は道の形でも信号とみなす（この一覧に無い信号が Core に増えても落とさない）。
+#: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。 **一覧で持つ**
+#: （道の形で信号とみなすと、 信号の位置に置いた別の案件の名前を見逃す）。 Core が
+#: `trig_` で始まる信号を足したら、 ここも同じ変更で足す（足さないと所見が出て気づける）。
 CORE_TRIG_KEYS = frozenset({"trig_bit", "trig_ready"})
 #: 宣言に置いてはいけない鍵（資格情報）。 大文字と小文字、 `_` や `-` を除いて比べる。
 CREDENTIAL_WORDS = ("password", "passwd", "passphrase", "secret", "token",
@@ -187,10 +189,15 @@ _IPV4 = re.compile(r"(?<![0-9.])((?:[0-9]{1,3}\.){3}[0-9]{1,3})"
                    r"(?:/([0-9]{1,2})(?![0-9/]))?(?!\.?[0-9])")
 _TRIG = re.compile(rf"(?<![{_A}])trig_[{_A}]*[A-Za-z0-9]")
 #: deploy/ と versions.yaml の中の、 設定のファイルへの参照（道と、 config で始まる名前）。
-#: 前に `/` がある道（配置先の絶対の道など）は、 この Repository の道とみなさない
-#: （前を見る文字の組を本体と揃え、 長い行で時間が 2 乗で増えないようにする）。
-_REF_PATH = re.compile(rf"(?<![{_A}./-])config/[\w./-]*?\.(?:json|txt)(?![{_A}-]|\.[{_A}])")
-_REF_NAME = re.compile(rf"(?<![{_A}./-])config(?:\.[\w-]+)*\.json(?![{_A}-]|\.[{_A}])")
+#: `./` や `../` で始まる道は、 この Repository の中の `config/...` として照らす。 前に
+#: ほかの道がある道（配置先の絶対の道など）は、 この Repository の道とみなさない。
+#: 長さに上限を置く（Unicode の字をはさんだ長い行でも、 時間が 2 乗で増えないように。
+#: 前を見る文字の組は英数字だけにして、 日本語のすぐ後ろの参照も拾う）。
+_REF_PATH = re.compile(
+    rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}(config/[\w./-]{{0,256}}?\.(?:json|txt))"
+    rf"(?![{_A}-]|\.[{_A}])")
+_REF_NAME = re.compile(
+    rf"(?<![{_A}./-])config(?:\.[\w-]{{1,64}}){{0,8}}\.json(?![{_A}-]|\.[{_A}])")
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _HEX_REF = re.compile(r"[0-9a-f]{7,40}")
@@ -656,14 +663,23 @@ class JsonDoc:
         return None
 
 
+#: 撮像側の案件の設定らしいものの鍵。 PDM の置き場では、 撮像側にしか無い鍵だけで見る
+#: （PDM の `camera` などの節を、 撮像側の設定と取り違えない）。
+_IA_KEYS = ("camera", "shot", "face_dict", "plc")
+_IA_ONLY_KEYS = ("_profile", "face_dict", "plc")
+
+
 def _is_ia_config(rel: str, data) -> bool:
     """撮像側の案件の設定らしいもの（決まった場所の照合と S2・S3 を当てる）。
 
-    撮像側の置き場の外へ写した構成も見る。 ただし PDM の置き場の JSON は PDM の
-    形なので除く（PDM の `camera` などの節を、 撮像側の設定と取り違えない）。
+    撮像側の置き場の外へ写した構成も見る（PDM の置き場に置いたものも）。
     """
-    return rel == IA_MAIN or (not rel.startswith(PDM_DIR) and isinstance(data, dict)
-                              and any(k in data for k in ("camera", "shot", "face_dict", "plc")))
+    if rel == IA_MAIN:
+        return True
+    if not isinstance(data, dict):
+        return False
+    keys = _IA_ONLY_KEYS if rel.startswith(PDM_DIR) else _IA_KEYS
+    return any(k in data for k in keys)
 
 
 def _is_trigger_entry(v) -> bool:
@@ -793,12 +809,12 @@ class Checker:
         name = rel.rsplit("/", 1)[-1]
         if os.path.islink(self.root / rel):
             return "S1-link"
-        if rel.startswith(PDM_DIR + "defaults/"):
-            return "S1-defaults"                         # 宣言しても許さない
         if name == ".gitkeep":
             return None if (self.root / rel).stat().st_size == 0 else "S1-file"
         if name.endswith(".md"):
             return None
+        if rel.startswith(PDM_DIR + "defaults/"):
+            return "S1-defaults"                         # 宣言しても許さない
         if rel in self.prof["config_files.extra"]:
             self.used["config_files.extra"].add(rel)
             return None
@@ -935,10 +951,6 @@ class Checker:
                 and _is_trigger_entry(_get(doc.data, path))):
             self.member("triggers", path[-1], "L1-trigger", rel, line, path)
             return True
-        # トリガの項目の中の鍵は信号の名前（道の形で決まる。 `trig_` で始まっても名前ではない）
-        if (kind == "key" and n >= 4 and path[-3] == "shot_request"
-                and _is_trigger_entry(_get(doc.data, path[:-1]))):
-            return True
         # 層 1: PLC の宛先（ia_config で host と port の組を照らした）と番地
         if kind == "value" and n == 3 and path[1] == "address" and path[2] in ("host", "port"):
             return True
@@ -959,7 +971,7 @@ class Checker:
         for i, ln in enumerate(text.splitlines(), 1):
             for m in _REF_PATH.finditer(ln):
                 self.counts["refs"] += 1
-                target = posixpath.normpath(m.group(0))
+                target = posixpath.normpath(m.group(1))
                 if not target.startswith("config/"):
                     self.add("S4-not-allowed", rel, i)
                 elif target not in self.files:
@@ -1246,8 +1258,8 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
         print("注意: 宣言して使っていないもの（落としません。 要らなければ宣言から消す）: "
               + "・".join(f"{c} {n}" for c, n in unused))
     for cap, rel in sorted(set(ck.skipped)):
-        print(f"注意: {cap}.enabled が書かれていないので、 使うかどうかを宣言と照らしていません"
-              f"（推測しません）  file={masks.path(rel)}")
+        print(f"注意: {cap}.enabled が true か false で書かれていないので、 使うかどうかを"
+              f"宣言と照らしていません（推測しません）  file={masks.path(rel)}")
     if notes:
         print(f"参考（強制しません。 deploy/ と説明の .md の中の値を照らした結果 {len(notes)} か所）:")
         for f in notes[:MAX_SHOWN]:

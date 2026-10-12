@@ -32,7 +32,6 @@ MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Re
 
 この `.github` Repository のテンプレートは、MirumeAI Organization 配下の各 Repository に同種の独自テンプレートがない場合に既定値として利用されます。
 
-
 ## 顧客の間の混入の検査（`customer-profile.yaml`）
 
 顧客 Repository の設定に、別の案件の値・ファイル・構成が混ざっていないかを、その案件自身の宣言（Repository の根の `customer-profile.yaml`）と照らします（`scripts/ci/customer_isolation_check.py`）。ほかの顧客の値も、顧客の名前の登録表も、secret も使いません。
@@ -68,7 +67,7 @@ python scripts/ci/customer_isolation_check.py --root <顧客 Repository> --repor
   - `config/pdm/`: 面ごとの設定の置き場（`adaptive_mask`・`align`・`bbox_acquire`・`good_pool`・`region_split`。ファイルの名前が宣言の面か）と `align_reference.txt`。`defaults/` は宣言しても許しません
 - S2: PLC・NAS・AI を使うかが宣言と同じか。PLC を使わないなら、`plc` は `{"enabled": false}` だけ。`nas.enabled` を書いていなければ、照らさずにそう言います（推測しません）
 - S3: 構成の名前（`_profile`）・検査の性質（`flow` か `inspection` の一方）・カメラ・面が宣言の中か
-- S4: `deploy/` と `versions.yaml` が触れる設定のファイル（`config/...` の道と、`config` で始まる `.json` の名前）が、実在して許されているか
+- S4: `deploy/` と `versions.yaml` が触れる設定のファイル（`config/...` の道。`./`・`../` で始まるものも含む。それと `config` で始まる `.json` の名前）が、実在して許されているか
 - 参考（不合格にしない）: `deploy/` の中の値と、説明の `.md` の中の値。強制するかは、既存の案件で報告だけの形で流した結果を見て決めます
 
 宣言の例（値は文書用の架空のもの）:

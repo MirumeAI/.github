@@ -13,6 +13,26 @@
   6. シェルスクリプトの構文
 
 除外は `.ci-ignore`（1行1パターン、glob）で指定する。
+
+**CI の記録に、 入力の中身と顧客に固有の道を出さない**（#50）。
+顧客案件の Repository では、 設定のファイルの道や中身に、 その案件に
+固有の名前（面・トリガ・機器）や値が入る。 誤りを見つけたときに
+PyYAML の誤りの文（該当行の抜き出しを含む）や `bash -n` の出力、
+ファイルの道をそのまま出していたので、 それが CI の記録に残った。
+
+  ・誤りの文は、 どの Repository でも種類と行（と列）だけにする。
+    入力の行・パーサの文脈・`VERSION` の中身・例外の文は出さない
+  ・道は、 **どの Repository でも**（CI では必ず）、 決まった名前
+    （`GENERIC_PARTS`）の外を `<redacted#n>` にする。 Repository の種類
+    （顧客か共通か）では分けない。 種類の判断を誤ると、 道がそのまま出るため。
+    拡張子は決まった一覧（`SAFE_SUFFIXES`）のときだけ残し、 番号は誤りを
+    出すファイルにだけ振る
+  ・出す行は、 制御文字と Actions の命令として読まれる並び（`::`・`##[`）を
+    無害にしてから出す。 想定外の例外でも traceback は出さない（終了コード 2）
+
+元の道を出すのは、 手元で `--show-paths` を付けたときだけ。 CI の中
+（`GITHUB_ACTIONS=true` か `CI=true`）では断る。 出した道は、 Issue・
+Pull Request・CI の記録に貼らない。
 """
 from __future__ import annotations
 
@@ -23,6 +43,8 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
+import warnings
 from pathlib import Path
 
 MAX_BYTES = 10 * 1024 * 1024
@@ -61,13 +83,121 @@ TEXT_SUFFIXES = {".py", ".sh", ".md", ".json", ".yml", ".yaml", ".txt", ".cfg",
 #: 中身が読めてテキストなら見る、 という判断にする。
 MAX_SECRET_SCAN_BYTES = 2 * 1024 * 1024
 
+#: 伏せるときにも、 そのまま出してよい道の部分。 どの案件にも共通の置き場と
+#: 決まった名前だけを書く。 **案件に固有の名前（面・トリガ・機器・資料の名前）は
+#: 書かない。** 書いていない部分は `<redacted#n>` になる。
+GENERIC_PARTS = frozenset({
+    # Repository の置き場
+    ".github", "workflows", "ISSUE_TEMPLATE", ".claude", "hooks", "commands",
+    "scripts", "ci", "tests", "config", "configs", "image-acquisition", "pdm",
+    "deploy", "deployment", "release", "docs", "plugins", "templates",
+    "acceptance", "evaluation", "manifests", "poc", "quick-diagnosis",
+    "recipes", "requirements", "validation", "profiles", "supervised",
+    "defaults",
+    # Core が決めている面ごとの置き場（customer_isolation_check.py と同じ）
+    "adaptive_mask", "align", "bbox_acquire", "good_pool", "region_split",
+    # 決まった名前のファイル
+    "README.md", "CLAUDE.md", "VERSION", "versions.yaml", "customer-profile.yaml",
+    "requirements.txt", "pyproject.toml", "config.json", "pdm_guard_policy.json",
+    "recipe.json", "machine.json", "align_reference.txt", "settings.json",
+    "basic-checks.yml", ".gitignore", ".gitkeep", ".env", ".ci-ignore",
+    ".ci-imports-allow", ".ci-copy-allow", ".ci-leak-allow",
+    # 全 Repository で同じ複製（copy_sync_check.SHARED の名前）
+    "basic_checks.py", "import_check.py", "test_guard_main.sh", "guard-main.sh",
+    "customer_data_check.py", "issue-form.sh", "issue.md", "branch.md", "pr.md",
+    "docs-sync.md", "customer-request.md",
+})
+
+#: 伏せた名前に残してよい拡張子（小文字）。 **この一覧の外は残さない。**
+#: 「英数字なら何でも」にしていたので、 `eqp.<PLC の番地>` のような名前で、
+#: 値が拡張子の形で出た（#51 のレビュー）。
+SAFE_SUFFIXES = frozenset(TEXT_SUFFIXES | {
+    ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".gif", ".csv", ".log",
+    ".pt", ".pth", ".onnx", ".npy", ".npz", ".pkl", ".zip", ".gz", ".tar",
+    ".pdf", ".xlsx", ".docx", ".pptx", ".lic",
+})
+
+
+def neutral(text: str) -> str:
+    """出す行を無害にする。
+
+    制御文字（改行を含む）・書式の文字・行と段落の区切り・UTF-8 でない名前の
+    文字を `\\uXXXX` にし、 Actions の命令として
+    読まれる並び（行頭の `::`、 行のどこにあっても読まれる `##[`）を崩す。
+    **ファイルの名前は誰でも付けられる**ので、 名前に改行と `::warning::` を
+    入れると、 記録の上で命令として読まれていた。
+    """
+    out = []
+    for ch in text:
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Cs"):
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out).replace("::", ":\\u003a").replace("##[", "#\\u0023[")
+
+
+def _flag(name: str) -> bool:
+    """印が立っているか。 **空・0・false の外は立っているとみなす**（断る側に倒す）。"""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false")
+
+
+def in_ci() -> bool:
+    """CI の中か。 GitHub Actions は `GITHUB_ACTIONS=true`、 多くの CI は `CI=true`。"""
+    return _flag("GITHUB_ACTIONS") or _flag("CI")
+
+
+class FileIds:
+    """記録に出すファイルの識別子。
+
+    伏せるときは、 `GENERIC_PARTS` の外の部分を `<redacted#n>` にする。
+    同じ名前には同じ番号を振るので、 同じ置き場の誤りだと分かる（元には戻せない）。
+    """
+
+    def __init__(self, open_paths: bool) -> None:
+        self.open_paths = open_paths
+        self._seen: dict = {}
+
+    def __call__(self, rel: Path) -> str:
+        if self.open_paths:
+            return neutral(rel.as_posix())
+        parts = []
+        for i, part in enumerate(rel.parts):
+            if part in GENERIC_PARTS:
+                parts.append(part)
+                continue
+            n = self._seen.setdefault(part, len(self._seen) + 1)
+            suffix = Path(part).suffix.lower() if i == len(rel.parts) - 1 else ""
+            if suffix not in SAFE_SUFFIXES:
+                suffix = ""
+            parts.append(f"<redacted#{n}>{suffix}")
+        return "/".join(parts)
+
+
+class LazyId:
+    """誤りの文を作るときにだけ識別子を作る。
+
+    すべてのファイルに番号を振ると、 `<redacted#41>` から、 誤りの無いファイルの
+    数と並びの一部が分かる（#51 のレビュー）。
+    """
+
+    def __init__(self, ids: FileIds, rel: Path) -> None:
+        self.ids, self.rel, self._text = ids, rel, None
+
+    def __format__(self, spec: str) -> str:
+        if self._text is None:
+            self._text = self.ids(self.rel)
+        return format(self._text, spec)
+
 
 def looks_like_text(path: Path, size: int) -> bool:
     """秘密情報の走査にかけてよいか（拡張子なしファイル用）。"""
     if size == 0 or size > MAX_SECRET_SCAN_BYTES:
         return False
     try:
-        head = path.open("rb").read(4096)
+        # **閉じる。** 閉じないと、 警告を出す設定（PYTHONWARNINGS など）で
+        # 「閉じていないファイル」の警告に絶対の道が入って出た（#51 のレビュー）
+        with path.open("rb") as f:
+            head = f.read(4096)
     except OSError:
         return False
     if b"\x00" in head:            # NUL があればバイナリ
@@ -101,8 +231,11 @@ def _git_files(root: Path, *extra: str) -> list[str]:
     for args in (["git", "ls-files", "-z", *extra],
                  ["git", "ls-files", "-z", "--others", "--exclude-standard",
                   *extra]):
-        got = subprocess.run(args, cwd=root, capture_output=True, text=True,
-                             check=True).stdout
+        # **バイトで読む。** `text=True` は名前の復帰を改行に変えるので、 その
+        # ファイルが見つからず、 黙って検査から漏れていた（#51 のレビュー）。
+        # UTF-8 でない名前も、 道として元に戻せる形（surrogateescape）で保つ。
+        got = subprocess.run(args, cwd=root, capture_output=True,
+                             check=True).stdout.decode("utf-8", "surrogateescape")
         for rel in got.split("\0"):
             if rel and rel not in seen:
                 seen.add(rel)
@@ -123,10 +256,108 @@ def tracked_files(root: Path, ignores: list[str]) -> list[Path]:
     return files
 
 
-def main() -> int:
+def _yaml_where(e: Exception) -> tuple:
+    """PyYAML の誤りの位置（行・列）。 **誤りの文と抜き出しは使わない。**"""
+    mark = getattr(e, "problem_mark", None) or getattr(e, "context_mark", None)
+    if mark is None:
+        return "", ""
+    return f":{mark.line + 1}", f"・列 {mark.column + 1}"
+
+
+def check_file(root: Path, rel: Path, rid: LazyId, yaml, counts: dict,
+               errors: list) -> None:
+    """1 ファイルを見る。 誤りの文は種類と位置だけ（入力の中身を入れない）。"""
+    p = root / rel
+    size = p.stat().st_size
+
+    # 4) 大きすぎるファイル
+    if size > MAX_BYTES:
+        errors.append(f"{rid}: {size / 1048576:.1f} MB > {MAX_BYTES // 1048576} MB。"
+                      f"大容量ファイルは Repository の外で管理する")
+
+    # 空ファイル（置き場所用を除く）
+    if size == 0 and p.name not in ALLOW_EMPTY:
+        errors.append(f"{rid}: 0 バイト。意図した空ファイルなら "
+                      f"`.gitkeep` にするか `.ci-ignore` へ追加する")
+        return
+
+    suffix = p.suffix.lower()
+
+    # 1) Python の構文（誤りの文は、 元の行の一部を含むことがあるので出さない）
+    if suffix == ".py":
+        counts["py"] += 1
+        try:
+            with warnings.catch_warnings():
+                # 無効な escape などの警告は、 入力の文字を含んで stderr に出る
+                # （3.12 からは SyntaxWarning で、 既定で表示される）
+                warnings.simplefilter("ignore")
+                ast.parse(p.read_text(encoding="utf-8", errors="replace"),
+                          filename="<checked>")
+        except SyntaxError as e:
+            col = f"・列 {e.offset}" if e.offset else ""
+            errors.append(f"{rid}:{e.lineno or '?'}: 構文エラー（{type(e).__name__}{col}）")
+        except ValueError as e:          # NUL を含む（3.10 は SyntaxError でない）
+            errors.append(f"{rid}: 構文エラー（{type(e).__name__}。NUL などを含む）")
+
+    # 2) JSON（位置だけ。 誤りの文には入力の文字が入ることがある）
+    elif suffix == ".json":
+        counts["json"] += 1
+        try:
+            json.loads(p.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as e:
+            errors.append(f"{rid}:{e.lineno}: JSON として読めない（列 {e.colno}）")
+        except UnicodeDecodeError:
+            errors.append(f"{rid}: JSON として読めない（UTF-8 でない）")
+        except Exception as e:
+            errors.append(f"{rid}: JSON として読めない（{type(e).__name__}）")
+
+    # 3) YAML（**PyYAML の誤りの文は、 該当行の抜き出しを含む**）
+    elif suffix in (".yml", ".yaml"):
+        counts["yaml"] += 1
+        if yaml is not None:
+            try:
+                list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
+            except Exception as e:
+                line, col = _yaml_where(e)
+                errors.append(f"{rid}{line}: YAML として読めない（{type(e).__name__}{col}）")
+
+    # 6) シェルスクリプト（`bash -n` の出力は道と字句を含むので、 行の番号だけ取る）
+    elif suffix == ".sh":
+        counts["sh"] += 1
+        r = subprocess.run(["bash", "-n", str(p)], capture_output=True,
+                           text=True, errors="replace")
+        if r.returncode != 0:
+            m = re.match(re.escape(str(p)) + r": line (\d+): ", r.stderr)
+            errors.append(f"{rid}{':' + m.group(1) if m else ''}: シェルの構文エラー")
+
+    # 5) 秘密情報（テキストのみ。**一致した値は出さない**）
+    scan = (suffix in TEXT_SUFFIXES and size <= MAX_SECRET_SCAN_BYTES) or (
+        suffix == "" and looks_like_text(p, size))
+    if scan:
+        body = p.read_text(encoding="utf-8", errors="replace")
+        for label, pat in SECRET_PATTERNS:
+            m = pat.search(body)
+            if m:
+                line = body[:m.start()].count("\n") + 1
+                errors.append(f"{rid}:{line}: {label} らしき文字列。"
+                              f"誤検出なら `.ci-ignore` へ追加し、"
+                              f"本物なら**必ず無効化・再発行**する")
+                break
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    show_paths = "--show-paths" in args
+    if show_paths and in_ci():
+        print("ERROR: --show-paths は CI では使えません（CI の記録に道が残るため）")
+        return 2
+
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     ignores = load_ignores(root)
     files = tracked_files(root, ignores)
+    # **元の道を出すのは、 手元で --show-paths を付けたときだけ。**
+    open_paths = show_paths
+    rid_of = FileIds(open_paths)
     errors: list[str] = []
     counts = {"py": 0, "json": 0, "yaml": 0, "sh": 0}
 
@@ -136,82 +367,31 @@ def main() -> int:
         yaml = None          # 無ければ YAML の検査だけ省く
 
     for rel in files:
-        p = root / rel
-        size = p.stat().st_size
-
-        # 4) 大きすぎるファイル
-        if size > MAX_BYTES:
-            errors.append(f"{rel}: {size / 1048576:.1f} MB > {MAX_BYTES // 1048576} MB。"
-                          f"大容量ファイルは Repository の外で管理する")
-
-        # 空ファイル（置き場所用を除く）
-        if size == 0 and p.name not in ALLOW_EMPTY:
-            errors.append(f"{rel}: 0 バイト。意図した空ファイルなら "
-                          f"`.gitkeep` にするか `.ci-ignore` へ追加する")
-            continue
-
-        suffix = p.suffix.lower()
-
-        # 1) Python の構文
-        if suffix == ".py":
-            counts["py"] += 1
-            try:
-                ast.parse(p.read_text(encoding="utf-8", errors="replace"), filename=str(rel))
-            except SyntaxError as e:
-                errors.append(f"{rel}:{e.lineno}: 構文エラー: {e.msg}")
-
-        # 2) JSON
-        elif suffix == ".json":
-            counts["json"] += 1
-            try:
-                json.loads(p.read_text(encoding="utf-8-sig"))
-            except Exception as e:
-                errors.append(f"{rel}: JSON として読めない: {e}")
-
-        # 3) YAML
-        elif suffix in (".yml", ".yaml"):
-            counts["yaml"] += 1
-            if yaml is not None:
-                try:
-                    list(yaml.safe_load_all(p.read_text(encoding="utf-8")))
-                except Exception as e:
-                    errors.append(f"{rel}: YAML として読めない: {e}")
-
-        # 6) シェルスクリプト
-        elif suffix == ".sh":
-            counts["sh"] += 1
-            r = subprocess.run(["bash", "-n", str(p)], capture_output=True, text=True)
-            if r.returncode != 0:
-                errors.append(f"{rel}: シェルの構文エラー: {r.stderr.strip().splitlines()[0] if r.stderr.strip() else ''}")
-
-        # 5) 秘密情報（テキストのみ。**一致した値は出さない**）
-        scan = (suffix in TEXT_SUFFIXES and size <= MAX_SECRET_SCAN_BYTES) or (
-            suffix == "" and looks_like_text(p, size))
-        if scan:
-            body = p.read_text(encoding="utf-8", errors="replace")
-            for label, pat in SECRET_PATTERNS:
-                m = pat.search(body)
-                if m:
-                    line = body[:m.start()].count("\n") + 1
-                    errors.append(f"{rel}:{line}: {label} らしき文字列。"
-                                  f"誤検出なら `.ci-ignore` へ追加し、"
-                                  f"本物なら**必ず無効化・再発行**する")
-                    break
+        rid = LazyId(rid_of, rel)
+        try:
+            check_file(root, rel, rid, yaml, counts, errors)
+        except Exception as e:
+            # **例外の文は道や中身を含みうる**ので、 種類だけを出す
+            errors.append(f"{rid}: 検査できない（{type(e).__name__}）")
 
     # 6) VERSION ファイル（あれば）の形式。
     #    **タグと突き合わせる唯一の出どころなので、 形が崩れると
     #    リリースが作れない。** 無い Repository では何もしない。
+    #    中身は出さない（長さだけ）。
     vfile = root / "VERSION"
     if vfile.is_file():
         raw = vfile.read_text(encoding="utf-8", errors="replace")
         v = raw.strip()
         if not VERSION_RE.fullmatch(v):
             errors.append("VERSION: 'x.y.z' の形にしてください"
-                          f"（いまは {v[:40]!r}）")
+                          f"（いまは {len(v)} 文字）")
         elif raw != v + "\n":
             errors.append("VERSION: 版だけを1行で書いてください"
                           "（前後の空白や複数行は不可）")
 
+    if open_paths:
+        print("注意: --show-paths で元の道を出しています（手元専用。"
+              "Issue・Pull Request・CI の記録に貼らない）")
     print(f"検査: {len(files)} ファイル "
           f"(py={counts['py']} json={counts['json']} yaml={counts['yaml']} sh={counts['sh']})")
     if yaml is None:
@@ -220,11 +400,20 @@ def main() -> int:
     if errors:
         print(f"\nNG: {len(errors)} 件")
         for e in errors:
-            print(f"  {e}")
+            print(f"  {neutral(e)}")
+        if not open_paths:
+            print("\n  道は、決まった名前の外を伏せています（<redacted#n>）。"
+                  "手元で --show-paths を付けると表示します（CI では使えません）。")
         return 1
     print("OK: 問題なし")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        # **traceback は道と中身を含みうる。** 種類だけを出し、 合格にはしない。
+        print(f"ERROR: 検査の途中で想定外の例外（{type(e).__name__}）。"
+              "道と中身は出しません")
+        sys.exit(2)

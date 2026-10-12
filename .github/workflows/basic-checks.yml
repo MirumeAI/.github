@@ -69,6 +69,13 @@ jobs:
       - name: 秘密情報の走査と CI_ROOT
         run: python scripts/ci/test_secret_scan.py
 
+      # **機械チェックが、 CI の記録に入力の中身と顧客に固有の道を出さないこと**
+      # （#50）。 顧客 Repository の設定の道や中身には、 案件に固有の名前と
+      # 値が入る。 架空の値で、 壊れた YAML の行・道の中の名前・例外・命令の
+      # 注入を流し、 守りを 1 つずつ壊すと落ちることも確かめる。
+      - name: 機械チェックが記録に値と道を出さないこと
+        run: python scripts/ci/test_basic_checks_log_safety.py
+
       # **複製のずれを見つける側が壊れていないこと。**
       # 見つける側が壊れると、 改善が 1 Repository に閉じ込められる状態に
       # 戻る。 実際に 3 回起きた。

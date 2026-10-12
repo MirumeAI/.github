@@ -102,3 +102,10 @@ jobs:
 
       - name: 混入の検査そのもの
         run: python scripts/ci/test_customer_data.py
+
+      # **顧客の間の混入の検査そのもの。** 顧客 Repository の最初の登録で、
+      # 別の案件の構成のファイルと PLC の表が入り、 名前の検査にも配る道具の
+      # 確かめにも見つからなかった。 それを架空の 2 つの案件で再現し、 検査の
+      # 守りを 1 つずつ壊すと落ちることも確かめる。 PyYAML が要る（上で入れる）。
+      - name: 顧客の間の混入の検査そのもの
+        run: python scripts/ci/test_customer_isolation.py

@@ -332,6 +332,42 @@ def sc_show_paths_ci(checker=CHECKER):
     return run(PATH_NAMES, args=("--show-paths",), env={"CI": "true"}, checker=checker)
 
 
+def sc_show_paths_ci_yes(checker=CHECKER):
+    """CI の印の値が true でない形（yes）。 空・0・false の外は CI とみなす。"""
+    return run(PATH_NAMES, args=("--show-paths",), env={"CI": "yes"}, checker=checker)
+
+
+def sc_unclosed_warning(checker=CHECKER):
+    """拡張子の無いファイル。 警告を出す設定で、 閉じていないファイルの警告に道が出ないこと。"""
+    return run({f"{FACE_DIR}/{SYN['trigger']}": "x: 1\n"},
+               env={"PYTHONWARNINGS": "always"}, ci=True, checker=checker)
+
+
+#: 見本の秘密は **実行時に組み立てる**（このファイル自身が秘密の走査に当たらないように）。
+_AWS = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+def sc_secret_in_named_path(checker=CHECKER):
+    """秘密の走査の誤りの文も、 道を伏せること。"""
+    return run({f"config/{SYN['face']}/{SYN['equipment']}.conf": f"aws = {_AWS}\n"},
+               ci=True, checker=checker)
+
+
+def sc_large_named_file(checker=CHECKER):
+    """大きすぎるファイルの誤りの文も、 道を伏せること（10 MB を超える疎なファイル）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        p = root / "config" / SYN["face"] / f"{SYN['plc']}.bin"
+        p.parent.mkdir(parents=True)
+        with open(p, "wb") as f:
+            f.truncate(BC.MAX_BYTES + 1)
+        subprocess.run(["git", "init", "-q", "."], cwd=root, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        r = subprocess.run([sys.executable, str(checker)], capture_output=True,
+                           env=_env({"GITHUB_ACTIONS": "true"}, root))
+        return r.returncode, _out(r)
+
+
 class ContentIsNotPrintedTest(unittest.TestCase):
     """**誤りの文に、 入力の行とパーサの文脈を出さない。** 種類と位置だけ。"""
 
@@ -368,6 +404,10 @@ class ContentIsNotPrintedTest(unittest.TestCase):
         code, out = sc_python_warning()
         self.assertEqual(code, 0, out)
         self.assertNotIn("invalid escape", out)
+
+    def test_an_unclosed_file_warning_shows_no_path(self) -> None:
+        code, out = sc_unclosed_warning()
+        self.assertTrue(_warn_clean(code, out), (code, leaked(out)))
 
     def test_a_number_in_a_name_is_not_taken_as_the_line(self) -> None:
         code, out = sc_shell_name_number()
@@ -420,11 +460,21 @@ class PathsAreRedactedTest(unittest.TestCase):
         self.assertNotIn("<redacted#3>", out)
 
     def test_show_paths_is_refused_in_ci(self) -> None:
-        for env in ({"GITHUB_ACTIONS": "true"}, {"CI": "1"}, {"CI": "true"}, {"CI": "TRUE"}):
+        for env in ({"GITHUB_ACTIONS": "true"}, {"GITHUB_ACTIONS": "TRUE"},
+                    {"GITHUB_ACTIONS": "1"}, {"CI": "1"}, {"CI": "true"},
+                    {"CI": "TRUE"}, {"CI": " true "}, {"CI": "yes"}):
             with self.subTest(env=env):
                 code, out = run(PATH_NAMES, args=("--show-paths",), env=env)
                 self.assertTrue(safe(code, out, want=2), (code, leaked(out)))
                 self.assertIn("CI では使えません", out)
+
+    def test_secret_and_large_file_messages_are_redacted(self) -> None:
+        for name, sc in (("秘密の走査", sc_secret_in_named_path),
+                         ("大きすぎるファイル", sc_large_named_file)):
+            with self.subTest(kind=name):
+                code, out = sc()
+                self.assertTrue(safe_redacted(code, out), (code, leaked(out)))
+                self.assertIn("<redacted#", out)
 
     def test_show_paths_works_by_hand(self) -> None:
         code, out = run({f"{FACE_DIR}/{SYN['trigger']}.json": "{bad\n"},
@@ -529,6 +579,10 @@ def _lazy(code, out):
             and "config/pdm/<redacted#1>/bbox_acquire/<redacted#2>.json:1:" in out)
 
 
+def _warn_clean(code, out):
+    return safe(code, out, want=0) and "ResourceWarning" not in out
+
+
 def _controls(code, out):
     return safe(code, out) and "NG: 5 件" in out
 
@@ -596,9 +650,23 @@ MUTANTS = [
      "    except Exception as e:\n        # **traceback",
      "    except ZeroDivisionError as e:\n        # **traceback", sc_not_git, _safe2),
     ("GITHUB_ACTIONS を CI と見ない",
-     'os.environ.get("GITHUB_ACTIONS") == "true"', "False", sc_show_paths_github, _safe2),
-    ("CI=true を CI と見ない",
-     'os.environ.get("CI", "").lower() in ("1", "true")', "False", sc_show_paths_ci, _safe2),
+     '_flag("GITHUB_ACTIONS") or ', "", sc_show_paths_github, _safe2),
+    ("CI を CI と見ない",
+     ' or _flag("CI")', "", sc_show_paths_ci, _safe2),
+    ("CI の印を true だけで見る",
+     '.strip().lower() not in ("", "0", "false")', '.strip().lower() == "true"',
+     sc_show_paths_ci_yes, _safe2),
+    ("拡張子の無いファイルを閉じない",
+     '        with path.open("rb") as f:\n            head = f.read(4096)\n',
+     '        head = path.open("rb").read(4096)\n', sc_unclosed_warning, _warn_clean),
+    ("秘密の誤りの文に元の道を出す",
+     'errors.append(f"{rid}:{line}: {label} らしき文字列。"',
+     'errors.append(f"{rel}:{line}: {label} らしき文字列。"', sc_secret_in_named_path,
+     safe_redacted),
+    ("大きすぎるファイルの誤りの文に元の道を出す",
+     'errors.append(f"{rid}: {size / 1048576:.1f} MB > ',
+     'errors.append(f"{rel}: {size / 1048576:.1f} MB > ', sc_large_named_file,
+     safe_redacted),
 ]
 if not IS_ROOT:
     MUTANTS.append(

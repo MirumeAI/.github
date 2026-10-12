@@ -118,7 +118,6 @@ SAFE_SUFFIXES = frozenset(TEXT_SUFFIXES | {
 })
 
 
-
 def neutral(text: str) -> str:
     """出す行を無害にする。
 
@@ -137,10 +136,14 @@ def neutral(text: str) -> str:
     return "".join(out).replace("::", ":\\u003a").replace("##[", "#\\u0023[")
 
 
+def _flag(name: str) -> bool:
+    """印が立っているか。 **空・0・false の外は立っているとみなす**（断る側に倒す）。"""
+    return os.environ.get(name, "").strip().lower() not in ("", "0", "false")
+
+
 def in_ci() -> bool:
     """CI の中か。 GitHub Actions は `GITHUB_ACTIONS=true`、 多くの CI は `CI=true`。"""
-    return (os.environ.get("GITHUB_ACTIONS") == "true"
-            or os.environ.get("CI", "").lower() in ("1", "true"))
+    return _flag("GITHUB_ACTIONS") or _flag("CI")
 
 
 class FileIds:
@@ -191,7 +194,10 @@ def looks_like_text(path: Path, size: int) -> bool:
     if size == 0 or size > MAX_SECRET_SCAN_BYTES:
         return False
     try:
-        head = path.open("rb").read(4096)
+        # **閉じる。** 閉じないと、 警告を出す設定（PYTHONWARNINGS など）で
+        # 「閉じていないファイル」の警告に絶対の道が入って出た（#51 のレビュー）
+        with path.open("rb") as f:
+            head = f.read(4096)
     except OSError:
         return False
     if b"\x00" in head:            # NUL があればバイナリ

@@ -24,7 +24,9 @@ PyYAML の誤りの文（該当行の抜き出しを含む）や `bash -n` の�
     入力の行・パーサの文脈・`VERSION` の中身・例外の文は出さない
   ・道は、 顧客の値を持たない共通の Repository（`OPEN_PATH_REPOS`）の
     ときだけそのまま出す。 それ以外と、 どの Repository か分からない
-    ときは、 決まった名前（`GENERIC_PARTS`）の外を `<redacted#n>` にする
+    ときは、 決まった名前（`GENERIC_PARTS`）の外を `<redacted#n>` にする。
+    拡張子は決まった一覧（`SAFE_SUFFIXES`）のときだけ残し、 番号は誤りを
+    出すファイルにだけ振る
   ・出す行は、 制御文字と Actions の命令として読まれる並び（`::`・`##[`）を
     無害にしてから出す。 想定外の例外でも traceback は出さない（終了コード 2）
 
@@ -41,6 +43,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import warnings
 from pathlib import Path
 
 MAX_BYTES = 10 * 1024 * 1024
@@ -114,24 +117,33 @@ GENERIC_PARTS = frozenset({
     "docs-sync.md", "customer-request.md",
 })
 
-#: 伏せた名前に残してよい拡張子の形。
-_SAFE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,10}")
+#: 伏せた名前に残してよい拡張子（小文字）。 **この一覧の外は残さない。**
+#: 「英数字なら何でも」にしていたので、 `eqp.<PLC の番地>` のような名前で、
+#: 値が拡張子の形で出た（#51 のレビュー）。
+SAFE_SUFFIXES = frozenset(TEXT_SUFFIXES | {
+    ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".gif", ".csv", ".log",
+    ".pt", ".pth", ".onnx", ".npy", ".npz", ".pkl", ".zip", ".gz", ".tar",
+    ".pdf", ".xlsx", ".docx", ".pptx", ".lic",
+})
 
-#: `origin` の URL から Repository を取る（https と ssh の両方）。
-_GITHUB_REPO = re.compile(r"github\.com[:/]+([^/\s]+)/([^/\s]+?)(?:\.git)?/*$")
+#: `origin` の URL から Repository を取る。 **GitHub のホストの位置に固定する。**
+#: どこかに `github.com/` を含むだけの URL（別のホストや手元の写しの道）は、
+#: 分からないものとして伏せる。 actions/checkout は `https://github.com/<owner>/<name>`。
+_GITHUB_REPO = re.compile(r"^(?:https://(?:[^/@\s]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/*$")
 
 
 def neutral(text: str) -> str:
     """出す行を無害にする。
 
-    制御文字（改行を含む）と書式の文字を `\\uXXXX` にし、 Actions の命令として
+    制御文字（改行を含む）・書式の文字・行と段落の区切り・UTF-8 でない名前の
+    文字を `\\uXXXX` にし、 Actions の命令として
     読まれる並び（行頭の `::`、 行のどこにあっても読まれる `##[`）を崩す。
     **ファイルの名前は誰でも付けられる**ので、 名前に改行と `::warning::` を
     入れると、 記録の上で命令として読まれていた。
     """
     out = []
     for ch in text:
-        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp"):
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Cs"):
             out.append(f"\\u{ord(ch):04x}")
         else:
             out.append(ch)
@@ -139,14 +151,21 @@ def neutral(text: str) -> str:
 
 
 def origin_repo(root: Path) -> "str | None":
-    """`owner/name`（小文字）。 分からなければ None。"""
+    """`owner/name`（小文字）。 分からなければ None。
+
+    `origin` の URL は複数書けるので、 1 つでないときも分からないものとする
+    （`--get` は最後の 1 つだけを返す）。
+    """
     try:
-        url = subprocess.run(["git", "config", "--get", "remote.origin.url"],
+        got = subprocess.run(["git", "config", "--get-all", "remote.origin.url"],
                              cwd=root, capture_output=True, text=True,
-                             errors="replace").stdout.strip()
+                             errors="replace").stdout
     except OSError:
         return None
-    m = _GITHUB_REPO.search(url)
+    urls = [u.strip() for u in got.splitlines() if u.strip()]
+    if len(urls) != 1:
+        return None
+    m = _GITHUB_REPO.search(urls[0])
     if not m:
         return None
     return f"{m.group(1)}/{m.group(2)}".lower()
@@ -179,11 +198,27 @@ class FileIds:
                 parts.append(part)
                 continue
             n = self._seen.setdefault(part, len(self._seen) + 1)
-            suffix = Path(part).suffix if i == len(rel.parts) - 1 else ""
-            if not _SAFE_SUFFIX.fullmatch(suffix):
+            suffix = Path(part).suffix.lower() if i == len(rel.parts) - 1 else ""
+            if suffix not in SAFE_SUFFIXES:
                 suffix = ""
             parts.append(f"<redacted#{n}>{suffix}")
         return "/".join(parts)
+
+
+class LazyId:
+    """誤りの文を作るときにだけ識別子を作る。
+
+    すべてのファイルに番号を振ると、 `<redacted#41>` から、 誤りの無いファイルの
+    数と並びの一部が分かる（#51 のレビュー）。
+    """
+
+    def __init__(self, ids: FileIds, rel: Path) -> None:
+        self.ids, self.rel, self._text = ids, rel, None
+
+    def __format__(self, spec: str) -> str:
+        if self._text is None:
+            self._text = self.ids(self.rel)
+        return format(self._text, spec)
 
 
 def looks_like_text(path: Path, size: int) -> bool:
@@ -225,8 +260,11 @@ def _git_files(root: Path, *extra: str) -> list[str]:
     for args in (["git", "ls-files", "-z", *extra],
                  ["git", "ls-files", "-z", "--others", "--exclude-standard",
                   *extra]):
-        got = subprocess.run(args, cwd=root, capture_output=True, text=True,
-                             check=True).stdout
+        # **バイトで読む。** `text=True` は名前の復帰を改行に変えるので、 その
+        # ファイルが見つからず、 黙って検査から漏れていた（#51 のレビュー）。
+        # UTF-8 でない名前も、 道として元に戻せる形（surrogateescape）で保つ。
+        got = subprocess.run(args, cwd=root, capture_output=True,
+                             check=True).stdout.decode("utf-8", "surrogateescape")
         for rel in got.split("\0"):
             if rel and rel not in seen:
                 seen.add(rel)
@@ -255,7 +293,7 @@ def _yaml_where(e: Exception) -> tuple:
     return f":{mark.line + 1}", f"・列 {mark.column + 1}"
 
 
-def check_file(root: Path, rel: Path, rid: str, yaml, counts: dict,
+def check_file(root: Path, rel: Path, rid: LazyId, yaml, counts: dict,
                errors: list) -> None:
     """1 ファイルを見る。 誤りの文は種類と位置だけ（入力の中身を入れない）。"""
     p = root / rel
@@ -278,8 +316,12 @@ def check_file(root: Path, rel: Path, rid: str, yaml, counts: dict,
     if suffix == ".py":
         counts["py"] += 1
         try:
-            ast.parse(p.read_text(encoding="utf-8", errors="replace"),
-                      filename="<checked>")
+            with warnings.catch_warnings():
+                # 無効な escape などの警告は、 入力の文字を含んで stderr に出る
+                # （3.12 からは SyntaxWarning で、 既定で表示される）
+                warnings.simplefilter("ignore")
+                ast.parse(p.read_text(encoding="utf-8", errors="replace"),
+                          filename="<checked>")
         except SyntaxError as e:
             col = f"・列 {e.offset}" if e.offset else ""
             errors.append(f"{rid}:{e.lineno or '?'}: 構文エラー（{type(e).__name__}{col}）")
@@ -314,7 +356,7 @@ def check_file(root: Path, rel: Path, rid: str, yaml, counts: dict,
         r = subprocess.run(["bash", "-n", str(p)], capture_output=True,
                            text=True, errors="replace")
         if r.returncode != 0:
-            m = re.search(r": line (\d+): ", r.stderr)
+            m = re.match(re.escape(str(p)) + r": line (\d+): ", r.stderr)
             errors.append(f"{rid}{':' + m.group(1) if m else ''}: シェルの構文エラー")
 
     # 5) 秘密情報（テキストのみ。**一致した値は出さない**）
@@ -354,7 +396,7 @@ def main(argv: "list[str] | None" = None) -> int:
         yaml = None          # 無ければ YAML の検査だけ省く
 
     for rel in files:
-        rid = rid_of(rel)
+        rid = LazyId(rid_of, rel)
         try:
             check_file(root, rel, rid, yaml, counts, errors)
         except Exception as e:

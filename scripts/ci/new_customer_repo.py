@@ -24,8 +24,10 @@
   5. Dependabot Alerts を有効にする
   6. 最初の中身を **Pull Request** にする（main へ直接入れない）
 
-CI が通ったら人が Squash and merge し、 そのあと `--check` を実行する
-（読み取りだけ。 この Repository について Organization 監査も行う）。
+CI が通り、 作成者と別の人が宣言（`customer-profile.yaml`）が雛形の値の無い
+初期形のままであることを確かめたら、 人が Squash and merge し、 そのあと
+`--check` を実行する（読み取りだけ。 この Repository について Organization
+監査も行う）。
 途中で止まったら、 原因を直して `--apply --resume` で続きから実行する。
 
 最初の中身の `customer-profile.yaml`（顧客の間の混入の検査の宣言）は、
@@ -319,11 +321,15 @@ def _isolation_may_be_on(text: str) -> bool:
     PyYAML に頼らない（Owner の手元に無いことがある）。 注釈の行のほかで
     `isolation` を含む行（大文字と小文字を問わない）は、 `run-isolation-check: false`
     の 1 行の形でなければならない。 true・yes・式・空・流れの形（`{…}`）・引用符の鍵・
-    明示の鍵（`?`）・エスケープした鍵・大文字の鍵などは、 すべて有効とみなす。
+    明示の鍵（`?`）・大文字の鍵などは、 すべて有効とみなす。 注釈の行のほかの行に
+    `\\` があれば、 それも有効とみなす（エスケープや行の継ぎで語を隠して書けるため。
+    雛形の workflow に `\\` は無い）。
     """
     for ln in text.splitlines():
         if ln.lstrip().startswith("#"):
             continue
+        if "\\" in ln:
+            return True
         if "isolation" in ln.casefold() and not _ISOLATION_OFF.fullmatch(ln):
             return True
     return False
@@ -334,7 +340,7 @@ def check_isolation_defaults(tree: dict) -> None:
 
     - 宣言（`customer-profile.yaml`）があり、 状態の行は人の確認待ちの 1 つだけ
       （VERIFIED で作らない。 値は人が案件の資料と照らして確かめてから書く）
-    - 呼び出し側の workflow で、 混入の照合を有効にしていない（false か、 渡さない）
+    - 雛形のどの workflow でも、 混入の照合を有効にしていない（false か、 渡さない）
     """
     if PROFILE not in tree:
         raise SourceError(f"雛形に {PROFILE} がありません（混入の検査を始める手順に入れない）")
@@ -345,9 +351,12 @@ def check_isolation_defaults(tree: dict) -> None:
                           "で始めます（人の確認の前に VERIFIED で作らない）")
     if WORKFLOW not in tree:
         raise SourceError(f"雛形に {WORKFLOW} がありません")
-    if _isolation_may_be_on(tree[WORKFLOW][1].decode("utf-8", "replace")):
-        raise SourceError(f"雛形の {WORKFLOW} は、 混入の照合を有効にして始めません"
-                          "（run-isolation-check は false。 人の確認の後に true にする）")
+    flows = sorted(rel for rel in tree
+                   if rel.startswith(".github/workflows/") and rel.endswith((".yml", ".yaml")))
+    for rel in flows:
+        if _isolation_may_be_on(tree[rel][1].decode("utf-8", "replace")):
+            raise SourceError(f"雛形の {rel} は、 混入の照合を有効にして始めません"
+                              "（run-isolation-check は false。 人の確認の後に true にする）")
 
 
 def build_tree(src: Source, title: str) -> tuple:
@@ -700,8 +709,8 @@ def apply(api: Api, plan: Plan, repo, resume: bool, sleep=time.sleep) -> int:
     print()
     if state["url"]:
         print(f"Pull Request: {state['url']}")
-    print("CI が通ったら Squash and merge し、 次を実行してください"
-          "（読み取りだけ）:")
+    print(f"CI が通り、 作成者と別の人が {PROFILE} が雛形の値の無い初期形のままで"
+          "あることを確かめたら Squash and merge し、 次を実行してください（読み取りだけ）:")
     print(f"    python3 scripts/ci/new_customer_repo.py {name} --check")
     return 0
 

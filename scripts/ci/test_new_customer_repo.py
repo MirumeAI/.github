@@ -576,6 +576,7 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(w[7][2]["parents"], ["b" * 40])
         self.assertIn(f"{NAME}/pull/1", out)
         self.assertIn("--check", out)
+        self.assertIn("作成者と別の人が customer-profile.yaml が雛形の値の無い初期形のまま", out)
 
     def test_it_never_writes_main(self) -> None:
         """**main へ直接入れない。** Branch を作り、 Pull Request にする。"""
@@ -865,7 +866,15 @@ class TheIsolationStartsOffTest(unittest.TestCase):
                 ("エスケープした鍵", '    with:\n      "run\\x2disolation\\x2dcheck": true\n'),
                 ("大文字の鍵", "    with:\n      RUN-ISOLATION-CHECK: true\n"),
                 ("引用符の中の空白と # の後の鍵",
-                 '    with: {note: "x #", run-isolation-check: true}\n')):
+                 '    with: {note: "x #", run-isolation-check: true}\n'),
+                ("isolation の字を \\x でエスケープした鍵",
+                 '    with:\n      "run-\\x69solation-check": true\n'),
+                ("isolation の字を \\u でエスケープした鍵",
+                 '    with:\n      "run-\\u0069solation-check": true\n'),
+                ("行の継ぎで割った明示の鍵",
+                 '    with:\n      ? "run-iso\\\n        lation-check"\n      : true\n'),
+                ("同じ行で false の後に true（行全体で照らす）",
+                 '    with: {\n      run-isolation-check: false, run-isolation-check: true }\n')):
             with self.subTest(key=name):
                 with self.assertRaises(N.SourceError):
                     N.make_plan(NAME, None, N.PROPERTIES,
@@ -883,6 +892,17 @@ class TheIsolationStartsOffTest(unittest.TestCase):
             with self.subTest(note=name):
                 self.assertNotEqual(noted, wf)
                 N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: noted}))
+
+    def test_every_workflow_in_the_template_is_checked(self) -> None:
+        """雛形の workflow は 1 つだけ。 足しても、 照合を有効にした workflow では作らない。"""
+        flows = sorted(p for p in PLAN.tree if p.startswith(".github/workflows/"))
+        self.assertEqual(flows, [self.WORKFLOW])
+        wf = PLAN.tree[self.WORKFLOW][1].decode("utf-8")
+        second = wf.replace("run-isolation-check: false", "run-isolation-check: true")
+        with self.assertRaises(N.SourceError) as cm:
+            N.make_plan(NAME, None, N.PROPERTIES,
+                        _source_with({".github/workflows/second.yml": second}))
+        self.assertIn("second.yml", str(cm.exception))
 
     def test_the_plan_and_the_first_pull_request_say_so(self) -> None:
         code, out = _main([NAME], FakeGh(_fresh()))

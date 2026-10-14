@@ -1,0 +1,38 @@
+# この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 設定（config/・deploy/・
+# versions.yaml）と照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
+# 運用の手順は MirumeAI/development-docs の 03_customer_development/customer_isolation_check.md。
+#
+# 状態: REQUIRES HUMAN VERIFICATION
+#   雛形から作った初期形で、 値はまだ無い。 空のままでは、 検査は照らせずに止まる（合格にしない）。
+#   値は config/ を書くのと同じ Pull Request で書く（README の「顧客の間の混入の検査を始める」）。
+#   今の設定にあることは、 この案件の値である根拠にならない。 人が案件の資料と照らして確かめるまで、
+#   正本とみなさない。 確かめたら、 この状態の行を「状態: VERIFIED（確かめた Pull Request の番号）」に直す。
+#
+# 資格情報（パスワード・トークン・鍵）は書かない。
+schema_version: 1
+
+project:
+  flow:                                 # config.json の flow と同じ（inspection で書く案件は、 flow の代わりに inspection: に軸ごと）
+  profiles: []                          # config.json の _profile に使ってよい名前
+
+capabilities:                           # 使うかどうか。 推測しないので、 true か false を必ず書く
+  plc:
+  nas:
+  ai:
+
+equipment:
+  cameras: []                           # config.json の camera と shot の鍵ごとに {id: …, ip: …, serial: "…"}
+
+endpoints: []                           # カメラと PLC のほかの宛先（ちょうどの値。 網は本当に要るときだけ、 理由をつけて）
+
+plc:
+  endpoints: []                         # plc.address（host:port）
+  addresses: []                         # plc の下の data・start・end
+
+triggers: []                            # shot の triggers と、 PLC の shot_request の項目
+faces: []                               # face_dict の鍵
+
+config_files:
+  extra: []                             # Core が読む決まった名前の外のファイル（path と reason）
+
+extensions: []                          # plugins/ の拡張の名前

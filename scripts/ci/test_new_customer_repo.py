@@ -12,6 +12,13 @@
   ・Claude Code の中からは `--apply` できない（D5）
   ・main へ直接入れない（Branch を作り、 Pull Request にする）
   ・照合の対象のうち、 顧客案件へ写さないものには理由がある
+  ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
+    混入の照合は有効にしない。 初期形のままでは検査が合格にならない
+  ・架空の案件で、 雛形の README の手順どおりに、 宣言の下書き → 報告だけの形 →
+    VERIFIED → 有効化 → CI と同じ検査 まで通る（合成の E2E）
+
+混入の検査を流す試験には PyYAML が要る。 CI（環境変数 CI がある）で無ければ、
+飛ばさずに落とす。
 """
 from __future__ import annotations
 
@@ -36,6 +43,14 @@ sys.path.insert(0, str(HERE))
 import copy_sync_check as C                                # noqa: E402
 import new_customer_repo as N                              # noqa: E402
 import org_audit as A                                      # noqa: E402
+
+try:
+    import yaml
+except ImportError:          # CI では入れる（.github/workflows/basic-checks.yml）
+    yaml = None
+
+#: 顧客の間の混入の検査（宣言と設定を照らす）。
+ISOLATION = HERE / "customer_isolation_check.py"
 
 #: 架空の案件。 **実在の顧客名を使わない**（この Repository は Public）。
 NAME = "customer-example-part"
@@ -89,6 +104,86 @@ def _materialize(tree: dict, dst: Path) -> None:
 _TMP = tempfile.TemporaryDirectory()
 SRC = _worktree_source(Path(_TMP.name))
 PLAN = N.make_plan(NAME, None, N.PROPERTIES, SRC)
+
+
+def _source_with(changes: dict) -> N.Source:
+    """雛形の一部を変えた正本の clone。 `{雛形の中の道: 中身（None は消す）}`。"""
+    dst = Path(tempfile.mkdtemp(dir=_TMP.name)) / "canonical"
+    shutil.copytree(SRC.root, dst, ignore=shutil.ignore_patterns(".git"))
+    for rel, text in changes.items():
+        p = dst / N.TEMPLATE / rel
+        if text is None:
+            p.unlink()
+        else:
+            p.write_text(text, encoding="utf-8")
+    _commit_tree(dst)
+    return N.Source(dst)
+
+
+def _need_yaml(test: unittest.TestCase) -> None:
+    if yaml is None:
+        if os.environ.get("CI"):
+            test.fail("PyYAML がありません（CI では入れる）")
+        test.skipTest("PyYAML がありません")
+
+
+def _isolation(root: Path, *args: str, env: "dict | None" = None) -> tuple:
+    """混入の検査を、 作った Repository に流す。 `(終了コード, 出力)`。"""
+    r = subprocess.run([sys.executable, str(ISOLATION), *args],
+                       env=dict(os.environ, CI_ROOT=str(root), **(env or {})),
+                       cwd=str(root), capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _head(root: Path) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+#: 架空の案件の値（合成の E2E）。 **実行するときに組み立てる。** IP は文書用の網
+#: （RFC 5737）、 ほかは `EXAMPLE`・`example` を含む形（test_customer_isolation.py と同じ決まり）。
+EX_FLOW = "example-flow-" + "new"
+EX_PROFILE = "example-" + "new"
+EX_IP = "192.0.2." + str(30)
+EX_SERIAL = "EXAMPLE-SN-" + "0100"
+EX_TRIGGER = "trig_example_" + "new_top"
+EX_CAMERA = "camera_" + "example"
+EX_VALUES = (EX_FLOW, EX_PROFILE, EX_IP, EX_SERIAL, EX_TRIGGER, EX_CAMERA)
+
+
+def _ex_config() -> dict:
+    """架空の案件の撮像側の設定（PLC なし・カメラ 1 台）。"""
+    return {
+        "_profile": EX_PROFILE,
+        "flow": EX_FLOW,
+        "camera": {EX_CAMERA: {"ip_address": EX_IP, "serial_number": EX_SERIAL}},
+        "shot": {EX_CAMERA: {"triggers": [EX_TRIGGER]}},
+        "face_dict": {EX_TRIGGER: "上面"},
+        "nas": {"enabled": False},
+        "plc": {"enabled": False},
+        "ai": {"enabled": True},
+    }
+
+
+def _fill_profile(text: str) -> str:
+    """雛形の初期形に、 架空の案件の値を書き込む（注釈と状態の行はそのまま）。
+
+    人が雛形を開いて書くのと同じく、 決まった行を書き換える。 1 か所ずつ確かめる。
+    """
+    reps = (
+        (r"^(  flow:)[ \t]*(#.*)?$", rf"\1 {EX_FLOW}  \2"),
+        (r"^  profiles: \[\]", f"  profiles: [{EX_PROFILE}]"),
+        (r"^  plc:[ \t]*$", "  plc: false"),
+        (r"^  nas:[ \t]*$", "  nas: false"),
+        (r"^  ai:[ \t]*$", "  ai: true"),
+        (r"^  cameras: \[\]", f'  cameras: [{{id: {EX_CAMERA}, ip: {EX_IP}, serial: "{EX_SERIAL}"}}]'),
+        (r"^triggers: \[\]", f"triggers: [{EX_TRIGGER}]"),
+        (r"^faces: \[\]", f"faces: [{EX_TRIGGER}]"),
+    )
+    for pat, new in reps:
+        text, n = re.subn(pat, new, text, flags=re.M)
+        assert n == 1, (pat, n)
+    return text
 
 
 def tearDownModule() -> None:
@@ -637,6 +732,16 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("developers=なし", out)
 
+    def test_a_missing_profile_is_found(self) -> None:
+        """宣言が main に無いと、 混入の検査を始める手順に入れない。"""
+        routes = _created()
+        routes[("GET", f"{REPO}/git/trees/main?recursive=1")] = (
+            200, {"tree": [{"path": p, "type": "blob"} for p in PLAN.tree
+                           if p != "customer-profile.yaml"]})
+        code, out, _ = self._check(routes)
+        self.assertEqual(code, 1, out)
+        self.assertIn("customer-profile.yaml", out)
+
     def test_a_changed_classification_is_only_a_note(self) -> None:
         """稼働した後に変えた分類は NG にしない（正しさは監査が見る）。"""
         routes = _created()
@@ -647,6 +752,240 @@ class CheckTest(unittest.TestCase):
         code, out, _ = self._check(routes)
         self.assertEqual(code, 0, out)
         self.assertIn("production_impact=direct", out)
+
+
+class TheIsolationStartsOffTest(unittest.TestCase):
+    """**混入の検査を、 人の確認の前に始めない。**
+
+    作った直後は、 宣言が値の無い初期形（状態は人の確認待ち）で、 混入の照合は
+    無効。 期待値は script の定数から取らない（取ると、 定数を書き換えても通る）。
+    """
+
+    PROFILE = "customer-profile.yaml"
+    WORKFLOW = ".github/workflows/basic-checks.yml"
+
+    def _profile_text(self, tree: dict = None) -> str:
+        return (tree or PLAN.tree)[self.PROFILE][1].decode("utf-8")
+
+    def test_the_profile_starts_unverified(self) -> None:
+        status = [ln.strip() for ln in self._profile_text().splitlines()
+                  if re.match(r"\s*#\s*状態\s*[:：]", ln)]
+        self.assertEqual(status, ["# 状態: REQUIRES HUMAN VERIFICATION"])
+        self.assertEqual(self._profile_text().count("REQUIRES HUMAN VERIFICATION"), 1,
+                         "印の語を状態の行の外に書くと、 印が残っているかを見誤る")
+
+    def test_the_profile_has_no_values(self) -> None:
+        """**値を推測して書かない。** 識別子（IP・製造番号・番地・トリガ・面・宛先）は空。"""
+        _need_yaml(self)
+        p = yaml.safe_load(self._profile_text())
+        self.assertEqual(p["schema_version"], 1)
+        self.assertIsNone(p["project"]["flow"])
+        self.assertNotIn("inspection", p["project"])
+        self.assertEqual(p["project"]["profiles"], [])
+        self.assertEqual(p["capabilities"], {"plc": None, "nas": None, "ai": None})
+        self.assertEqual(p["equipment"], {"cameras": []})
+        self.assertEqual(p["plc"], {"endpoints": [], "addresses": []})
+        for key in ("endpoints", "triggers", "faces", "extensions"):
+            with self.subTest(key=key):
+                self.assertEqual(p[key], [])
+        self.assertEqual(p["config_files"], {"extra": []})
+
+    def test_the_empty_profile_never_passes(self) -> None:
+        """**初期形のままでは合格にならない**（報告だけの形でも、 照らせずに 2）。"""
+        _need_yaml(self)
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td) / "target"
+            _materialize(PLAN.tree, tgt)
+            for args in (("--report-only",), ()):
+                with self.subTest(args=args):
+                    code, out = _isolation(tgt, *args)
+                    self.assertEqual(code, 2, out)
+                    self.assertIn("結果: ERROR", out)
+            # 設定を書いても、 宣言が初期形のままなら合格にならない
+            cfg = tgt / "config/image-acquisition/config.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text(json.dumps(_ex_config(), ensure_ascii=False), encoding="utf-8")
+            code, out = _isolation(tgt)
+            self.assertEqual(code, 2, out)
+            self.assertIn("ERROR [profile-schema]", out)
+            for v in EX_VALUES:
+                self.assertNotIn(v, out)
+
+    def test_the_check_is_off_in_the_workflow(self) -> None:
+        """呼び出し側の workflow は、 混入の照合を false で始める。 ほかは変えない。"""
+        _need_yaml(self)
+        wf = yaml.safe_load(PLAN.tree[self.WORKFLOW][1].decode("utf-8"))
+        self.assertEqual(wf["jobs"]["checks"]["with"], {"run-isolation-check": False})
+        self.assertEqual(wf["jobs"]["checks"]["uses"],
+                         "MirumeAI/.github/.github/workflows/basic-checks-reusable.yml@main")
+        self.assertEqual(wf["permissions"], {"contents": "read"})
+        self.assertEqual(sorted(wf[True]), ["pull_request", "workflow_dispatch"])
+
+    def test_a_template_that_starts_verified_is_refused(self) -> None:
+        """**人の確認の前に VERIFIED で作らない。** 雛形がそうなっていたら作らずに止める。"""
+        text = self._profile_text()
+        for name, bad in (
+                ("VERIFIED に直した", text.replace(
+                    "# 状態: REQUIRES HUMAN VERIFICATION", "# 状態: VERIFIED（#1）")),
+                ("状態の行が 2 つ", text.replace(
+                    "# 状態: REQUIRES HUMAN VERIFICATION",
+                    "# 状態: REQUIRES HUMAN VERIFICATION\n# 状態: VERIFIED（#1）")),
+                ("状態の行が無い", text.replace(
+                    "# 状態: REQUIRES HUMAN VERIFICATION\n", "")),
+                ("宣言が無い", None)):
+            with self.subTest(name=name):
+                src = _source_with({self.PROFILE: bad})
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, src)
+                self.assertIn(self.PROFILE, str(cm.exception))
+
+    def test_a_template_that_turns_the_check_on_is_refused(self) -> None:
+        """**混入の照合を有効にして作らない。** false のほかの書き方はすべて断る。"""
+        wf = PLAN.tree[self.WORKFLOW][1].decode("utf-8")
+        self.assertEqual(wf.count("run-isolation-check: false"), 1)
+        for value in ("true", "True", "yes", "on", '"true"', "${{ true }}", ""):
+            with self.subTest(value=value):
+                src = _source_with({self.WORKFLOW: wf.replace(
+                    "run-isolation-check: false", f"run-isolation-check: {value}")})
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, src)
+                self.assertIn("run-isolation-check", str(cm.exception))
+        flow = wf.replace("    with:\n      run-isolation-check: false\n",
+                          "    with: {run-isolation-check: true}\n")
+        self.assertNotEqual(flow, wf)
+        with self.assertRaises(N.SourceError):
+            N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: flow}))
+        # 注釈の中の true は、 入力ではない（false のまま作れる）。 行の頭の注釈と、
+        # 字下げした注釈の両方
+        for name, noted in (
+                ("行の頭", "# run-isolation-check: true にするのは人の確認の後\n" + wf),
+                ("字下げ", wf.replace("    with:\n",
+                                      "    # run-isolation-check: true は人の確認の後\n"
+                                      "    with:\n"))):
+            with self.subTest(note=name):
+                self.assertNotEqual(noted, wf)
+                N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: noted}))
+
+    def test_the_plan_and_the_first_pull_request_say_so(self) -> None:
+        code, out = _main([NAME], FakeGh(_fresh()))
+        self.assertEqual(code, 0, out)
+        self.assertIn("customer-profile.yaml は値の無い初期形", out)
+        self.assertIn("run-isolation-check は false", out)
+        body = N.pr_body(PLAN)
+        self.assertIn("`customer-profile.yaml`", body)
+        self.assertIn("値の無い初期形", body)
+        self.assertIn("人の確認待ち", body)
+        self.assertIn("`run-isolation-check: false`", body)
+        self.assertIn("顧客の間の混入の検査を始める",
+                      PLAN.tree["README.md"][1].decode("utf-8"))
+
+
+class TheIsolationPathTest(unittest.TestCase):
+    """**作った Repository が、 混入の検査を始める手順をそのまま通れること**（合成の E2E）。
+
+    架空の案件で、 雛形の README の手順どおりに進める: 作る → 設定と宣言の下書き →
+    報告だけの形 → 人の確認（を模した状態の行の書き換え）→ VERIFIED → 有効化 →
+    CI と同じ検査。 **値は出力に出ない**ことも見る。 人の確認そのものは試験では
+    代われない（ここで行うのは、 確かめた後に人が直す行の書き換えだけ）。
+    """
+
+    def test_from_the_first_content_to_the_check_turned_on(self) -> None:
+        _need_yaml(self)
+        outs = []
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td) / "target"
+            _materialize(PLAN.tree, tgt)                   # 作って、 最初の中身を merge した形
+            base = _head(tgt)
+            prof = tgt / "customer-profile.yaml"
+            wf_path = tgt / ".github/workflows/basic-checks.yml"
+
+            # 1・2. 設定と、 同じ変更で宣言の下書き（状態は確認待ちのまま）
+            cfg = tgt / "config/image-acquisition/config.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text(json.dumps(_ex_config(), ensure_ascii=False, indent=2) + "\n",
+                           encoding="utf-8")
+            prof.write_text(_fill_profile(prof.read_text(encoding="utf-8")),
+                            encoding="utf-8")
+            draft = yaml.safe_load(prof.read_text(encoding="utf-8"))
+            self.assertEqual(draft["equipment"]["cameras"],
+                             [{"id": EX_CAMERA, "ip": EX_IP, "serial": EX_SERIAL}])
+            self.assertIn("# 状態: REQUIRES HUMAN VERIFICATION",
+                          prof.read_text(encoding="utf-8"))
+            _git(tgt, "add", "-A")
+            _git(tgt, "commit", "-q", "-m", "draft")
+
+            # 3. 報告だけの形。 基準（初期形）は読めないので、 増減は比べない（README のとおり）
+            code, out = _isolation(tgt, "--report-only", "--base-ref", base)
+            outs.append(out)
+            self.assertEqual(code, 0, out)
+            self.assertIn("結果: PASS", out)
+            self.assertNotIn("NG [", out)
+            self.assertIn("比べていません", out)
+
+            # 4・5. 人が確かめた後に、 状態の行だけを VERIFIED に直す（値は変えない）
+            text = prof.read_text(encoding="utf-8")
+            verified = text.replace("# 状態: REQUIRES HUMAN VERIFICATION",
+                                    "# 状態: VERIFIED（#2）")
+            self.assertNotEqual(verified, text)
+            self.assertEqual(yaml.safe_load(verified), draft, "値が変わった")
+            prof.write_text(verified, encoding="utf-8")
+
+            # 6. 有効にする（false → true の 1 か所だけ。 ほかは変えない）
+            wf = wf_path.read_text(encoding="utf-8")
+            on = wf.replace("run-isolation-check: false", "run-isolation-check: true")
+            self.assertEqual(wf.count("run-isolation-check: false"), 1)
+            before, after = yaml.safe_load(wf), yaml.safe_load(on)
+            self.assertEqual(after["jobs"]["checks"]["with"], {"run-isolation-check": True})
+            after["jobs"]["checks"]["with"] = before["jobs"]["checks"]["with"]
+            self.assertEqual(after, before, "入力のほかも変わった")
+            wf_path.write_text(on, encoding="utf-8")
+            _git(tgt, "add", "-A")
+            _git(tgt, "commit", "-q", "-m", "verified and on")
+
+            # 7. CI と同じ検査。 再利用 workflow の段をすべてと、 有効にしたときだけ動く照合の段
+            reusable = (ROOT / ".github/workflows/basic-checks-reusable.yml"
+                        ).read_text(encoding="utf-8")
+            steps = re.findall(r"^\s+run: (python|bash) validators/(scripts/ci/\S+)\s*$",
+                               reusable, re.M)
+            self.assertGreaterEqual(len(steps), 5, steps)
+            env = dict(os.environ, CI_ROOT=str(tgt), CANONICAL_ROOT=str(ROOT))
+            for prog, script in steps:
+                with self.subTest(script=script):
+                    r = subprocess.run(
+                        [sys.executable if prog == "python" else "bash", str(ROOT / script)],
+                        env=env, cwd=str(tgt), capture_output=True, text=True)
+                    outs.append(r.stdout + r.stderr)
+                    self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-1200:])
+            self.assertIn("if: ${{ inputs.run-isolation-check }}", reusable)
+            self.assertIn('customer_isolation_check.py --base-ref "$BASE_SHA"', reusable)
+            code, out = _isolation(tgt, "--base-ref", base)
+            outs.append(out)
+            self.assertEqual(code, 0, out)
+            self.assertIn("結果: PASS", out)
+            # 有効にした後の変更（宣言を変えない）は、 基準と比べて「変化なし」
+            code, out = _isolation(tgt, "--base-ref", _head(tgt))
+            outs.append(out)
+            self.assertEqual(code, 0, out)
+            self.assertIn("変化なし", out)
+        for out in outs:
+            for v in EX_VALUES:
+                self.assertNotIn(v, out, "値が出力に出た")
+
+    def test_turning_it_on_too_early_does_not_pass(self) -> None:
+        """**人の確認の前に有効にしても、 初期形のままでは CI が通らない**（赤くなる）。"""
+        _need_yaml(self)
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td) / "target"
+            _materialize(PLAN.tree, tgt)
+            base = _head(tgt)
+            wf_path = tgt / ".github/workflows/basic-checks.yml"
+            wf_path.write_text(wf_path.read_text(encoding="utf-8").replace(
+                "run-isolation-check: false", "run-isolation-check: true"), encoding="utf-8")
+            _git(tgt, "add", "-A")
+            _git(tgt, "commit", "-q", "-m", "on too early")
+            code, out = _isolation(tgt, "--base-ref", base)
+            self.assertEqual(code, 2, out)
+            self.assertIn("結果: ERROR", out)
 
 
 class ItIsWiredIntoCITest(unittest.TestCase):

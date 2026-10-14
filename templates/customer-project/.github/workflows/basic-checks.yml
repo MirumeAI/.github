@@ -14,3 +14,8 @@ permissions:
 jobs:
   checks:
     uses: MirumeAI/.github/.github/workflows/basic-checks-reusable.yml@main
+    # 別の案件の値の混入を、 根の customer-profile.yaml（この案件の宣言）と照らすか。
+    # **人が宣言の値を確かめ、 状態を VERIFIED にするまで true にしない**
+    # （README の「顧客の間の混入の検査を始める」）。
+    with:
+      run-isolation-check: false

@@ -773,6 +773,8 @@ class TheIsolationStartsOffTest(unittest.TestCase):
         self.assertEqual(status, ["# 状態: REQUIRES HUMAN VERIFICATION"])
         self.assertEqual(self._profile_text().count("REQUIRES HUMAN VERIFICATION"), 1,
                          "印の語を状態の行の外に書くと、 印が残っているかを見誤る")
+        self.assertNotIn("状態: VERIFIED", self._profile_text(),
+                         "文字で探すと、 確認待ちの初期形でも確かめ済みに見える")
 
     def test_the_profile_has_no_values(self) -> None:
         """**値を推測して書かない。** 識別子（IP・製造番号・番地・トリガ・面・宛先）は空。"""
@@ -855,6 +857,22 @@ class TheIsolationStartsOffTest(unittest.TestCase):
         self.assertNotEqual(flow, wf)
         with self.assertRaises(N.SourceError):
             N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: flow}))
+        # 鍵の書き方を変えても、 決まった false の 1 行のほかは断る
+        off = "    with:\n      run-isolation-check: false\n"
+        self.assertEqual(wf.count(off), 1)
+        for name, new in (
+                ("明示の鍵", "    with:\n      ? run-isolation-check\n      : true\n"),
+                ("エスケープした鍵", '    with:\n      "run\\x2disolation\\x2dcheck": true\n'),
+                ("大文字の鍵", "    with:\n      RUN-ISOLATION-CHECK: true\n"),
+                ("引用符の中の空白と # の後の鍵",
+                 '    with: {note: "x #", run-isolation-check: true}\n')):
+            with self.subTest(key=name):
+                with self.assertRaises(N.SourceError):
+                    N.make_plan(NAME, None, N.PROPERTIES,
+                                _source_with({self.WORKFLOW: wf.replace(off, new)}))
+        # 決まった false の行の後ろの注釈は、 そのまま作れる
+        N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(
+            off, "    with:\n      run-isolation-check: false  # 人の確認の後に true にする\n")}))
         # 注釈の中の true は、 入力ではない（false のまま作れる）。 行の頭の注釈と、
         # 字下げした注釈の両方
         for name, noted in (
@@ -873,9 +891,9 @@ class TheIsolationStartsOffTest(unittest.TestCase):
         self.assertIn("run-isolation-check は false", out)
         body = N.pr_body(PLAN)
         self.assertIn("`customer-profile.yaml`", body)
-        self.assertIn("値の無い初期形", body)
-        self.assertIn("人の確認待ち", body)
+        self.assertIn("（顧客の間の混入の検査の宣言）は値の無い初期形で、状態は人の確認待ち", body)
         self.assertIn("`run-isolation-check: false`", body)
+        self.assertIn("雛形の値の無い初期形のままである（作成者と別の人が確かめる", body)
         self.assertIn("顧客の間の混入の検査を始める",
                       PLAN.tree["README.md"][1].decode("utf-8"))
 

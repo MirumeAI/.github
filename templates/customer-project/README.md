@@ -53,14 +53,14 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 1. `config/` に案件の設定を書く（`config/image-acquisition/config.json` が無いと、検査は照らせない）
 2. 同じ Pull Request で `customer-profile.yaml` の下書きを書く。書き方は `MirumeAI/.github` の README「顧客の間の混入の検査」。状態の行は確認待ちのまま。今の設定にあることは、この案件の値である根拠にならない。値を Issue・Pull Request の本文・CI の記録に書かない
-3. 報告だけの形で流す（PyYAML が要る）。終了コードではなく、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して黙らせない
+3. 報告だけの形で流す（PyYAML が要る。`MirumeAI/.github` の clone は main の最新にしてから流す）。終了コードではなく、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して黙らせない。`参考` の行の数（値なし）はこの Repository の Issue に記録し、`注意` の行は人が読む
 
    ```bash
    python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only
    ```
 
 4. 人が宣言の値を案件の資料と 1 つずつ照らして確かめ、自分で Pull Request に記録する（記録の形は上の正本の「人の確認」。Agent は確かめた扱いにしない）
-5. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す（値は変えない）
+5. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す（値は変えない。YAML として読んだ値が確かめた版と同じことを Pull Request に書く）
 6. `--report-only` を付けずに流して `結果: PASS` になったら、`run-isolation-check` を `true` にする
 7. Pull Request の CI で、混入の照合の段が動いて `結果: PASS` になることを確かめ、Merge の門に従って merge する
 

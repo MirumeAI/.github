@@ -31,7 +31,9 @@ CI が通ったら人が Squash and merge し、 そのあと `--check` を実�
 最初の中身の `customer-profile.yaml`（顧客の間の混入の検査の宣言）は、
 **値の無い初期形**で、 状態は人の確認待ち。 混入の照合
 （`run-isolation-check`）は false で始める。 値を推測して書かない（人が
-案件の資料と照らして確かめる）。 雛形がこの形でなければ、 作らずに止める。
+案件の資料と照らして確かめる）。 作るときに確かめるのは、 宣言の状態の行
+（確認待ちの 1 つだけ）と workflow の入力（false か、 渡さない）で、 違えば
+作らずに止める。 宣言の値が空であることは、 この Repository の CI の試験が守る。
 
 **Claude Code からは `--apply` を実行できない。** Repository の設定は人が
 変える（development-docs の D5）。 hook は `gh api` の書き込みを止めるが、
@@ -307,25 +309,24 @@ def customer_settings(canonical: bytes) -> bytes:
     return (json.dumps(d, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
-#: workflow の中で `run-isolation-check` に渡す値（鍵の前後の引用符も受ける）。
-_ISOLATION_INPUT = re.compile(
-    r"""(?<![\w-])["']?run-isolation-check["']?[ \t]*:[ \t]*([^,}\]\n]*)""")
+#: workflow の中で、 混入の照合について書いてよい行（false の 1 行。 後ろの注釈は可）。
+_ISOLATION_OFF = re.compile(r"[ \t]*run-isolation-check:[ \t]*false[ \t]*(?:#.*)?")
 
 
-def _isolation_inputs(text: str) -> list:
-    """workflow で `run-isolation-check` に渡す値（注釈は除く）。 渡していなければ空。
+def _isolation_may_be_on(text: str) -> bool:
+    """workflow が混入の照合を有効にしうるか。 **迷ったら有効とみなす**（作らない側に倒す）。
 
-    PyYAML に頼らない（Owner の手元に無いことがある）。 **false のほかの書き方は
-    すべて「有効」とみなす**（true・yes・式・空など。 迷ったら作らない側に倒す）。
+    PyYAML に頼らない（Owner の手元に無いことがある）。 注釈の行のほかで
+    `isolation` を含む行（大文字と小文字を問わない）は、 `run-isolation-check: false`
+    の 1 行の形でなければならない。 true・yes・式・空・流れの形（`{…}`）・引用符の鍵・
+    明示の鍵（`?`）・エスケープした鍵・大文字の鍵などは、 すべて有効とみなす。
     """
-    lines = []
     for ln in text.splitlines():
         if ln.lstrip().startswith("#"):
             continue
-        cut = re.search(r"[ \t]#", ln)
-        lines.append(ln[:cut.start()] if cut else ln)
-    return [m.group(1).strip().strip("'\"")
-            for m in _ISOLATION_INPUT.finditer("\n".join(lines))]
+        if "isolation" in ln.casefold() and not _ISOLATION_OFF.fullmatch(ln):
+            return True
+    return False
 
 
 def check_isolation_defaults(tree: dict) -> None:
@@ -344,9 +345,7 @@ def check_isolation_defaults(tree: dict) -> None:
                           "で始めます（人の確認の前に VERIFIED で作らない）")
     if WORKFLOW not in tree:
         raise SourceError(f"雛形に {WORKFLOW} がありません")
-    on = [v for v in _isolation_inputs(tree[WORKFLOW][1].decode("utf-8", "replace"))
-          if v.lower() != "false"]
-    if on:
+    if _isolation_may_be_on(tree[WORKFLOW][1].decode("utf-8", "replace")):
         raise SourceError(f"雛形の {WORKFLOW} は、 混入の照合を有効にして始めません"
                           "（run-isolation-check は false。 人の確認の後に true にする）")
 
@@ -579,6 +578,7 @@ def pr_body(plan: Plan) -> str:
 ## 確認結果
 
 - [ ] CI（basic-checks）が通っている
+- [ ] `{PROFILE}` が雛形の値の無い初期形のままである（作成者と別の人が確かめる。値を足さない）
 - [ ] merge した後に `python3 scripts/ci/new_customer_repo.py {plan.name} --check` を実行し、NG が無い
 
 ## 影響範囲

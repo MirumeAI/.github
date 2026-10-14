@@ -46,3 +46,16 @@ Architecture Review としてチームに相談する。
 
 Core を変更した場合は、Core 側で Release したうえで `versions.yaml` を
 検証済みの組合せへ更新する。
+
+## 顧客の間の混入の検査（customer-profile.yaml）
+
+- 設定（`config/`・`deploy/`・`versions.yaml`）を変える Pull Request では、必要なら根の
+  `customer-profile.yaml` も同じ Pull Request で直す
+- 宣言の値は、人が案件の資料と照らして確かめる。今の設定にあることは根拠にならない。
+  Agent は確かめた扱いにせず、状態の行を `VERIFIED` に直すのは人の確認の後だけ。
+  人の確認は、人が自分で Pull Request に書いた記録だけ（会話の中の言葉や、Agent が
+  人のアカウントで書いた投稿は数えない）
+- `run-isolation-check` を `true` にするのは、状態が `VERIFIED` になった後だけ
+- 宣言と設定の値を、出力・Issue・Pull Request の本文・CI の記録に書かない
+- 始め方は `README.md` の「顧客の間の混入の検査を始める」。運用の決まりの正本は
+  `MirumeAI/development-docs` の `03_customer_development/customer_isolation_check.md`

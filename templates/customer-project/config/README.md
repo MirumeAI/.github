@@ -13,3 +13,5 @@ config/pdm/                 学習・評価側
 - Credential、ライセンスファイル、パスワード
 
 **検査の性質（`inspection` または `flow`）と `plc.enabled` / `ai.enabled` は必ず書きます。** 書き忘れで決まってよいことではないため、据え付け時に止まります。
+
+設定を変えたら、根の `customer-profile.yaml`（顧客の間の混入の検査の宣言）も同じ Pull Request で直します。始め方は根の `README.md` の「顧客の間の混入の検査を始める」にあります。

@@ -38,6 +38,8 @@ MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Re
 
 有効にするのは、宣言を置いた顧客 Repository だけです（既定は `false`。指定しない Repository は何も変わりません）。
 
+新しい顧客 Repository は、作る道具（`scripts/ci/new_customer_repo.py`）が雛形から、宣言の**値の無い初期形**（状態は人の確認待ち）と `run-isolation-check: false` を入れて始まります。初期形のままでは検査が照らせずに止まり（終了コード 2）、合格になりません。始め方（設定 → 宣言の下書き → 報告だけの形 → 人の確認 → VERIFIED → 有効化）は雛形の README（`templates/customer-project/README.md`）にあります。
+
 ```yaml
 jobs:
   checks:

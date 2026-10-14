@@ -24,9 +24,18 @@
   5. Dependabot Alerts を有効にする
   6. 最初の中身を **Pull Request** にする（main へ直接入れない）
 
-CI が通ったら人が Squash and merge し、 そのあと `--check` を実行する
-（読み取りだけ。 この Repository について Organization 監査も行う）。
+CI が通り、 作成者と別の人が宣言（`customer-profile.yaml`）が雛形の値の無い
+初期形のままであることを確かめたら、 人が Squash and merge し、 そのあと
+`--check` を実行する（読み取りだけ。 この Repository について Organization
+監査も行う）。
 途中で止まったら、 原因を直して `--apply --resume` で続きから実行する。
+
+最初の中身の `customer-profile.yaml`（顧客の間の混入の検査の宣言）は、
+**値の無い初期形**で、 状態は人の確認待ち。 混入の照合
+（`run-isolation-check`）は false で始める。 値を推測して書かない（人が
+案件の資料と照らして確かめる）。 作るときに確かめるのは、 宣言の状態の行
+（確認待ちの 1 つだけ）と workflow の入力（false か、 渡さない）で、 違えば
+作らずに止める。 宣言の値が空であることは、 この Repository の CI の試験が守る。
 
 **Claude Code からは `--apply` を実行できない。** Repository の設定は人が
 変える（development-docs の D5）。 hook は `gh api` の書き込みを止めるが、
@@ -100,10 +109,16 @@ NOT_FOR_CUSTOMER = {
 SETTINGS = ".claude/settings.json"
 SETTINGS_EXTRA_DENY = ("Read(**/*.lic)", "Edit(**/*.lic)")
 
+#: 呼び出し側の workflow と、 顧客の間の混入の検査の宣言（どちらも雛形にある）。
+WORKFLOW = ".github/workflows/basic-checks.yml"
+PROFILE = "customer-profile.yaml"
+#: 宣言の初期形の状態の行。 **人の確認の前に VERIFIED で作らない。**
+UNVERIFIED = "# 状態: REQUIRES HUMAN VERIFICATION"
+
 #: main に無ければならないもの（`--check` が確かめる）。 hook・設定・CI が
-#: 無いと、 main を守る壁が無いまま始まる。
-MUST_HAVE = ("CLAUDE.md", SETTINGS, ".github/workflows/basic-checks.yml",
-             *FROM_CANONICAL)
+#: 無いと、 main を守る壁が無いまま始まる。 宣言が無いと、 混入の検査を
+#: 始める手順に入れない。
+MUST_HAVE = ("CLAUDE.md", SETTINGS, WORKFLOW, PROFILE, *FROM_CANONICAL)
 
 #: Team と権限（As-Is Inventory の D12）。 既存の顧客案件と同じ。
 TEAMS = (("developers", "push"), ("maintainers", "admin"))
@@ -296,6 +311,54 @@ def customer_settings(canonical: bytes) -> bytes:
     return (json.dumps(d, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
+#: workflow の中で、 混入の照合について書いてよい行（false の 1 行。 後ろの注釈は可）。
+_ISOLATION_OFF = re.compile(r"[ \t]*run-isolation-check:[ \t]*false[ \t]*(?:#.*)?")
+
+
+def _isolation_may_be_on(text: str) -> bool:
+    """workflow が混入の照合を有効にしうるか。 **迷ったら有効とみなす**（作らない側に倒す）。
+
+    PyYAML に頼らない（Owner の手元に無いことがある）。 注釈の行のほかで
+    `isolation` を含む行（大文字と小文字を問わない）は、 `run-isolation-check: false`
+    の 1 行の形でなければならない。 true・yes・式・空・流れの形（`{…}`）・引用符の鍵・
+    明示の鍵（`?`）・大文字の鍵などは、 すべて有効とみなす。 注釈の行のほかの行に
+    `\\` があれば、 それも有効とみなす（エスケープや行の継ぎで語を隠して書けるため。
+    雛形の workflow に `\\` は無い）。
+    """
+    for ln in text.splitlines():
+        if ln.lstrip().startswith("#"):
+            continue
+        if "\\" in ln:
+            return True
+        if "isolation" in ln.casefold() and not _ISOLATION_OFF.fullmatch(ln):
+            return True
+    return False
+
+
+def check_isolation_defaults(tree: dict) -> None:
+    """**混入の検査を、 人の確認の前に始めない。** 雛形がこの形でなければ止める。
+
+    - 宣言（`customer-profile.yaml`）があり、 状態の行は人の確認待ちの 1 つだけ
+      （VERIFIED で作らない。 値は人が案件の資料と照らして確かめてから書く）
+    - 雛形のどの workflow でも、 混入の照合を有効にしていない（false か、 渡さない）
+    """
+    if PROFILE not in tree:
+        raise SourceError(f"雛形に {PROFILE} がありません（混入の検査を始める手順に入れない）")
+    status = [ln.strip() for ln in tree[PROFILE][1].decode("utf-8", "replace").splitlines()
+              if re.match(r"[ \t]*#[ \t]*状態[ \t]*[:：]", ln)]
+    if status != [UNVERIFIED]:
+        raise SourceError(f"雛形の {PROFILE} は、 状態の行が「{UNVERIFIED[2:]}」の 1 つだけ"
+                          "で始めます（人の確認の前に VERIFIED で作らない）")
+    if WORKFLOW not in tree:
+        raise SourceError(f"雛形に {WORKFLOW} がありません")
+    flows = sorted(rel for rel in tree
+                   if rel.startswith(".github/workflows/") and rel.endswith((".yml", ".yaml")))
+    for rel in flows:
+        if _isolation_may_be_on(tree[rel][1].decode("utf-8", "replace")):
+            raise SourceError(f"雛形の {rel} は、 混入の照合を有効にして始めません"
+                              "（run-isolation-check は false。 人の確認の後に true にする）")
+
+
 def build_tree(src: Source, title: str) -> tuple:
     """最初の中身。 `({パス: (mode, 中身)}, {パス: 出どころ})`。"""
     tree, origin = {}, {}
@@ -317,6 +380,7 @@ def build_tree(src: Source, title: str) -> tuple:
     for rel in ("README.md", "CLAUDE.md"):
         if rel not in tree:
             raise SourceError(f"雛形に {rel} がありません")
+    check_isolation_defaults(tree)
     for rel, (_, data) in tree.items():
         try:
             data.decode("utf-8")
@@ -447,6 +511,9 @@ def show_plan(plan: Plan) -> None:
         print(f"  {kind}  {len(paths)} 件（{note}）")
         for p in paths:
             print(f"        {p}")
+    print()
+    print(f"顧客の間の混入の検査: {PROFILE} は値の無い初期形（状態は人の確認待ち）で、"
+          " run-isolation-check は false で始める（始め方は雛形の README）")
 
 
 # --------------------------------------------------------------------------
@@ -515,10 +582,12 @@ def pr_body(plan: Plan) -> str:
 - 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の名前は「{plan.title}」
 - Claude Code 一式と、手元で実行する検査 {plan.count("正本")} ファイル。正本から写した（照合の対象なので、ずれると CI が止まる）
 - `{SETTINGS}`。正本に `*.lic` の拒否を足して作った
+- `{PROFILE}`（顧客の間の混入の検査の宣言）は値の無い初期形で、状態は人の確認待ち。混入の照合はまだ動かない（`run-isolation-check: false`）。始め方は `README.md` の「顧客の間の混入の検査を始める」
 
 ## 確認結果
 
 - [ ] CI（basic-checks）が通っている
+- [ ] `{PROFILE}` が雛形の値の無い初期形のままである（作成者と別の人が確かめる。値を足さない）
 - [ ] merge した後に `python3 scripts/ci/new_customer_repo.py {plan.name} --check` を実行し、NG が無い
 
 ## 影響範囲
@@ -640,8 +709,8 @@ def apply(api: Api, plan: Plan, repo, resume: bool, sleep=time.sleep) -> int:
     print()
     if state["url"]:
         print(f"Pull Request: {state['url']}")
-    print("CI が通ったら Squash and merge し、 次を実行してください"
-          "（読み取りだけ）:")
+    print(f"CI が通り、 作成者と別の人が {PROFILE} が雛形の値の無い初期形のままで"
+          "あることを確かめたら Squash and merge し、 次を実行してください（読み取りだけ）:")
     print(f"    python3 scripts/ci/new_customer_repo.py {name} --check")
     return 0
 

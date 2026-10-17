@@ -127,6 +127,9 @@ t DENY  "gh pr merge --squash"
 echo "== ガード自身の書き換え =="
 t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" Edit
 t DENY  ".claude/settings.json"         "$WORK/on_feature" Write
+# settings.local.json に disableAllHooks を書くと、個人設定のガードまで止まる
+t DENY  ".claude/settings.local.json"   "$WORK/on_feature" Write
+t DENY  "$WORK/on_feature/.claude/settings.local.json" "$WORK/on_feature" Edit
 
 echo "== タグは人が打つ（Product Release のタグ） =="
 # 新しい Product Release のタグを打つ・消す・付け替えるのは Core の maintainer（人）だけ。

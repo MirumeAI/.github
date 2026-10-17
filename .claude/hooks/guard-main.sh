@@ -66,14 +66,15 @@ case "$CMD" in
 esac
 
 # ------------------------------------------------- ファイル編集の保護
-# **Claude の Edit / Write で、ガード（.claude/hooks/）と settings.json を書き換えさせない。**
+# **Claude の Edit / Write で、ガード（.claude/hooks/）と settings.json・settings.local.json を書き換えさせない。**
+# settings.local.json に disableAllHooks を書くと、個人設定のガードまで止まるため、同じく守る。
 # ガードの変更は MirumeAI/.github の Pull Request で案を出し、人の承認（Human Adjudication）と
 # merge の後に、正本（.github の main）から写して同期する。人が手でファイルを写す必要はない。
 case "$CMD" in
   "@@FILE@@"*)
     f="${CMD#@@FILE@@}"
     case "$f" in
-      */.claude/hooks/*|*/.claude/settings.json|.claude/hooks/*|.claude/settings.json)
+      */.claude/hooks/*|*/.claude/settings.json|*/.claude/settings.local.json|.claude/hooks/*|.claude/settings.json|.claude/settings.local.json)
         deny "ガード設定の書き換え: $f" \
              "ガードの変更は MirumeAI/.github の Pull Request で案を出し、人の承認と merge の後に正本から写して同期してください。" ;;
     esac

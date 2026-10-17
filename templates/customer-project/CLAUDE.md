@@ -16,7 +16,7 @@ MirumeAI 標準開発ルールに従う。
 1 は `.claude/hooks/guard-main.sh` が機械的に拒否する。`cd` と `git -C` の対象
 Repository を解決してから Branch を判定し、 先頭の飾り（`env`、`bash -c`、
 絶対パス等）も剥がすため、 書き方を変えた程度では抜けない。
-`gh` の書き込み系サブコマンドと、 ガード自身の書き換えも拒否する。
+`gh` の書き込み系サブコマンドと、 ガード自身の書き換えも拒否する（ガードの変更は `MirumeAI/.github` の Pull Request で案を出し、人の承認と merge の後に正本から同期する）。
 
 **ただしこれは「うっかり」を止める壁であって、 敵対的な回避を完全に塞ぐものではない。**
 ターミナルから直接実行した場合は防げない。 GitHub Free かつ Private Repository では

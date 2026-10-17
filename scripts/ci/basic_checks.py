@@ -57,8 +57,10 @@ SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules",
 ALLOW_EMPTY = {".gitkeep", ".gitignore", ".keep", "__init__.py", "py.typed"}
 
 #: VERSION ファイルの形。 リリースのタグと文字列として突き合わせるので、
-#: 前後に何も付けない。
-VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+#: 前後に何も付けない。 **Release の版 `X.Y.Z` か、 開発の版 `X.Y.Z.devN`
+#: （PEP 440）だけ。** `X.Y.Z` は次に予定する Release の版。 タグ（`vX.Y.Z`）を
+#: 打てるのは Release の版だけで、 それは release_identity_check.py が確かめる。
+VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:\.dev\d+)?")
 
 #: 秘密情報らしき形。**値を出力しない**（ログに残すと二次漏洩になる）。
 SECRET_PATTERNS = [
@@ -383,7 +385,7 @@ def main(argv: "list[str] | None" = None) -> int:
         raw = vfile.read_text(encoding="utf-8", errors="replace")
         v = raw.strip()
         if not VERSION_RE.fullmatch(v):
-            errors.append("VERSION: 'x.y.z' の形にしてください"
+            errors.append("VERSION: 'x.y.z' か 'x.y.z.devN' の形にしてください"
                           f"（いまは {len(v)} 文字）")
         elif raw != v + "\n":
             errors.append("VERSION: 版だけを1行で書いてください"

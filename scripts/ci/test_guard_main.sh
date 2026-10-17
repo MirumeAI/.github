@@ -37,6 +37,8 @@ setup_repo() {
 }
 setup_repo "$WORK/on_main" main
 setup_repo "$WORK/on_feature" feature/1-x
+# 手元にあるタグ（タグの push・削除・付け替えの場面に使う。 この一時の Repository の中だけ）
+git -C "$WORK/on_feature" tag v0.9.0
 
 run_hook() {
   local cmd="$1" cwd="$2" tool="${3:-Bash}"
@@ -126,7 +128,37 @@ echo "== ガード自身の書き換え =="
 t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" Edit
 t DENY  ".claude/settings.json"         "$WORK/on_feature" Write
 
+echo "== タグは人が打つ（Product Release のタグ） =="
+# 新しい Product Release のタグを打つ・消す・付け替えるのは Core の maintainer（人）だけ。
+# Agent の作成・削除・付け替えと、 タグの push を止める。
+t DENY  "git tag v1.2.3"
+t DENY  "git tag -a v1.2.3 -m release"
+t DENY  "git tag -s v1.2.3 -m release"
+t DENY  "git tag -am release v1.2.3"
+t DENY  "git tag -f v0.9.0 HEAD"
+t DENY  "git tag -d v0.9.0"
+t DENY  "git tag --delete v0.9.0"
+t DENY  "git tag v1.2.3 HEAD~1"
+t DENY  "git -C $WORK/on_feature tag v1.2.3"
+t DENY  "bash -c 'git tag v1.2.3'"
+t DENY  "git push origin --tags"
+t DENY  "git push --follow-tags origin feature/1-x"
+t DENY  "git push origin v0.9.0"
+t DENY  "git push origin refs/tags/v1.2.3"
+t DENY  "git push origin :refs/tags/v0.9.0"
+t DENY  "git push origin :v0.9.0"
+t DENY  "git push origin --delete v1.2.3"
+t DENY  "git update-ref refs/tags/v0.9.0 HEAD"
+
 echo "== 通常の作業は通る =="
+t ALLOW "git tag"
+t ALLOW "git tag -l"
+t ALLOW "git tag --list 'v*'"
+t ALLOW "git tag -n"
+t ALLOW "git tag --contains HEAD"
+t ALLOW "git tag --points-at HEAD"
+t ALLOW "git tag -v v0.9.0"
+t ALLOW "git push origin --delete feature/old"
 t ALLOW "git push origin feature/1-x"
 t ALLOW "git push -u origin fix/2-y"
 t ALLOW "git commit -m 'work'"

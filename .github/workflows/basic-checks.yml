@@ -95,6 +95,17 @@ jobs:
       - name: 版と配置の記録の検査
         run: python scripts/ci/test_release_record.py
 
+      # **Product Release の識別の確かめそのもの。**
+      # 各 Core の Release の workflow が、 注釈つき・main の祖先・版の一致・
+      # 開発の版でないこと・タグが動いていないことを、 この道具で確かめる。
+      # 見つける側が壊れていると、 同じ版を名乗る別のコードを Release にしてしまう。
+      - name: Product Release の識別の確かめ
+        run: python scripts/ci/test_release_identity.py
+
+      # **VERSION の形。** Release の版（X.Y.Z）と開発の版（X.Y.Z.devN）だけを許す。
+      - name: VERSION の形
+        run: python scripts/ci/test_version_format.py
+
       # **このリポジトリは Public。** 顧客の値が入ると、 取り消せない形で
       # 外へ出る。 それなのに検査が無く、 Private な Core 2 件にだけ
       # あった（必要な順番が逆）。

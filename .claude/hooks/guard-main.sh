@@ -14,6 +14,9 @@
 #   - `git -C <dir>` と `cd <dir> &&` を追って、 **どの Repository に対する
 #     操作か**を特定してから Branch を調べる
 #   - 判断できないときは **拒否側へ倒す** (通してしまうより止めるほうが安い)
+#   - **Product Release のタグは人（Core の maintainer）が打つ。** Agent の
+#     `git tag` の作成・削除・付け替えと、 タグの push・削除を止める
+#     （一覧と確かめは通す。 人が自分のターミナルで打つタグは止めない）
 #
 # 保護する Branch は MIRUME_PROTECTED_BRANCH で変えられる (既定 main)。
 
@@ -28,6 +31,13 @@ deny() {
   echo "Issue 番号付きの作業 Branch を作り、 Pull Request 経由で変更してください。" >&2
   exit 2
 }
+
+TAG_HINT_NEW="新しい Product Release のタグは、 Core の maintainer（人）が自分のターミナルで打ちます。 Agent は命令の案と確かめだけを出してください。"
+TAG_HINT_KEEP="タグは消さない・動かさない（LEGACY を含む）。 Agent は、 タグの push・削除・付け替えの命令も、 その案も出しません。"
+RELEASE_HINT="GitHub Release は、 確かめに合格したタグから CI が作ります。 手で作らない・変えない・消さない。"
+
+# $1 が $2 の略（$3 文字以上の頭）か。 git は紛れの無い旗の略を受け付ける（--tag・--del など）
+prefix_of() { [ "${#1}" -ge "$3" ] && [ "${2#"$1"}" != "$2" ]; }
 
 # ---------------------------------------------------------------- 入力
 # python3 が無い環境では判定できない。 **素通しせず拒否する。**
@@ -56,15 +66,16 @@ case "$CMD" in
 esac
 
 # ------------------------------------------------- ファイル編集の保護
-# **Claude が自分のガードを書き換えられないようにする。**
-# 変更が必要なときは人が確認する。
+# **Claude の Edit / Write で、ガード（.claude/hooks/）と settings.json を書き換えさせない。**
+# ガードの変更は MirumeAI/.github の Pull Request で案を出し、人の承認（Human Adjudication）と
+# merge の後に、正本（.github の main）から写して同期する。人が手でファイルを写す必要はない。
 case "$CMD" in
   "@@FILE@@"*)
     f="${CMD#@@FILE@@}"
     case "$f" in
       */.claude/hooks/*|*/.claude/settings.json|.claude/hooks/*|.claude/settings.json)
         deny "ガード設定の書き換え: $f" \
-             "この操作は人が内容を確認したうえで行ってください。" ;;
+             "ガードの変更は MirumeAI/.github の Pull Request で案を出し、人の承認と merge の後に正本から写して同期してください。" ;;
     esac
     exit 0 ;;
 esac
@@ -164,7 +175,11 @@ while IFS= read -r line; do
     t="${TOK[$i]}"
     case "$t" in
       -C) TARGET="${TOK[$((i+1))]:-.}"; i=$((i+2)); continue ;;
-      -c) i=$((i+2)); continue ;;          # git -c key=val
+      -c)                                    # git -c key=val
+        case "$(printf '%s' "${TOK[$((i+1))]:-}" | tr '[:upper:]' '[:lower:]')" in
+          push.followtags*) deny "タグの push (git -c push.followTags)" "$TAG_HINT_KEEP" ;;
+        esac
+        i=$((i+2)); continue ;;
       --git-dir=*|--work-tree=*) i=$((i+1)); continue ;;
       -*) if [ "$prog" = "git" ] && [ ${#ARGS[@]} -eq 0 ]; then i=$((i+1)); continue; fi ;;
     esac
@@ -193,6 +208,60 @@ while IFS= read -r line; do
             --delete|-d) DEL=1 ;;
             +*) deny "force push (refspec の先頭 +: $a)" "対象: $TARGET" ;;
           esac
+        done
+        # 旗の略（--m・--mirr・--al・--pru・--forc・--force-w など）も止める。
+        # git は紛れの無い長い旗の略を受け付ける。 --mirror の略は全部のタグも送る
+        for a in "${rest[@]}"; do
+          case "$a" in
+            --*)
+              nm="${a%%=*}"
+              if prefix_of "$nm" --mirror 3 || prefix_of "$nm" --all 4 || prefix_of "$nm" --prune 5 \
+                 || prefix_of "$nm" --force 5 || prefix_of "$nm" --force-with-lease 9 \
+                 || prefix_of "$nm" --force-if-includes 9; then
+                deny "force push または一括上書き ($a)" "対象: $TARGET"
+              fi ;;
+          esac
+        done
+        # ---- タグの push・削除は人が行う（Product Release のタグ）----
+        #   名前だけの refspec は、 手元のタグを指していれば止める。 削除で、
+        #   版のタグの形（v の後に数字）のものは、 手元に無くても止める。
+        #   旗の略（--tag・--follow・--del など）と、 refspec の短い形
+        #   （tags/<名前>・:tags/<名前>）も見る。 削除で、 版のタグの形
+        #   （v数字.数字…・<接頭辞>/v数字.数字…・archive/…）のものは、
+        #   手元に無くても止める。
+        tag_del=0
+        for a in "${rest[@]}"; do
+          case "$a" in
+            --*)
+              if prefix_of "$a" --tags 4 || prefix_of "$a" --follow-tags 5; then
+                deny "タグの push ($a)" "$TAG_HINT_KEEP"
+              fi
+              if prefix_of "$a" --delete 4; then tag_del=1; fi ;;
+            -*d*) tag_del=1 ;;
+          esac
+        done
+        for a in "${rest[@]}"; do
+          case "$a" in -*|*://*|git@*) continue ;; esac
+          tsrc="${a%%:*}"; tdst="${a##*:}"; tsrc="${tsrc#+}"; tdst="${tdst#+}"
+          for n in "$tsrc" "$tdst"; do
+            [ -n "$n" ] || continue
+            case "$n" in
+              refs/tags/*|tags/*) deny "タグの push・削除 ($n)" "$TAG_HINT_KEEP" ;;
+              # ワイルドカードの refspec（refs/*:refs/* など）は、 手元のタグや保護 Branch も送る
+              *'*'*) deny "ワイルドカードの refspec の push ($n)" "$TAG_HINT_KEEP" ;;
+            esac
+            if git -C "$TARGET" show-ref --verify --quiet "refs/tags/$n" 2>/dev/null; then
+              deny "タグの push・削除 ($n)" "$TAG_HINT_KEEP"
+            fi
+          done
+          is_del="$tag_del"
+          case "$a" in :*) is_del=1 ;; esac
+          if [ "$is_del" = "1" ]; then
+            case "$tdst" in
+              v[0-9]*.[0-9]*|*/v[0-9]*.[0-9]*|archive/*)
+                deny "タグの削除 ($tdst)" "$TAG_HINT_KEEP" ;;
+            esac
+          fi
         done
         # 保護 Branch を名指ししていないか（refs/heads/ や src:dst も見る）
         for a in "${rest[@]}"; do
@@ -224,7 +293,51 @@ while IFS= read -r line; do
             deny "保護Branch '$PROTECTED' への push" "対象: $TARGET / 現在: ${c:-不明} / upstream: ${u:-未設定}"
           fi
         fi ;;
+      tag)
+        # ---- タグは人が打つ（Product Release のタグ）----
+        #   名前を付けてよいのは、 一覧（-l / --list / -n / --contains /
+        #   --no-contains / --points-at / --merged / --no-merged）と、 確かめ
+        #   （-v / --verify）のときだけ。 並べ方・形の旗（--sort / --format / -i /
+        #   --column / --color / --omit-empty）は一覧にしないので、 名前と並べると
+        #   git はタグを作る。 作る・消す・付け替える旗と、 知らない旗は止める。
+        tag_list=0; tag_write=""; tag_pos=0; skip_next=0
+        for a in "${rest[@]}"; do
+          if [ "$skip_next" = "1" ]; then skip_next=0; continue; fi
+          case "$a" in
+            -l|--list|-v|--verify|-n|-n[0-9]*|--contains=*|--no-contains=*|--points-at=*|--merged=*|--no-merged=*)
+              tag_list=1 ;;
+            --contains|--no-contains|--points-at|--merged|--no-merged)
+              tag_list=1; skip_next=1 ;;
+            --sort=*|--format=*|--column|--column=*|--no-column|--color|--color=*|--no-color|-i|--ignore-case|--omit-empty)
+              ;;
+            --sort|--format)
+              skip_next=1 ;;
+            --) ;;
+            --*) tag_write="$a" ;;
+            -*)
+              case "$a" in
+                *[asumFfde]*) tag_write="$a" ;;
+                *[lvn]*) tag_list=1 ;;
+                *) tag_write="$a" ;;
+              esac ;;
+            *) tag_pos=$((tag_pos+1)) ;;
+          esac
+        done
+        if [ -n "$tag_write" ]; then
+          case "$tag_write" in
+            --delete|--force|-*[df]*) deny "タグの削除・付け替え (git tag $tag_write)" "$TAG_HINT_KEEP" ;;
+            *) deny "タグの作成 (git tag $tag_write)" "$TAG_HINT_NEW" ;;
+          esac
+        fi
+        if [ "$tag_pos" -gt 0 ] && [ "$tag_list" = "0" ]; then
+          deny "タグの作成 (git tag <名前>)" "$TAG_HINT_NEW"
+        fi ;;
       update-ref|branch)
+        if [ "$sub" = "update-ref" ]; then
+          case "$joined" in
+            *refs/tags/*) deny "タグの付け替え・削除 (git update-ref)" "$TAG_HINT_KEEP" ;;
+          esac
+        fi
         case "$joined" in
           *" -f "*|*" --force "*|*"$PROTECTED"*)
             case "$joined" in
@@ -239,9 +352,17 @@ while IFS= read -r line; do
       api)
         for a in "${rest[@]}"; do
           case "$a" in
-            -X*|--method*|-f|--field|-F|--raw-field|--input)
+            -X*|--method*|-f*|-F*|--field*|--raw-field*|--input*)
               deny "gh api による書き込み ($a)" \
                    "Repository の内容や設定を API で直接変更しないでください。" ;;
+            --*) ;;
+            -*)
+              # 短い旗のまとまり（-iXPOST など）の頭の英字に X・f・F があれば止める
+              lead="${a#-}"; lead="${lead%%[!A-Za-z]*}"
+              case "$lead" in
+                *[XfF]*) deny "gh api による書き込み ($a)" \
+                           "Repository の内容や設定を API で直接変更しないでください。" ;;
+              esac ;;
           esac
         done
         case "$joined" in
@@ -256,8 +377,18 @@ while IFS= read -r line; do
       secret|variable|ruleset)
         deny "gh $sub による設定の変更" "" ;;
       release)
-        case "${rest[0]:-}" in
-          create|delete|edit|upload) deny "gh release ${rest[0]}" "" ;;
+        # 子命令の前に -R / --repo を置く形と、 作成の別名（new）も見る
+        rsub=""; rskip=0
+        for a in "${rest[@]}"; do
+          if [ "$rskip" = "1" ]; then rskip=0; continue; fi
+          case "$a" in
+            -R|--repo) rskip=1 ;;
+            -*) ;;
+            *) rsub="$a"; break ;;
+          esac
+        done
+        case "$rsub" in
+          create|new|delete|delete-asset|edit|upload) deny "gh release $rsub" "$RELEASE_HINT" ;;
         esac ;;
       workflow)
         case "${rest[0]:-}" in

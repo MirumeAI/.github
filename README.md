@@ -110,3 +110,28 @@ extensions: []                   # plugins/ の拡張の名前（今は数えて
 - 値は出力しません。出すのは種類・ファイル・行・欄だけです（決まっていない名前は `<*>` と `<伏せ#n>`）
 - PR では、基準の commit の宣言と比べた増減の数を出します。増えていれば `PROFILE EXPANSION DETECTED` と出る（Actions では注意としても出る）ので、増えた値が本当にこの案件のものかをレビューで確かめてください（設定と宣言の両方へ同じ誤った値を足すと、照合では見つかりません）
 - **これは事故を止める検査で、悪意のある変更を止める境界ではありません。** PR の CI は PR の側の workflow で動くので、PR はこの検査を外せます。宣言と workflow の変更はレビューで見ます
+
+## Product Release の識別の確かめ（`release_identity_check.py`）
+
+各 Core の Release の workflow が、 Product Release を作る前に使う共通の確かめです。**版の文字・注釈つきの動かさないタグ・そのタグが指す commit を 1 対 1 に対応させます。** 決まりの正本は development-docs の「ReleaseとDeploymentの記録」の「Product Release の識別」です。
+
+```bash
+# タグの push を受けた CI（落ちたら Release を作らない）
+python scripts/ci/release_identity_check.py check --repo-root <Core> --tag vX.Y.Z \
+    --version-source pyproject --first-version X.Y.Z --releases-json releases.json
+# 人がタグを打つ前（タグは打たない）
+python scripts/ci/release_identity_check.py preflight --repo-root <Core> --tag vX.Y.Z \
+    --commit <40 桁の SHA> --version-source VERSION --first-version X.Y.Z --remote origin
+```
+
+見るもの: タグの形（`vX.Y.Z` だけ）・`--first-version` より前の番号（LEGACY）でないこと・注釈つきのタグ・タグの commit が main の祖先・版の出どころ（`pyproject.toml` の `[project].version` か `VERSION`）との完全な一致・開発の版（`X.Y.Z.devN`）でないこと・前の Product Release（LEGACY を使わない）・Release のノートに記録したタグと commit が今も同じか。
+
+- 顧客の値と名前は扱いません。形の違うタグの名前は出しません
+- Release のノートは識別だけ（product・version・tag・tag object・commit・CI の実行・成果物の状態）で、commit の件名は載せません
+- タグを打つのは Core の maintainer（人）だけです。手元の guard は、 Agent のタグの作成・削除・付け替えとタグの push を止めます
+
+| 終了コード | 意味 |
+|---|---|
+| 0 | 合格 |
+| 1 | 不合格（理由の種類だけを出す） |
+| 2 | 使い方の誤り |

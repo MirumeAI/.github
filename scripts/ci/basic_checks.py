@@ -60,7 +60,8 @@ ALLOW_EMPTY = {".gitkeep", ".gitignore", ".keep", "__init__.py", "py.typed"}
 #: 前後に何も付けない。 **Release の版 `X.Y.Z` か、 開発の版 `X.Y.Z.devN`
 #: （PEP 440）だけ。** `X.Y.Z` は次に予定する Release の版。 タグ（`vX.Y.Z`）を
 #: 打てるのは Release の版だけで、 それは release_identity_check.py が確かめる。
-VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:\.dev\d+)?")
+#: 数は ASCII の数字だけで、 先頭に 0 を付けない（同じ版の別の書き方を作らない）。
+VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\.dev(?:0|[1-9][0-9]*))?")
 
 #: 秘密情報らしき形。**値を出力しない**（ログに残すと二次漏洩になる）。
 SECRET_PATTERNS = [

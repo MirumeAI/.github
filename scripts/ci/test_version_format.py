@@ -39,7 +39,9 @@ class VersionFormatTest(unittest.TestCase):
 
     def test_other_forms_fail(self) -> None:
         for body in ("0.3\n", "v0.3.0\n", "0.3.0rc1\n", "0.3.0.dev\n", "0.3.0.dev0.post1\n",
-                     "0.3.0-dev0\n", "0.3.0+local\n", "0.3.0.devX\n", "latest\n"):
+                     "0.3.0-dev0\n", "0.3.0+local\n", "0.3.0.devX\n", "latest\n",
+                     # 同じ版の別の書き方（先頭の 0・全角の数字）
+                     "00.3.0\n", "0.03.0\n", "0.3.00\n", "0.3.0.dev01\n", "０.3.0\n"):
             code, out = run(body)
             self.assertEqual(code, 1, (body, out[-400:]))
             self.assertIn("VERSION", out)

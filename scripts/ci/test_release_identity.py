@@ -143,6 +143,18 @@ class PyprojectTest(unittest.TestCase):
             self.assertEqual(code, 1, (bad, out))
             self.assertNotIn(FAKE_ID, out)
 
+    def test_other_ways_to_write_the_same_version_fail(self) -> None:
+        """同じ版を名乗る別の書き方（先頭の 0・全角の数字）は、 形の違うタグとして落とす。"""
+        for bad in ("v00.4.0", "v0.04.0", "v0.4.00", "v０.4.0"):
+            self.r.tag(bad)
+            code, out = self.check(bad)
+            self.assertEqual(code, 1, (bad, out))
+            self.assertIn("vX.Y.Z ではない", out)
+        self.r.commit("odd", {"pyproject.toml": pyproject("0.04.1")})   # 版の出どころの書き方が違う
+        self.r.tag("v0.4.1")
+        code, out = self.check("v0.4.1")
+        self.assertEqual(code, 1, out)
+
     def test_versions_before_first_version_fail(self) -> None:
         code, out = self.check("v0.3.0")
         self.assertEqual(code, 1, out)

@@ -43,8 +43,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
-RELEASE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+#: 版の数は ASCII の数字だけで、 先頭に 0 を付けない（0 そのものは可）。 こうすると、 同じ版を
+#: 名乗る別の書き方（v0.04.0・v00.4.0・全角の数字など）が生まれず、 文字の完全な一致で比べられる。
+_N = r"(0|[1-9][0-9]*)"
+TAG_RE = re.compile(rf"v{_N}\.{_N}\.{_N}")
+RELEASE_RE = re.compile(rf"{_N}\.{_N}\.{_N}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 NOTE_TAG_OBJECT = re.compile(r"^- tag object: ([0-9a-f]{40})\s*$", re.M)
 NOTE_COMMIT = re.compile(r"^- commit: ([0-9a-f]{40})\s*$", re.M)
@@ -213,7 +216,7 @@ def verify_source(root: Path, commit: str, source: str, want: "tuple[int, int, i
         raise Fail("版の出どころが読めない（無いか、 形が崩れている）")
     if parse_release(v) is None:
         raise Fail("版の出どころが Release の版（X.Y.Z）ではない（開発の版にはタグを打たない）")
-    if parse_release(v) != want:
+    if v != ".".join(map(str, want)):  # 文字の完全な一致（形は上で決まっている）
         raise Fail(f"版の出どころ（{safe_version(v)}）とタグの版（{'.'.join(map(str, want))}）が違う")
     return v
 

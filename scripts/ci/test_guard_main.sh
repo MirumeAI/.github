@@ -118,11 +118,11 @@ t DENY  "gh secret set FOO --body bar"
 t DENY  "gh workflow run deploy.yml"
 t DENY  "gh pr merge 1 --admin"
 
-echo "== gh pr merge の CI ゲート =="
-# 実際の Repository へ問い合わせるため、 ネットワークが無い環境では
-# 「確認できない」で拒否されることを確かめる（分からないなら通さない）。
-t DENY  "gh pr merge 99999 --squash"
-t DENY  "gh pr merge --squash"
+echo "== gh pr merge は GitHub Actions の結果で止めない =="
+# Actions は merge の前提ではない（2026-10-19 の人の判断）。 check の結果を
+# 問い合わせず、 保護の迂回（--admin。上の場面）だけを止める。
+t ALLOW "gh pr merge 99999 --squash"
+t ALLOW "gh pr merge --squash"
 
 echo "== ガード自身の書き換え =="
 t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" Edit

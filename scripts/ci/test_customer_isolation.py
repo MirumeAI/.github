@@ -575,6 +575,34 @@ def scenarios() -> "list[Scenario]":
         error="profile-schema", texts=("引用符",))
     add("宣言の inspection が対応表でない", a_files(profile=a_prof(
         project={"inspection": "example", "profiles": [A_PROFILE]})), 2, error="profile-schema")
+
+    # ---- S5: 記録（deployment/・validation/。 P1-05）。 記録には値を書かない
+    rec = ("schema_version: 2\nrecord_id: M01-0001\nmachine: M01\nsequence: 1\n"
+           "status: LEGACY\nobserved: {note: loopback 127.0.0.1}\n")
+    add("S5a. 記録に一般の値と記号だけなら通る", a_with(**{
+        "deployment__M01-0001.yaml": rec, "deployment__README.md": "# d\n",
+        "validation__VR-PJ001-2026-001.yaml": "cases: [{id: C1, result: PASS}]\n"}), 0)
+    add("S5b. 配置の記録の中の宣言に無い IP は不合格", a_with(**{
+        "deployment__M01-0001.yaml": rec + f"peer: '{_ip(1, 77)}'\n"}), 1, {"S5-endpoint"})
+    add("S5c. 検証の記録の中の宣言に無い trig_ の語は不合格", a_with(**{
+        "validation__VR-PJ001-2026-001.yaml": f"cases: [{{id: C1, note: {B_TRIGGERS[0]}}}]\n"}), 1,
+        {"S5-name"})
+    add("S5d. 証拠のファイルの中の宣言に無い IP も不合格", a_with(**{
+        "validation__evidence__run.txt": f"connected to {_ip(2, 9)}\n"}), 1, {"S5-endpoint"})
+    add("S5e. 記録の dir の説明の .md の中の値は参考だけ", a_with(**{
+        "validation__README.md": f"例 {_ip(1, 78)}\n"}), 0, texts=("参考",))
+    add("S5f. 記録の dir の下のリンクは読まずに断る", a_with(**{
+        "deployment__M01-0001.yaml": Link("../versions.yaml")}), 1, {"S5-link"})
+    add("S5g. 検証の記録の案件の記号が System Release の記号と違う", a_with(**{
+        "validation__VR-PJ002-2026-001.yaml": "x: 1\n",
+        "release__PJ001-R2026.10.1.yaml": "x: 1\n"}), 1, {"S5-project-code"})
+    add("S5h. 検証の記録どうしで案件の記号が違う", a_with(**{
+        "validation__VR-PJ001-2026-001.yaml": "x: 1\n",
+        "validation__VR-PJ002-2026-002.yaml": "x: 1\n"}), 1, {"S5-project-code"})
+    add("S5i. 案件の記号がそろっていれば通る", a_with(**{
+        "validation__VR-PJ001-2026-001.yaml": "x: 1\n",
+        "validation__VR-PJ001-2026-002.yaml": "x: 1\n",
+        "release__PJ001-R2026.10.1.yaml": "x: 1\n"}), 0)
     return s
 
 

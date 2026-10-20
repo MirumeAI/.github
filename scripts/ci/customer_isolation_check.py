@@ -47,6 +47,12 @@
           実在して許されているか。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
+    S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 その証拠の
+          ファイル）。 **記録には値を書かない**ので、 宣言に無い IPv4 と `trig_` で始まる
+          語は不合格（説明の .md の中は参考だけ）。 下のリンクは読まずに断る。 検証の記録の
+          ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、 記録どうしと、
+          `release/` の System Release の ID の記号（`<記号>-R<年>.<月>.<番号>.yaml`）と同じか
+          （宣言には案件の記号の欄が無いので、 同じ Repository の記録どうしで照らす）
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
 Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）は除かない。**
@@ -131,6 +137,10 @@ PDM_FIXED = ("align_reference.txt",)
 
 #: S4 で読む、 根の決まった名前（deploy/ の下のほかに）。
 S4_FILES = ("versions.yaml",)
+#: S5 の記録の置き場（P1-05）。
+RECORD_DIRS = ("deployment/", "validation/")
+_VR_FILE = re.compile(r"VR-([A-Z0-9]+)-[0-9]{4}-[0-9]{3}\.ya?ml")
+_SR_FILE = re.compile(r"(.+)-R[0-9]{4}\.[0-9]{2}\.[0-9]+\.ya?ml")
 
 #: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。 **一覧で持つ**
 #: （道の形で信号とみなすと、 信号の位置に置いた別の案件の名前を見逃す）。 Core が
@@ -169,6 +179,10 @@ WHAT = {
     "S4-missing": "参照している設定のファイルが無い",
     "S4-not-allowed": "参照している設定のファイルが、 許されていない",
     "S4-link": "deploy/ か versions.yaml がリンク（読まずに断る）",
+    "S5-endpoint": "記録（deployment/・validation/）の中の、 宣言に無い IP（記録には値を書かない）",
+    "S5-name": "記録（deployment/・validation/）の中の、 宣言に無いトリガ・面の名前らしき語",
+    "S5-link": "deployment/ か validation/ の下のリンク（読まずに断る）",
+    "S5-project-code": "検証の記録の ID の案件の記号が、 ほかの検証の記録か release/ の System Release の ID の記号と違う",
     "L1-endpoint": "宣言に無い宛先（IP・host）",
     "L1-serial": "宣言に無い製造番号",
     "L1-plc-endpoint": "宣言に無い PLC の宛先",
@@ -566,11 +580,11 @@ def _schema_path(path: tuple) -> str:
 
 
 def list_files(root: Path) -> "list[str]":
-    """config/・deploy/・versions.yaml の、 追跡しているもの + まだ add していない新しいもの。
+    """config/・deploy/・deployment/・validation/・versions.yaml の、 追跡しているもの + まだ add していない新しいもの。
 
     git のリポジトリでなければ、 フォルダをたどる（リンクはたどらず、 一覧に載せて断る）。
     """
-    specs = ("config", "deploy", "versions.yaml")
+    specs = ("config", "deploy", "deployment", "validation", "versions.yaml")
     if (root / ".git").exists():
         seen: "set[bytes]" = set()
         for extra in ((), ("--others", "--exclude-standard")):
@@ -581,7 +595,7 @@ def list_files(root: Path) -> "list[str]":
             seen.update(raw for raw in r.stdout.split(b"\0") if raw)
         return sorted(os.fsdecode(raw) for raw in seen)
     out = ["versions.yaml"] if os.path.lexists(root / "versions.yaml") else []
-    for top in ("config", "deploy"):
+    for top in ("config", "deploy", "deployment", "validation"):
         if os.path.islink(root / top):
             out.append(top)                  # 根の外を読まない
             continue
@@ -726,7 +740,7 @@ class Checker:
         self.used: "dict[str, set]" = {k: set() for k in CATEGORIES}
         self.files: "list[str]" = []
         self.allowed: "set[str]" = set()
-        self.counts = {"config": 0, "refs": 0}
+        self.counts = {"config": 0, "refs": 0, "records": 0}
         self._endpoints = prof.endpoints()
         self._names = prof.names()
         self._faces = prof.face_names()
@@ -1051,6 +1065,46 @@ class Checker:
             if rel.startswith("deploy/"):
                 # **参考だけ**（不合格にしない）。 強制するかは、 既存の案件の結果を見て決める。
                 self.text_lines(rel, text, "note-endpoint", "note-name", self.notes)
+        # ---- S5: 記録。 **記録には値を書かない**（P1-05）ので、 宣言に無い値は不合格
+        for rel in self.files:
+            if not rel.startswith(RECORD_DIRS) and rel not in ("deployment", "validation"):
+                continue
+            p = root / rel
+            if os.path.islink(p):
+                self.add("S5-link", rel)
+                continue
+            if not p.is_file() or rel.endswith("/.gitkeep"):
+                continue
+            self.counts["records"] += 1
+            text = _read(root, rel)
+            if rel.endswith(".md"):
+                self.text_lines(rel, text, "note-endpoint", "note-name", self.notes)
+            else:
+                self.text_lines(rel, text, "S5-endpoint", "S5-name", self.findings)
+        self.record_codes()
+
+    def record_codes(self) -> None:
+        """S5: 検証の記録の ID の案件の記号が、 記録どうしと release/ の System Release の記号と同じか。"""
+        vr: "dict[str, list[str]]" = {}
+        for rel in self.files:
+            parts = rel.split("/")
+            m = _VR_FILE.fullmatch(parts[-1]) if len(parts) == 2 and parts[0] == "validation" else None
+            if m:
+                vr.setdefault(m.group(1), []).append(rel)
+        if not vr:
+            return
+        sr = set()
+        rel_dir = self.root / "release"
+        if rel_dir.is_dir() and not os.path.islink(rel_dir):
+            for n in os.listdir(rel_dir):
+                m = _SR_FILE.fullmatch(n)
+                if m:
+                    sr.add(m.group(1))
+        # **別の案件の記録を写すと、 記号が混ざる。** どれが正しいか分からないので、 合わないものを全部出す
+        for code, rels in sorted(vr.items()):
+            if (sr and code not in sr) or (not sr and len(vr) > 1) or len(sr) > 1:
+                for rel in rels:
+                    self.add("S5-project-code", rel)
 
 
 # ---------------------------------------------------------------- 出力
@@ -1241,7 +1295,8 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
 
     found, notes = _unique(ck.findings), _unique(ck.notes)
     print(f"検査: config/ の設定のファイル {ck.counts['config']}"
-          f"・deploy/ と versions.yaml の中の設定のファイルへの参照 {ck.counts['refs']}")
+          f"・deploy/ と versions.yaml の中の設定のファイルへの参照 {ck.counts['refs']}"
+          f"・記録（deployment/・validation/）のファイル {ck.counts['records']}")
     for f in found[:MAX_SHOWN]:
         print(_show(f, masks, "NG", WHAT))
     if len(found) > MAX_SHOWN:

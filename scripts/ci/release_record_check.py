@@ -28,16 +28,28 @@ Core の写しの道を `CORE_ROOT_IMAGE_ACQUISITION_PDM`・`CORE_ROOT_PDM` に�
 commit にある `pdm.lock.json` と同じことも照らす（CI は Private の Core を読めない
 ので、手元の確かめで渡す）。
 
+`deployment/` の schema 2（P1-05）は機体ごとの記録の並びで見る。 記録の ID は
+`<機体の記号>-<通し番号 4 桁>` で、 通し番号は 1 から抜けも重なりも無く、
+`supersedes` は前の記録を指す。 **今の状態は機体ごとに通し番号が一番大きい記録**で、
+ファイルの更新日時では決めない。 LEGACY は `observed`、 ACTIVE は `deployed_release`・
+`rollback_to`・`config_commit`・`artifacts`・`model_sha256` を持ち、 結果の欄
+（`smoke_test`・`verified`）は持たない（結果は検証の記録にだけ書く）。
+
+`validation/` の検証の記録（P1-05）は、 項目と全体の結果の食い違い・指す先の無い
+記録・`supersedes` の枝分かれを止め、 対象 × 手順の ID ごとの状態（一番新しい記録が
+PASS なら VERIFIED、 FAIL なら FAILED、 PARTIAL なら NOT VERIFIED）を出す。
+
 どれも無い Repository では何もしない（Core や platform）。
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 #: 知っている形式の版。 **知らない値は黙って受け付けない。**
 #: 項目を増やすときは、 ここと正本の文書を同じ Change で直す。
@@ -82,6 +94,18 @@ CORE_ROOT_ENV = {
 }
 TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+HEX64_RE = re.compile(r"[0-9a-f]{64}")
+
+#: 配置の記録 schema 2 の機体の記号（中立。 IP・製造番号・装置名を書かない）と記録の ID。
+MACHINE_RE = re.compile(r"[A-Z][A-Z0-9]{1,7}")
+RECORD_ID_RE = re.compile(r"([A-Z][A-Z0-9]{1,7})-([0-9]{4})")
+DEPLOY_STATUSES = ("LEGACY", "ACTIVE", "RETIRED")
+#: 検証の記録。
+VR_ID_RE = re.compile(r"VR-[A-Z0-9]+-[0-9]{4}-[0-9]{3}")
+VR_SCOPES = ("product", "system", "deployment")
+VR_ENVIRONMENTS = ("real-machine", "bench", "ci")
+VR_RESULTS = ("PASS", "FAIL", "PARTIAL")
+DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def _records(d: Path) -> list:
@@ -218,14 +242,206 @@ def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
     notes.append(f"versions.yaml: {names}（タグ・commit・lock を Core の写しで照らした）")
 
 
+def _person(name: str, d: dict, key: str, errors: list) -> None:
+    v = d.get(key)
+    if not (isinstance(v, dict) and v.get("role") and v.get("account")):
+        errors.append(f"{name}: {key} に role と account を書きます（人）")
+
+
+def _earlier(rid, machine: str, seq: int, by_id: dict) -> bool:
+    """同じ機体の、 前の記録の ID か。"""
+    m = RECORD_ID_RE.fullmatch(str(rid)) if rid else None
+    return bool(m) and m.group(1) == machine and int(m.group(2)) < seq and rid in by_id
+
+
+def _check_deployments_v2(recs: list, known_ids: set, errors: list, notes: list) -> dict:
+    """配置の記録 schema 2。 機体ごとの並びを確かめ、 記録の ID → 中身を返す。"""
+    by_id, by_machine = {}, {}
+    for p, d in recs:
+        name = p.name
+        m, seq = d.get("machine"), d.get("sequence")
+        if not (isinstance(m, str) and MACHINE_RE.fullmatch(m)):
+            errors.append(f"{name}: machine は中立の機体の記号（例 M01。 英大文字で始まる英大文字と数字の 2〜8 字）にします")
+            continue
+        if not (isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1):
+            errors.append(f"{name}: sequence は 1 から数える整数にします")
+            continue
+        rid = f"{m}-{seq:04d}"
+        if d.get("record_id") != rid:
+            errors.append(f"{name}: record_id は {rid}（machine と sequence から決まる）にします")
+            continue
+        if p.stem != rid:
+            errors.append(f"{name}: ファイル名は record_id と同じ {rid}.yaml にします")
+        want = None if seq == 1 else f"{m}-{seq - 1:04d}"
+        if d.get("supersedes") != want:
+            errors.append(f"{name}: supersedes は {want or 'null（その機体の最初の記録）'} にします")
+        if d.get("status") not in DEPLOY_STATUSES:
+            errors.append(f"{name}: status は {' / '.join(DEPLOY_STATUSES)} のどれかにします")
+        _person(name, d, "recorded_by", errors)
+        for k in ("smoke_test", "verified"):
+            if k in d:
+                errors.append(f"{name}: schema 2 の配置の記録に {k} は書きません（結果は validation/ の検証の記録にだけ書く）")
+        by_id[rid] = d
+        by_machine.setdefault(m, []).append(seq)
+    # **今の状態は機体ごとに sequence が一番大きい記録。** 抜けがあると、 どれが今か分からない
+    for m, seqs in sorted(by_machine.items()):
+        if sorted(seqs) != list(range(1, len(seqs) + 1)):
+            errors.append(f"deployment/: 機体 {m} の記録の通し番号に抜けがあります（1 から {max(seqs)} までのうち {len(seqs)} 件）")
+    for rid, d in sorted(by_id.items()):
+        name, st, m, seq = f"{rid}.yaml", d.get("status"), d.get("machine"), d.get("sequence")
+        rb = d.get("rolled_back_from")
+        if rb is not None and not _earlier(rb, m, seq, by_id):
+            errors.append(f"{name}: rolled_back_from は同じ機体の前の記録の ID にします")
+        if st == "LEGACY":
+            if not (isinstance(d.get("observed"), dict) and d.get("observed")):
+                errors.append(f"{name}: LEGACY の記録には observed（棚卸しで見た状態）を書きます")
+        elif st == "ACTIVE":
+            rel = d.get("deployed_release")
+            if not rel or str(rel) not in known_ids:
+                errors.append(f"{name}: deployed_release が release/ にありません")
+            # **戻せる先を必ず書く。** LEGACY の状態へ戻すときも、 その記録を指す
+            if not _earlier(d.get("rollback_to"), m, seq, by_id):
+                errors.append(f"{name}: rollback_to は同じ機体の前の記録の ID にします（戻せる先）")
+            cc = d.get("config_commit")
+            if not (isinstance(cc, str) and SHA_RE.fullmatch(cc)):
+                errors.append(f"{name}: config_commit は 40 桁の commit SHA にします")
+            arts = d.get("artifacts")
+            if not (isinstance(arts, list) and arts and all(
+                    isinstance(a, dict) and a.get("name") and a.get("version") not in (None, "")
+                    and isinstance(a.get("sha256"), str) and HEX64_RE.fullmatch(a["sha256"]) for a in arts)):
+                errors.append(f"{name}: artifacts は name・version・sha256（64 桁）の並びにします")
+            ms = d.get("model_sha256")
+            if not (isinstance(ms, str) and HEX64_RE.fullmatch(ms)):
+                errors.append(f"{name}: model_sha256 は 64 桁の sha256 にします")
+    if by_machine:
+        latest = [by_id.get(f"{m}-{max(s):04d}") or {} for m, s in sorted(by_machine.items())]
+        notes.append(f"配置の記録（schema 2）: 機体 {len(latest)} 台・今の状態 " + "・".join(
+            f"{s} {sum(1 for d in latest if d.get('status') == s)}" for s in DEPLOY_STATUSES))
+    return by_id
+
+
+def _vr_order(vid: str) -> tuple:
+    _, _, year, seq = vid.split("-")
+    return int(year), int(seq)
+
+
+def _check_verifications(recs: list, root: Path, known_ids: set, deployments: dict,
+                         errors: list, notes: list) -> None:
+    """検証の記録。 結果は検証の記録にだけ書き、 状態は対象 × 手順の ID ごとに一番新しい記録で決まる。"""
+    by_id = {}
+    for p, d in recs:
+        name = p.name
+        vid = d.get("verification_id")
+        if not (isinstance(vid, str) and VR_ID_RE.fullmatch(vid)):
+            errors.append(f"{name}: verification_id は VR-<案件の記号>-<年 4 桁>-<連番 3 桁> にします")
+            continue
+        if p.stem != vid:
+            errors.append(f"{name}: ファイル名は verification_id と同じ {vid}.yaml にします")
+        if d.get("schema_version") != 1:
+            errors.append(f"{name}: schema_version は 1 にします")
+            continue
+        scope, tgt, key = d.get("scope"), d.get("target"), None
+        if scope not in VR_SCOPES:
+            errors.append(f"{name}: scope は {' / '.join(VR_SCOPES)} のどれかにします")
+        elif not isinstance(tgt, dict):
+            errors.append(f"{name}: target の節がありません")
+        elif scope == "deployment":
+            dep = tgt.get("deployment")
+            if dep not in deployments:
+                errors.append(f"{name}: target.deployment が deployment/ の schema 2 の記録にありません")
+            elif d.get("machine") != deployments[dep].get("machine"):
+                errors.append(f"{name}: machine が配置の記録の機体と違います")
+            else:
+                key = f"deployment:{dep}"
+        elif scope == "system":
+            sr = tgt.get("system_release")
+            if not sr or str(sr) not in known_ids:
+                errors.append(f"{name}: target.system_release が release/ にありません")
+            else:
+                key = f"system:{sr}"
+        else:
+            pr = tgt.get("product")
+            if not (isinstance(pr, dict) and pr.get("name") and isinstance(pr.get("tag"), str)
+                    and TAG_RE.fullmatch(pr["tag"]) and isinstance(pr.get("commit"), str)
+                    and SHA_RE.fullmatch(pr["commit"])):
+                errors.append(f"{name}: target.product に name・tag（vX.Y.Z）・commit（40 桁）を書きます")
+            else:
+                key = f"product:{pr['name']}@{pr['tag']}"
+        proto = d.get("protocol")
+        if not (isinstance(proto, dict) and proto.get("id") and proto.get("version") not in (None, "")):
+            errors.append(f"{name}: protocol に id と version を書きます（手順は validation/protocols/）")
+            key = None
+        if d.get("environment") not in VR_ENVIRONMENTS:
+            errors.append(f"{name}: environment は {' / '.join(VR_ENVIRONMENTS)} のどれかにします")
+        dt = d.get("date")
+        if not (isinstance(dt, datetime.date) or (isinstance(dt, str) and DATE_RE.fullmatch(dt))):
+            errors.append(f"{name}: date は YYYY-MM-DD にします")
+        _person(name, d, "verifier", errors)
+        res, cases = d.get("result"), d.get("cases")
+        if res not in VR_RESULTS:
+            errors.append(f"{name}: result は {' / '.join(VR_RESULTS)} のどれかにします")
+        if not (isinstance(cases, list) and cases and all(
+                isinstance(c, dict) and c.get("id") and c.get("result") in VR_RESULTS for c in cases)):
+            errors.append(f"{name}: cases は id と result（{' / '.join(VR_RESULTS)}）の並びにします")
+        elif res in VR_RESULTS:
+            # **項目と全体の結果を食い違わせない。** 「たぶん大丈夫」を通さない
+            rs = {c["result"] for c in cases}
+            want = "FAIL" if "FAIL" in rs else ("PARTIAL" if "PARTIAL" in rs else "PASS")
+            if res != want:
+                errors.append(f"{name}: result が項目の結果と合いません（項目からは {want}）")
+        ev = d.get("evidence")
+        if not isinstance(ev, list):
+            errors.append(f"{name}: evidence は並びにします（無ければ []）")
+        else:
+            for e in ev:
+                ok = False
+                if isinstance(e, dict) and e.get("type") == "file" and isinstance(e.get("path"), str):
+                    pp = PurePosixPath(e["path"])
+                    ok = not pp.is_absolute() and ".." not in pp.parts and (root / e["path"]).is_file()
+                elif isinstance(e, dict) and e.get("type") == "storage":
+                    ok = bool(e.get("id")) and isinstance(e.get("sha256"), str) and bool(HEX64_RE.fullmatch(e["sha256"]))
+                if not ok:
+                    errors.append(f"{name}: evidence は type: file（この Repository の中にあるファイルの道）か"
+                                  " type: storage（id と 64 桁の sha256）にします")
+                    break
+        if key:
+            by_id[vid] = (key, str(proto["id"]), d.get("supersedes"), res)
+    # **supersedes は、 同じ対象と手順の ID の、 前の番号の記録だけ。** 枝分かれを許さない
+    replaced = {}
+    for vid, (key, pid, sup, _) in sorted(by_id.items()):
+        if sup is None:
+            continue
+        if not (isinstance(sup, str) and sup in by_id and by_id[sup][:2] == (key, pid)
+                and _vr_order(sup) < _vr_order(vid)):
+            errors.append(f"{vid}.yaml: supersedes は同じ対象と手順の ID の、 前の番号の検証の記録にします")
+        elif sup in replaced:
+            errors.append(f"{vid}.yaml: {sup} を置き換える記録が 2 つあります（{replaced[sup]} と）")
+        else:
+            replaced[sup] = vid
+    heads = {}
+    for vid, (key, pid, _, _) in sorted(by_id.items()):
+        if vid in replaced:
+            continue
+        if (key, pid) in heads:
+            errors.append(f"{vid}.yaml: 同じ対象と手順の ID に、 置き換えられていない記録が 2 つあります（{heads[(key, pid)]} と）")
+        heads[(key, pid)] = vid
+    if heads:
+        states = [{"PASS": "VERIFIED", "FAIL": "FAILED"}.get(by_id[v][3], "NOT VERIFIED") for v in heads.values()]
+        notes.append(f"検証の記録: 対象 × 手順 {len(heads)} 組・" + "・".join(
+            f"{s} {states.count(s)}" for s in ("VERIFIED", "FAILED", "NOT VERIFIED")))
+
+
 def main() -> int:
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     rel_dir, dep_dir = root / "release", root / "deployment"
     versions = root / "versions.yaml"
+    val_dir = root / "validation"
     releases, deployments = _records(rel_dir), _records(dep_dir)
+    verifications = _records(val_dir)
 
-    if not rel_dir.is_dir() and not dep_dir.is_dir() and not versions.is_file():
-        print("release/・deployment/・versions.yaml が無いので何もしません。")
+    if (not rel_dir.is_dir() and not dep_dir.is_dir() and not val_dir.is_dir()
+            and not versions.is_file()):
+        print("release/・deployment/・validation/・versions.yaml が無いので何もしません。")
         return 0
 
     # **検査できないのに OK と言わない。**
@@ -234,7 +450,7 @@ def main() -> int:
     try:
         import yaml
     except ImportError:
-        if not releases and not deployments and not versions.is_file():
+        if not releases and not deployments and not verifications and not versions.is_file():
             print("記録がまだありません。")
             return 0
         print("PyYAML が無いので記録を検査できません。"
@@ -264,9 +480,14 @@ def main() -> int:
                     f"{p.name}: release_id が {rid!r} でファイル名と違います"
                     f"（ファイル名は {p.stem!r}）")
 
+    dep2: list = []
     for p in deployments:
         d = _load(p, errors, yaml)
         if d is None:
+            continue
+        if d.get("schema_version") == 2:
+            # **schema 2（P1-05）は機体ごとの記録の並びで見る**（下でまとめて）
+            dep2.append((p, d))
             continue
         _check_schema(p.name, d, errors)
         _check_fields(p.name, d, DEPLOYMENT_FIELDS, errors)
@@ -292,7 +513,16 @@ def main() -> int:
                     f"{p.name}: smoke_test.result の {r!r} は"
                     f" {' / '.join(SMOKE_RESULTS)} のどちらかにしてください")
 
-    print(f"検査: release {len(releases)} 件 / deployment {len(deployments)} 件")
+    by_record = _check_deployments_v2(dep2, known_ids, errors, notes)
+    vrs = []
+    for p in verifications:
+        d = _load(p, errors, yaml)
+        if d is not None:
+            vrs.append((p, d))
+    _check_verifications(vrs, root, known_ids, by_record, errors, notes)
+
+    print(f"検査: release {len(releases)} 件 / deployment {len(deployments)} 件"
+          f" / validation {len(verifications)} 件")
     for n in notes:
         print(n)
     if errors:

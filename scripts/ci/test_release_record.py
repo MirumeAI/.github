@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -378,6 +379,122 @@ class VersionsAgainstCoreCopiesTest(unittest.TestCase):
                 code, out = self.run_with_cores(text)
                 self.assertEqual(code, 1, out)
                 self.assertIn(needle, out)
+
+
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class DeploymentV2AndVerificationTest(unittest.TestCase):
+    """配置の記録 schema 2 と検証の記録（P1-05）。 正しい組を置いて、 1 か所ずつ崩す。
+
+    **今の状態は機体ごとに通し番号が一番大きい記録。** 抜け・枝分かれ・指す先の無い記録・
+    項目と全体の結果の食い違いを、 書いた瞬間に止める。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        for d in ("release", "deployment", "validation"):
+            (self.root / d).mkdir()
+        (self.root / "release" / "PJ999-R2026.10.1.yaml").write_text(RELEASE_NEW, encoding="utf-8")
+        self.legacy = {"schema_version": 2, "record_id": "M01-0001", "machine": "M01", "sequence": 1,
+                       "supersedes": None, "status": "LEGACY",
+                       "recorded_by": {"role": "Deployment Owner", "account": "someone"},
+                       "observed": {"working_copies": [{"repository": "core", "commit": "f" * 40, "modified": False}]}}
+        self.active = {"schema_version": 2, "record_id": "M01-0002", "machine": "M01", "sequence": 2,
+                       "supersedes": "M01-0001", "status": "ACTIVE",
+                       "recorded_by": {"role": "Deployment Owner", "account": "someone"},
+                       "deployed_release": "PJ999-R2026.10.1", "rollback_to": "M01-0001",
+                       "config_commit": "a" * 40,
+                       "artifacts": [{"name": "pdm", "version": "0.4.0", "sha256": "b" * 64}],
+                       "model_sha256": "c" * 64}
+        self.vr = {"schema_version": 1, "verification_id": "VR-PJ999-2026-001", "scope": "deployment",
+                   "target": {"deployment": "M01-0002"}, "machine": "M01",
+                   "protocol": {"id": "SMOKE", "version": 1}, "environment": "real-machine",
+                   "date": "2026-10-20", "verifier": {"role": "Deployment Owner", "account": "someone"},
+                   "result": "PASS", "cases": [{"id": "C1", "result": "PASS"}], "evidence": [],
+                   "supersedes": None}
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def put(self, folder: str, name: str, data: dict) -> None:
+        # JSON は YAML として読める
+        (self.root / folder / f"{name}.yaml").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def run_with(self, deployments=None, verifications=None) -> tuple:
+        for d in (deployments if deployments is not None else [self.legacy, self.active]):
+            self.put("deployment", d.get("_file", d.get("record_id")), {k: v for k, v in d.items() if k != "_file"})
+        for v in (verifications if verifications is not None else [self.vr]):
+            self.put("validation", v.get("_file", v.get("verification_id")), {k: x for k, x in v.items() if k != "_file"})
+        env = dict(os.environ, CI_ROOT=str(self.root))
+        r = subprocess.run([sys.executable, str(CHECKER)], capture_output=True, text=True, env=env)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_a_correct_set_passes_and_says_the_current_state(self) -> None:
+        code, out = self.run_with()
+        self.assertEqual(code, 0, out)
+        self.assertIn("機体 1 台・今の状態 LEGACY 0・ACTIVE 1・RETIRED 0", out)
+        self.assertIn("対象 × 手順 1 組・VERIFIED 1・FAILED 0・NOT VERIFIED 0", out)
+
+    def test_bad_deployment_records_are_rejected(self) -> None:
+        cases = {
+            "通し番号に抜け": [self.legacy, self.active, dict(self.legacy, record_id="M02-0002", machine="M02", sequence=2, supersedes="M02-0001")],
+            "record_id は M01-0002": [self.legacy, dict(self.active, record_id="M01-0007", _file="M01-0002")],
+            "ファイル名は record_id と同じ": [self.legacy, dict(self.active, _file="m01-second")],
+            "supersedes は M01-0001": [self.legacy, dict(self.active, supersedes=None)],
+            "status は": [self.legacy, dict(self.active, status="RUNNING")],
+            "LEGACY の記録には observed": [dict(self.legacy, observed={}), self.active],
+            "deployed_release が release/ にありません": [self.legacy, dict(self.active, deployed_release="PJ999-R2099.01.1")],
+            "rollback_to は同じ機体の前の記録": [self.legacy, dict(self.active, rollback_to="M01-0002")],
+            "config_commit は 40 桁": [self.legacy, dict(self.active, config_commit="abc")],
+            "artifacts は name・version・sha256": [self.legacy, dict(self.active, artifacts=[{"name": "pdm", "version": "0.4.0"}])],
+            "model_sha256 は 64 桁": [self.legacy, dict(self.active, model_sha256="c" * 63)],
+            "smoke_test は書きません": [self.legacy, dict(self.active, smoke_test={"result": "PASS"})],
+            "machine は中立の機体の記号": [dict(self.legacy, machine="line-1", record_id="line-1-0001", _file="line-1-0001")],
+            "recorded_by に role と account": [dict(self.legacy, recorded_by={"role": "x"}), self.active],
+            "rolled_back_from は同じ機体の前の記録": [self.legacy, dict(self.active, rolled_back_from="M09-0001")],
+        }
+        for needle, deps in cases.items():
+            with self.subTest(needle=needle):
+                for f in (self.root / "deployment").glob("*.yaml"):
+                    f.unlink()
+                code, out = self.run_with(deployments=deps, verifications=[])
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+
+    def test_bad_verification_records_are_rejected(self) -> None:
+        second = dict(self.vr, verification_id="VR-PJ999-2026-002", supersedes="VR-PJ999-2026-001")
+        cases = {
+            "result が項目の結果と合いません（項目からは FAIL）": [dict(self.vr, cases=[{"id": "C1", "result": "PASS"}, {"id": "C2", "result": "FAIL"}])],
+            "target.deployment が deployment/ の schema 2 の記録にありません": [dict(self.vr, target={"deployment": "M01-0009"})],
+            "machine が配置の記録の機体と違います": [dict(self.vr, machine="M02")],
+            "置き換える記録が 2 つ": [self.vr, second, dict(second, verification_id="VR-PJ999-2026-003")],
+            "置き換えられていない記録が 2 つ": [self.vr, dict(self.vr, verification_id="VR-PJ999-2026-002")],
+            "前の番号の検証の記録": [dict(self.vr, supersedes="VR-PJ999-2026-002"), dict(second, supersedes=None)],
+            "evidence は type: file": [dict(self.vr, evidence=[{"type": "file", "path": "../outside.txt"}])],
+            "verification_id は VR-": [dict(self.vr, verification_id="VR-1", _file="VR-1")],
+            "ファイル名は verification_id と同じ": [dict(self.vr, _file="vr-first")],
+            "verifier に role と account": [dict(self.vr, verifier={"account": "someone"})],
+            "protocol に id と version": [dict(self.vr, protocol={"id": "SMOKE"})],
+            "date は YYYY-MM-DD": [dict(self.vr, date="20 Oct")],
+        }
+        for needle, vrs in cases.items():
+            with self.subTest(needle=needle):
+                for f in (self.root / "validation").glob("*.yaml"):
+                    f.unlink()
+                code, out = self.run_with(verifications=vrs)
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+
+    def test_the_newest_record_decides_the_state(self) -> None:
+        (self.root / "validation" / "evidence.txt").write_text("ok\n", encoding="utf-8")
+        failed = dict(self.vr, verification_id="VR-PJ999-2026-002", supersedes="VR-PJ999-2026-001", result="FAIL",
+                      cases=[{"id": "C1", "result": "FAIL"}], evidence=[{"type": "file", "path": "validation/evidence.txt"},
+                                                                       {"type": "storage", "id": "DS-1", "sha256": "d" * 64}])
+        partial = dict(self.vr, verification_id="VR-PJ999-2026-003", protocol={"id": "FULL", "version": "2"},
+                       result="PARTIAL", cases=[{"id": "C1", "result": "PASS"}, {"id": "C2", "result": "PARTIAL"}])
+        code, out = self.run_with(verifications=[self.vr, failed, partial])
+        self.assertEqual(code, 0, out)
+        self.assertIn("対象 × 手順 2 組・VERIFIED 0・FAILED 1・NOT VERIFIED 1", out)
 
 
 class ItIsWiredIntoTheReusableWorkflowTest(unittest.TestCase):

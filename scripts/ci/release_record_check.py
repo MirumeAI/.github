@@ -16,11 +16,26 @@
     rollback_release  が deployed_release と同じ（戻す先が今の版）
     release_id        がファイル名と違う（どちらが正しいか分からない）
 
-どちらのフォルダも無い Repository では何もしない（Core や platform）。
+根の `versions.yaml`（案件が次の System Release で使う Core の組合せ。選択だけ）も
+見る。schema 2 は形を確かめ、schema 1 は古い形として読むだけにする（P1-04）。
+
+    versions.yaml     選択のほかの項目（配置・検証・移行の経緯）がある
+                      tag と commit の片方だけ・形の違う値（未選択は両方 null）
+                      撮像側を選ばずに PDM だけを選んでいる
+
+Core の写しの道を `CORE_ROOT_IMAGE_ACQUISITION_PDM`・`CORE_ROOT_PDM` に渡した
+ときだけ、タグが注釈つきで書いた commit を指すことと、PDM の行が撮像側のタグの
+commit にある `pdm.lock.json` と同じことも照らす（CI は Private の Core を読めない
+ので、手元の確かめで渡す）。
+
+どれも無い Repository では何もしない（Core や platform）。
 """
 from __future__ import annotations
 
+import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +66,22 @@ DEPLOYMENT_FIELDS = {
 }
 
 SMOKE_RESULTS = ("PASS", "FAIL")
+
+#: `versions.yaml` の知っている形式。 1 は古い形として読むだけ（選択を確かめない）。
+VERSIONS_SCHEMAS = (1, 2)
+#: Core の節と Repository。 **選択のほかの項目は書かない**（配置は deployment/、
+#: 検証は validation/、移行の経緯は Issue）。
+VERSIONS_CORES = {
+    "image_acquisition_pdm": "MirumeAI/Image-Acquisition-PDM",
+    "pdm": "MirumeAI/PDM",
+}
+#: 手元の確かめで Core の写しの道を渡す環境の変数。
+CORE_ROOT_ENV = {
+    "image_acquisition_pdm": "CORE_ROOT_IMAGE_ACQUISITION_PDM",
+    "pdm": "CORE_ROOT_PDM",
+}
+TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
 def _records(d: Path) -> list:
@@ -97,13 +128,104 @@ def _check_schema(name: str, data: dict, errors: list) -> None:
             f"（知っているのは {', '.join(map(str, SCHEMA_VERSIONS))}）")
 
 
+def _git(root: str, *args: str) -> "str | None":
+    r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _verify_cores(chosen: dict, roots: dict, errors: list) -> None:
+    """Core の写しで、 タグ・commit と、 PDM の行と撮像側の lock を照らす。"""
+    for key, (tag, commit) in chosen.items():
+        root = roots[key]
+        if _git(root, "cat-file", "-t", f"refs/tags/{tag}") != "tag":
+            errors.append(f"versions.yaml: {key} の {tag} が Core の写しに注釈つきの"
+                          "タグとしてありません（タグを取り直してから流してください）")
+        elif _git(root, "rev-parse", f"refs/tags/{tag}^{{commit}}") != commit:
+            errors.append(f"versions.yaml: {key}.commit が {tag} の指す commit と違います")
+    ia = chosen.get("image_acquisition_pdm")
+    if not ia:
+        return
+    # **組合せの正本は撮像側のタグの commit にある lock。** ここは写しなので、
+    #   lock が無いタグでは組合せを確かめられない。
+    text = _git(roots["image_acquisition_pdm"], "show", f"{ia[1]}:pdm.lock.json")
+    if text is None:
+        errors.append(f"versions.yaml: 撮像側の {ia[0]} の commit に pdm.lock.json が無く、"
+                      "組合せを確かめられません")
+        return
+    try:
+        lock = json.loads(text)["pdm"]
+    except (ValueError, KeyError, TypeError):
+        errors.append(f"versions.yaml: 撮像側の {ia[0]} の pdm.lock.json を読めません")
+        return
+    pdm = chosen.get("pdm")
+    if pdm and (pdm[0] != lock.get("tag") or pdm[1] != lock.get("commit")):
+        errors.append(f"versions.yaml: pdm の行が撮像側の {ia[0]} の pdm.lock.json"
+                      f"（{lock.get('tag')}）と違います")
+
+
+def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
+    d = _load(p, errors, yaml)
+    if d is None:
+        return
+    v = d.get("schema_version")
+    if v == 1:
+        notes.append("versions.yaml: schema_version 1（古い形。 Core の選択は確かめない）")
+        return
+    if v not in VERSIONS_SCHEMAS:
+        errors.append(f"versions.yaml: schema_version の {v!r} は知らない形式です"
+                      f"（知っているのは {', '.join(map(str, VERSIONS_SCHEMAS))}）")
+        return
+    extra = sorted(str(k) for k in d if k not in ("schema_version", *VERSIONS_CORES))
+    if extra:
+        errors.append(f"versions.yaml: 選択のほかの項目があります（{', '.join(extra)}）。"
+                      " 配置・検証・移行の経緯は書きません")
+    chosen = {}
+    for key, repo in VERSIONS_CORES.items():
+        node = d.get(key)
+        if not isinstance(node, dict):
+            errors.append(f"versions.yaml: {key} の節がありません")
+            continue
+        unknown = sorted(str(k) for k in node if k not in ("repository", "tag", "commit"))
+        if unknown:
+            errors.append(f"versions.yaml: {key} に知らない項目があります（{', '.join(unknown)}）")
+        if node.get("repository") != repo:
+            errors.append(f"versions.yaml: {key}.repository は {repo} です")
+        tag, commit = node.get("tag"), node.get("commit")
+        if tag is None and commit is None:
+            continue                                     # 未選択
+        # **片方だけ・形の違う値を黙って受け付けない。**
+        if not (isinstance(tag, str) and TAG_RE.fullmatch(tag)):
+            errors.append(f"versions.yaml: {key}.tag は Product Release のタグ（vX.Y.Z）に"
+                          "します（未選択なら tag と commit の両方を null）")
+        elif not (isinstance(commit, str) and SHA_RE.fullmatch(commit)):
+            errors.append(f"versions.yaml: {key}.commit は 40 桁の commit SHA にします"
+                          "（未選択なら tag と commit の両方を null）")
+        else:
+            chosen[key] = (tag, commit)
+    if "pdm" in chosen and "image_acquisition_pdm" not in chosen:
+        errors.append("versions.yaml: 撮像側を選ばずに PDM だけを選べません"
+                      "（PDM は撮像側のタグの pdm.lock.json に従います）")
+    if not chosen:
+        notes.append("versions.yaml: 未選択")
+        return
+    names = "・".join(f"{k} {t}" for k, (t, _) in chosen.items())
+    roots = {k: os.environ.get(CORE_ROOT_ENV[k], "") for k in chosen}
+    if not all(roots.values()):
+        notes.append(f"versions.yaml: {names}（タグ・commit・lock は Core の写しを"
+                     f" {'・'.join(CORE_ROOT_ENV[k] for k in chosen)} に渡したときだけ照らす）")
+        return
+    _verify_cores(chosen, roots, errors)
+    notes.append(f"versions.yaml: {names}（タグ・commit・lock を Core の写しで照らした）")
+
+
 def main() -> int:
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     rel_dir, dep_dir = root / "release", root / "deployment"
+    versions = root / "versions.yaml"
     releases, deployments = _records(rel_dir), _records(dep_dir)
 
-    if not rel_dir.is_dir() and not dep_dir.is_dir():
-        print("release/ と deployment/ が無いので何もしません。")
+    if not rel_dir.is_dir() and not dep_dir.is_dir() and not versions.is_file():
+        print("release/・deployment/・versions.yaml が無いので何もしません。")
         return 0
 
     # **検査できないのに OK と言わない。**
@@ -112,7 +234,7 @@ def main() -> int:
     try:
         import yaml
     except ImportError:
-        if not releases and not deployments:
+        if not releases and not deployments and not versions.is_file():
             print("記録がまだありません。")
             return 0
         print("PyYAML が無いので記録を検査できません。"
@@ -121,7 +243,11 @@ def main() -> int:
         return 2
 
     errors: list = []
+    notes: list = []
     known_ids = set()
+
+    if versions.is_file():
+        _check_versions(versions, errors, notes, yaml)
 
     for p in releases:
         d = _load(p, errors, yaml)
@@ -167,6 +293,8 @@ def main() -> int:
                     f" {' / '.join(SMOKE_RESULTS)} のどちらかにしてください")
 
     print(f"検査: release {len(releases)} 件 / deployment {len(deployments)} 件")
+    for n in notes:
+        print(n)
     if errors:
         print(f"\nNG: {len(errors)} 件", file=sys.stderr)
         for e in errors:

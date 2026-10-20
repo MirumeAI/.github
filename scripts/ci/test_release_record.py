@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -235,6 +236,148 @@ sys.meta_path.insert(0, _B())
             f.unlink()
         code, out = self._run_without_yaml(self.root)
         self.assertEqual(code, 0, out[-400:])
+
+
+VERSIONS_UNSELECTED = """schema_version: 2
+image_acquisition_pdm: {repository: MirumeAI/Image-Acquisition-PDM, tag: null, commit: null}
+pdm: {repository: MirumeAI/PDM, tag: null, commit: null}
+"""
+
+
+def _versions(ia=(None, None), pdm=(None, None), extra="") -> str:
+    def v(x):
+        return "null" if x is None else x
+    return ("schema_version: 2\n"
+            f"image_acquisition_pdm: {{repository: MirumeAI/Image-Acquisition-PDM, tag: {v(ia[0])}, commit: {v(ia[1])}}}\n"
+            f"pdm: {{repository: MirumeAI/PDM, tag: {v(pdm[0])}, commit: {v(pdm[1])}}}\n" + extra)
+
+
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class VersionsYamlTest(unittest.TestCase):
+    """`versions.yaml` は選択だけ。 **形の違う選択を黙って受け付けない**（P1-04）。"""
+
+    A40, B40 = "a" * 40, "b" * 40
+
+    def _run(self, text: str, env_extra: "dict | None" = None) -> tuple:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.yaml").write_text(text, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=td, **(env_extra or {}))
+            for k in ("CORE_ROOT_IMAGE_ACQUISITION_PDM", "CORE_ROOT_PDM"):
+                if not (env_extra and k in env_extra):
+                    env.pop(k, None)
+            r = subprocess.run([sys.executable, str(CHECKER)],
+                               capture_output=True, text=True, env=env)
+            return r.returncode, r.stdout + r.stderr
+
+    def test_unselected_passes(self) -> None:
+        code, out = self._run(VERSIONS_UNSELECTED)
+        self.assertEqual(code, 0, out)
+        self.assertIn("versions.yaml: 未選択", out)
+
+    def test_the_template_passes(self) -> None:
+        tpl = (HERE.parents[1] / "templates" / "customer-project" / "versions.yaml")
+        code, out = self._run(tpl.read_text(encoding="utf-8"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("versions.yaml: 未選択", out)
+
+    def test_a_selection_passes_the_form_and_says_what_it_did_not_check(self) -> None:
+        code, out = self._run(_versions(("v1.2.3", self.A40), ("v0.4.0", self.B40)))
+        self.assertEqual(code, 0, out)
+        self.assertIn("Core の写しを", out)
+
+    def test_the_old_form_is_read_but_not_judged(self) -> None:
+        code, out = self._run("schema_version: 1\npdm: {repository: MirumeAI/PDM}\n")
+        self.assertEqual(code, 0, out)
+        self.assertIn("schema_version 1（古い形", out)
+
+    def test_bad_selections_are_rejected(self) -> None:
+        cases = {
+            "schema_version: 3\n": "知らない形式",
+            _versions(extra="migration: {status: x}\n"): "選択のほかの項目",
+            _versions(("v1.2.3", None)): "commit は 40 桁",
+            _versions((None, self.A40)): "tag は Product Release のタグ",
+            _versions(("v1.2.3.dev0", self.A40)): "tag は Product Release のタグ",
+            _versions(("v1.2.3", self.A40.upper())): "commit は 40 桁",
+            _versions(pdm=("v0.4.0", self.B40)): "PDM だけを選べません",
+            _versions().replace("MirumeAI/PDM", "MirumeAI/Other"): "pdm.repository は MirumeAI/PDM",
+            _versions().replace("tag: null, commit: null}\npdm", "tag: null, commit: null, ref: main}\npdm"):
+                "知らない項目",
+        }
+        for text, needle in cases.items():
+            with self.subTest(needle=needle):
+                code, out = self._run(text)
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+
+
+@unittest.skipIf(_needs_yaml() or shutil.which("git") is None, "PyYAML か git が無い")
+class VersionsAgainstCoreCopiesTest(unittest.TestCase):
+    """Core の写しを渡したとき、 タグ・commit と、 PDM の行と撮像側の lock を照らす。"""
+
+    GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(self, root: Path, *args: str) -> str:
+        r = subprocess.run(["git", "-C", str(root), "-c", "commit.gpgsign=false",
+                            "-c", "tag.gpgsign=false", *args], capture_output=True, text=True,
+                           env=dict(os.environ, **self.GIT_ENV), check=True)
+        return r.stdout.strip()
+
+    def commit(self, root: Path, name: str, body: str) -> str:
+        (root / name).write_text(body, encoding="utf-8")
+        self.git(root, "add", name)
+        self.git(root, "commit", "-q", "-m", name)
+        return self.git(root, "rev-parse", "HEAD")
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        self.pdm, self.ia = base / "pdm", base / "ia"
+        for r in (self.pdm, self.ia):
+            r.mkdir()
+            self.git(r, "init", "-q")
+        self.p1 = self.commit(self.pdm, "a.txt", "1\n")
+        self.git(self.pdm, "tag", "-a", "v1.2.3", "-m", "Product Release v1.2.3")
+        self.p2 = self.commit(self.pdm, "a.txt", "2\n")
+        self.git(self.pdm, "tag", "-a", "v1.2.4", "-m", "Product Release v1.2.4")
+        self.git(self.pdm, "tag", "v1.2.5")                      # 注釈なし
+        self.i1 = self.commit(self.ia, "a.txt", "1\n")
+        self.git(self.ia, "tag", "-a", "v0.1.0", "-m", "Product Release v0.1.0")  # lock 無し
+        lock = ('{"schema_version": 1, "pdm": {"version": "1.2.3", "tag": "v1.2.3", '
+                f'"tag_object": "{"c" * 40}", "commit": "{self.p1}", '
+                '"wheel": "pdm-1.2.3-cp310-cp310-linux_x86_64.whl", '
+                f'"wheel_sha256": "{"d" * 64}", "sha256sums_sha256": "{"e" * 64}"}}}}\n')
+        self.i2 = self.commit(self.ia, "pdm.lock.json", lock)
+        self.git(self.ia, "tag", "-a", "v0.2.0", "-m", "Product Release v0.2.0")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def run_with_cores(self, text: str) -> tuple:
+        return VersionsYamlTest._run(self, text, {"CORE_ROOT_IMAGE_ACQUISITION_PDM": str(self.ia),
+                                                  "CORE_ROOT_PDM": str(self.pdm)})
+
+    def test_a_matching_selection_passes(self) -> None:
+        code, out = self.run_with_cores(_versions(("v0.2.0", self.i2), ("v1.2.3", self.p1)))
+        self.assertEqual(code, 0, out)
+        self.assertIn("Core の写しで照らした", out)
+        code, out = self.run_with_cores(_versions(("v0.2.0", self.i2)))
+        self.assertEqual(code, 0, out)
+
+    def test_mismatches_are_rejected(self) -> None:
+        cases = {
+            _versions(("v0.2.0", self.i1), ("v1.2.3", self.p1)): "image_acquisition_pdm.commit が v0.2.0 の指す commit と違います",
+            _versions(("v0.2.0", self.i2), ("v1.2.4", self.p2)): "撮像側の v0.2.0 の pdm.lock.json（v1.2.3）と違います",
+            _versions(("v0.2.0", self.i2), ("v1.2.5", self.p2)): "注釈つきのタグとしてありません",
+            _versions(("v0.1.0", self.i1), ("v1.2.3", self.p1)): "pdm.lock.json が無く",
+            _versions(("v0.9.9", self.i2)): "注釈つきのタグとしてありません",
+        }
+        for text, needle in cases.items():
+            with self.subTest(needle=needle):
+                code, out = self.run_with_cores(text)
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
 
 
 class ItIsWiredIntoTheReusableWorkflowTest(unittest.TestCase):

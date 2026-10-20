@@ -47,9 +47,11 @@
           実在して許されているか。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
-    S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 その証拠の
+    S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
           ファイル）。 **記録には値を書かない**ので、 宣言に無い IPv4 と `trig_` で始まる
-          語は不合格（説明の .md の中は参考だけ）。 下のリンクは読まずに断る。 検証の記録の
+          語は不合格。 参考だけにするのは雛形の 3 つの README.md の中だけで、 手順と証拠の
+          .md も照らす。 鍵 `version` の値（package の版）は IPv4 とみなさない。 空でない
+          .gitkeep も照らす。 下のリンクは読まずに断る。 検証の記録の
           ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、 記録どうしと、
           `release/` の System Release の ID の記号（`<記号>-R<年>.<月>.<番号>.yaml`）と同じか
           （宣言には案件の記号の欄が無いので、 同じ Repository の記録どうしで照らす）
@@ -141,6 +143,12 @@ S4_FILES = ("versions.yaml",)
 RECORD_DIRS = ("deployment/", "validation/")
 _VR_FILE = re.compile(r"VR-([A-Z0-9]+)-[0-9]{4}-[0-9]{3}\.ya?ml")
 _SR_FILE = re.compile(r"(.+)-R[0-9]{4}\.[0-9]{2}\.[0-9]+\.ya?ml")
+#: S5 で参考だけにする説明（雛形の README）。 **手順と証拠の .md は、 値を書かない決まりなので照らす。**
+RECORD_NOTES = ("deployment/README.md", "validation/README.md", "validation/protocols/README.md")
+#: 記録の中の版（鍵 `version` の値）。 4 つの数を点でつないだ package の版（NVIDIA の部品など）は
+#: IPv4 と同じ形なので、 S5 では IPv4 とみなさない（棚卸しの記録の package の版。 鍵が version のときだけ）。
+_RECORD_VERSION = re.compile(r"(?<![A-Za-z0-9_-])(version[\"']?[ \t]*:[ \t]*)([\"']?)"
+                             r"[0-9][0-9A-Za-z.+!_-]*\2")
 
 #: Core の PLC の表の鍵（トリガごとの信号の名前）。 名前ではない。 **一覧で持つ**
 #: （道の形で信号とみなすと、 信号の位置に置いた別の案件の名前を見逃す）。 Core が
@@ -1073,14 +1081,17 @@ class Checker:
             if os.path.islink(p):
                 self.add("S5-link", rel)
                 continue
-            if not p.is_file() or rel.endswith("/.gitkeep"):
+            if not p.is_file() or (rel.endswith("/.gitkeep") and p.stat().st_size == 0):
                 continue
             self.counts["records"] += 1
             text = _read(root, rel)
-            if rel.endswith(".md"):
+            if rel in RECORD_NOTES:
+                # **参考だけ**: 置き場の説明（雛形の README）。 手順と証拠の .md は記録と同じに照らす
                 self.text_lines(rel, text, "note-endpoint", "note-name", self.notes)
             else:
-                self.text_lines(rel, text, "S5-endpoint", "S5-name", self.findings)
+                # 版（鍵 version の値）は IPv4 とみなさない。 行は変えないので、 行の番号はそのまま
+                self.text_lines(rel, _RECORD_VERSION.sub(r"\1\2v\2", text),
+                                "S5-endpoint", "S5-name", self.findings)
         self.record_codes()
 
     def record_codes(self) -> None:
@@ -1316,7 +1327,8 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
         print(f"注意: {cap}.enabled が true か false で書かれていないので、 使うかどうかを"
               f"宣言と照らしていません（推測しません）  file={masks.path(rel)}")
     if notes:
-        print(f"参考（強制しません。 deploy/ と説明の .md の中の値を照らした結果 {len(notes)} か所）:")
+        print(f"参考（強制しません。 deploy/ と説明の .md（記録の置き場では雛形の README.md）の"
+              f"中の値を照らした結果 {len(notes)} か所）:")
         for f in notes[:MAX_SHOWN]:
             print("  " + _show(f, masks, "参考", NOTE))
 

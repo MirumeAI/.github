@@ -70,8 +70,8 @@ python scripts/ci/customer_isolation_check.py --root <顧客 Repository> --repor
 - S2: PLC・NAS・AI を使うかが宣言と同じか。PLC を使わないなら、`plc` は `{"enabled": false}` だけ。`nas.enabled` を書いていなければ、照らさずにそう言います（推測しません）
 - S3: 構成の名前（`_profile`）・検査の性質（`flow` か `inspection` の一方）・カメラ・面が宣言の中か
 - S4: `deploy/` と `versions.yaml` が触れる設定のファイル（`config/...` の道。`./`・`../` で始まるものも含む。それと `config` で始まる `.json` の名前）が、実在して許されているか
-- S5: 記録（`deployment/`・`validation/`。配置の記録・検証の記録と、その証拠のファイル）。記録には値を書かないので、宣言に無い IPv4 と `trig_` で始まる語は不合格（説明の `.md` の中は参考だけ）。下のリンクは読まずに断る。検証の記録の ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、記録どうしと、`release/` の System Release の ID の記号と同じか
-- 参考（不合格にしない）: `deploy/` の中の値と、説明の `.md` の中の値。強制するかは、既存の案件で報告だけの形で流した結果を見て決めます
+- S5: 記録（`deployment/`・`validation/`。配置の記録・検証の記録と、その手順と証拠のファイル）。記録には値を書かないので、宣言に無い IPv4 と `trig_` で始まる語は不合格。参考だけにするのは雛形の 3 つの `README.md`（`deployment/`・`validation/`・`validation/protocols/`）の中だけで、手順と証拠の `.md` も照らす。鍵 `version` の値（package の版）は IPv4 とみなさない。空でない `.gitkeep` も照らす。下のリンクは読まずに断る。検証の記録の ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、記録どうしと、`release/` の System Release の ID の記号と同じか
+- 参考（不合格にしない）: `deploy/` の中の値と、説明の `.md` の中の値（記録の置き場では、雛形の 3 つの `README.md` だけ）。強制するかは、既存の案件で報告だけの形で流した結果を見て決めます
 
 宣言の例（値は文書用の架空のもの）:
 

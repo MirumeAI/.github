@@ -121,10 +121,16 @@ def _addresses(node) -> "list[str]":
 
 B_ADDRS = _addresses(b_plc())
 
+#: S5 の場面の値（記録の中の、 宣言に無い IP）。
+S5_IPS = tuple(_ip(n, h) for n, h in ((1, 77), (2, 9), (1, 78), (1, 79), (1, 81), (2, 10)))
+#: 4 つの数の package の版（鍵 version の値なら版、 ほかの鍵の値なら IP とみなす）。 _ip と同じく、
+#: 実行するときに組み立てる（ソースに IPv4 の形を置かない）。
+VERSION4 = ".".join(("9", "1", "0", "70"))
+
 #: 出力に出てはいけない値（どの場面でも見る）。
 NOT_SHOWN = (A_PROFILE, A_FLOW, A_IP, A_SERIAL, A_TRIGGER, B_PROFILE, B_FLOW, *B_IPS,
              *B_SERIALS, B_PLC_HOST, *B_TRIGGERS, B_GROUP, *B_ADDRS, CREDENTIAL, TOKEN,
-             NUMBER_KEY, HEX_KEY, HEX_VALUE, NUMBER_SERIAL, FLOAT_SERIAL)
+             NUMBER_KEY, HEX_KEY, HEX_VALUE, NUMBER_SERIAL, FLOAT_SERIAL, *S5_IPS, VERSION4)
 
 
 def a_config() -> dict:
@@ -581,6 +587,7 @@ def scenarios() -> "list[Scenario]":
            "status: LEGACY\nobserved: {note: loopback 127.0.0.1}\n")
     add("S5a. 記録に一般の値と記号だけなら通る", a_with(**{
         "deployment__M01-0001.yaml": rec, "deployment__README.md": "# d\n",
+        "deployment__.gitkeep": "",
         "validation__VR-PJ001-2026-001.yaml": "cases: [{id: C1, result: PASS}]\n"}), 0)
     add("S5b. 配置の記録の中の宣言に無い IP は不合格", a_with(**{
         "deployment__M01-0001.yaml": rec + f"peer: '{_ip(1, 77)}'\n"}), 1, {"S5-endpoint"})
@@ -603,6 +610,30 @@ def scenarios() -> "list[Scenario]":
         "validation__VR-PJ001-2026-001.yaml": "x: 1\n",
         "validation__VR-PJ001-2026-002.yaml": "x: 1\n",
         "release__PJ001-R2026.10.1.yaml": "x: 1\n"}), 0)
+    add("S5j. 手順の .md（validation/protocols/）の中の宣言に無い IP は不合格", a_with(**{
+        "validation__protocols__README.md": "# p\n",
+        "validation__protocols__VP-01.md": f"手順 {_ip(1, 79)}\n"}), 1, {"S5-endpoint"})
+    add("S5k. 証拠の .md の中の宣言に無い trig_ の語は不合格", a_with(**{
+        "validation__evidence__run.md": f"{B_TRIGGERS[0]}\n"}), 1, {"S5-name"})
+    add("S5l. 鍵 version の値の 4 つの数の版は IP とみなさない（棚卸しの package）", a_with(**{
+        "deployment__M01-0001.yaml": rec + "packages:\n"
+        f'  - {{ name: "a", version: "{VERSION4}", sha256: null, editable: false }}\n'
+        f"  - {{name: b, version: {VERSION4}}}\n"
+        f'  - {{"name": "c", "version": "{VERSION4}"}}\n'}), 0)
+    add("S5m. 鍵 version の外の 4 つの数は IP とみなす", a_with(**{
+        "deployment__M01-0001.yaml": rec + f"revision: '{VERSION4}'\n"}), 1, {"S5-endpoint"})
+    add("S5n. 版と同じ行の宣言に無い IP は不合格", a_with(**{
+        "deployment__M01-0001.yaml": rec + "packages:\n"
+        f'  - {{ name: "a", version: "{VERSION4}", note: "{_ip(1, 81)}" }}\n'}), 1,
+        {"S5-endpoint"})
+    add("S5o. 中身のある .gitkeep も照らす", a_with(**{
+        "validation__evidence__.gitkeep": f"{_ip(2, 10)}\n"}), 1, {"S5-endpoint"})
+    add("S5p. 記録の dir そのもののリンクは読まずに断る", a_with(**{
+        "deployment": Link("config")}), 1, {"S5-link"})
+    add("S5q. release/ に案件の記号が 2 つあれば、 検証の記録を出す", a_with(**{
+        "validation__VR-PJ001-2026-001.yaml": "x: 1\n",
+        "release__PJ001-R2026.10.1.yaml": "x: 1\n",
+        "release__PJ002-R2026.10.1.yaml": "x: 1\n"}), 1, {"S5-project-code"})
     return s
 
 
@@ -937,6 +968,20 @@ MUTATIONS = [
      'rel in S4_FILES or rel.startswith("deploy/")'),
     ("S1: align_reference.txt を根でなくても許す",
      "if len(parts) == 1 and parts[0] in PDM_FIXED:", "if parts[-1] in PDM_FIXED:"),
+    ("S5: 記録の中の値を参考に落とす",
+     '"S5-endpoint", "S5-name", self.findings', '"note-endpoint", "note-name", self.notes'),
+    ("S5: 雛形の README の外の .md も参考にする",
+     "            if rel in RECORD_NOTES:\n", '            if rel.endswith(".md"):\n'),
+    ("S5: 鍵 version の外の値も版とみなす",
+     'r"(?<![A-Za-z0-9_-])(version', 'r"(?<![A-Za-z0-9_-])((?:version|revision)'),
+    ("S5: 版と同じ行の残りも外す",
+     'r"[0-9][0-9A-Za-z.+!_-]*\\2")', 'r"[0-9][^\\n]*")'),
+    ("S5: 中身のある .gitkeep を飛ばす",
+     '(rel.endswith("/.gitkeep") and p.stat().st_size == 0)', 'rel.endswith("/.gitkeep")'),
+    ("S5: 記録の dir そのもののリンクを見ない",
+     ' and rel not in ("deployment", "validation"):', ":"),
+    ("S5: 検証の記録の案件の記号を照らさない",
+     "        self.record_codes()\n", ""),
 ]
 
 

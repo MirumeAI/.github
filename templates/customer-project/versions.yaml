@@ -1,15 +1,22 @@
-# この案件が使う Core の組合せ。
+# この案件が次の System Release で使う Core の組合せ（選択だけ）。
 #
-# **浮動 Branch 名や latest で本番構成を管理しない。** Commit SHA で固定する。
-# どの版で動いているかが分からないと、 不具合の再現も切り戻しもできない。
-schema_version: 1
-
-pdm:
-  repository: MirumeAI/PDM
-  ref: main
-  commit: <40 桁の commit SHA>
+# **浮動 Branch 名や latest で本番構成を管理しない。** Product Release のタグと、
+# タグが指す commit で固定する。 どの版で動いているかが分からないと、 不具合の
+# 再現も切り戻しもできない。 配置（どの機体で何が動いているか）・検証の状態・
+# 移行の経緯はここに書かない（deployment/・validation/・Issue）。
+#
+# - 使う Core を決めるまでは、 tag と commit の両方を null（未選択）にする
+# - pdm の行は、 撮像側のタグの commit にある pdm.lock.json と同じにする（組合せの
+#   正本は撮像側の lock で、 ここは写し）。 撮像側を選ばずに pdm だけを選ばない
+# - 確かめる道具は MirumeAI/.github の scripts/ci/release_record_check.py
+schema_version: 2
 
 image_acquisition_pdm:
   repository: MirumeAI/Image-Acquisition-PDM
-  ref: main
-  commit: <40 桁の commit SHA>
+  tag: null
+  commit: null
+
+pdm:
+  repository: MirumeAI/PDM
+  tag: null
+  commit: null

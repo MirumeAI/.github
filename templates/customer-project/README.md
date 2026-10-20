@@ -43,7 +43,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
 
-1. `versions.yaml` に、使う Core の commit SHA を書く
+1. `versions.yaml` は未選択（`tag` と `commit` が `null`）で始まる。使う Core を決めたら、Product Release のタグと、タグが指す commit を書く（`pdm` の行は撮像側のタグの `pdm.lock.json` と同じにする）
 2. `config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で機体へ配る。同じ Pull Request で `customer-profile.yaml` も書く（下の「顧客の間の混入の検査を始める」）
 3. 現場で稼働したら、分類の `production_impact` と `governance_profile` を `direct` と `strict` に変える（Organization の管理者が行う）。稼働前は `none` と `standard`
 

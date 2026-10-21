@@ -119,6 +119,11 @@ MODEL_VERSION_RE = re.compile(r"([A-Z0-9]+)-M[0-9]{4}\.[0-9]{2}\.[0-9]+")
 DATASET_ID_RE = {"training": re.compile(r"DS-([A-Z0-9]+)-v[0-9]+"),
                  "evaluation": re.compile(r"DS-([A-Z0-9]+)-eval-v[0-9]+")}
 DATASET_FIELDS = ("id", "files", "bytes", "manifest_sha256")
+#: 知らせの文で言う決まった形（**値は出さない**。 欄に道などを書いても、 出力に出さない）。
+FORMS = {"release_id": "<案件の記号>-R<年>.<月 2 桁>.<番号>",
+         "inspection.version": "<案件の記号>-M<年>.<月 2 桁>.<番号>",
+         "dataset.training.id": "DS-<案件の記号>-v<番号>",
+         "dataset.evaluation.id": "DS-<案件の記号>-eval-v<番号>"}
 
 
 def _records(d: Path) -> list:
@@ -173,14 +178,19 @@ def _same_code(name: str, label: str, value, rx, code, errors: list) -> None:
         return                                  # 無いことは _check_fields が言う
     m = rx.fullmatch(str(value))
     if not m:
-        errors.append(f"{name}: {label} の {value!r} は決まった名前の形ではありません")
+        errors.append(f"{name}: {label} が決まった形（{FORMS[label]}）ではありません")
     elif code and m.group(1) != code:
         errors.append(f"{name}: {label} の案件の記号が release_id と違います（別の案件の物を混ぜない）")
 
 
 def _check_release_data(name: str, d: dict, errors: list) -> None:
     """採用したモデルと Dataset の版・数・大きさ・manifest の sha256（P1-07）。"""
-    m = RELEASE_ID_RE.fullmatch(str(d.get("release_id") or ""))
+    rid = d.get("release_id")
+    m = RELEASE_ID_RE.fullmatch(str(rid or ""))
+    if rid not in (None, "") and not m:
+        # **形が違うと案件の記号を取り出せず、 下の照らしが黙って外れる。** そこで記録ごと止める
+        errors.append(f"{name}: release_id が決まった形（{FORMS['release_id']}）ではありません"
+                      "（案件の記号を照らせない）")
     code = m.group(1) if m else None
     ins = d.get("inspection")
     if isinstance(ins, dict):

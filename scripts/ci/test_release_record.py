@@ -109,6 +109,12 @@ class ReleaseDataTest(_Records):
             ("Dataset の欄が無い", ("files: 1200, ", ""), "dataset.training.files がありません"),
             ("使わない古い欄", ("dataset:\n", "dataset:\n  manifest_sha256: cafebabe\n"),
              "dataset.manifest_sha256 は使いません"),
+            ("学習用の案件の記号", ("id: DS-PJ999-v3", "id: DS-PJ998-v3"), "dataset.training.id の案件の記号"),
+            # **release_id が決まった形でないと、 案件の記号の照らしが黙って外れる**ので、 記録ごと止める
+            ("release_id の月が 1 桁", ("release_id: PJ999-R2026.10.1", "release_id: PJ999-R2026.1.1"),
+             "release_id が決まった形"),
+            ("release_id の記号が小文字", ("release_id: PJ999-R2026.10.1", "release_id: pj999-R2026.10.1"),
+             "release_id が決まった形"),
         ]
         for what, (old, new), msg in cases:
             with self.subTest(what):
@@ -119,6 +125,19 @@ class ReleaseDataTest(_Records):
                 self.assertIn(msg, out)
         self.new.write_text(RELEASE_NEW, encoding="utf-8")
         self.assertEqual(self.run_check()[0], 0)
+
+    def test_the_messages_do_not_show_the_values(self) -> None:
+        """形の違う欄に道や対応表を書いても、 知らせの文に出さない（欄の名前と決まった形だけを言う）。"""
+        mark = "ZZ-MARK-NOT-SHOWN"
+        for old in ("version: PJ999-M2026.10.1", "id: DS-PJ999-v3", "release_id: PJ999-R2026.10.1"):
+            with self.subTest(old):
+                key = old.split(":")[0]
+                self.new.write_text(RELEASE_NEW.replace(old, f"{key}: {mark}"), encoding="utf-8")
+                code, out = self.run_check()
+                self.assertEqual(code, 1, out)
+                lines = [ln for ln in out.splitlines() if "決まった形" in ln]
+                self.assertTrue(lines, out)
+                self.assertFalse([ln for ln in lines if mark in ln], "形の違う値を知らせの文に出した")
 
 
 @unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")

@@ -23,15 +23,18 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "release_record_check.py"
 
-RELEASE_NEW = """schema_version: 1
+#: 採用したモデルの版と、 学習用・評価用の Dataset の ID・数・大きさ・manifest の sha256（P1-07）。
+RELEASE_NEW = f"""schema_version: 1
 release_id: PJ999-R2026.10.1
-software: {versions_ref: versions.yaml, versions_commit: abc1234}
-inspection: {version: inspection-v12, model_sha256: deadbeef,
-             config_commit: abc1234, calibration: 良品100枚}
-dataset: {training: DS-v3, evaluation: DS-eval-v2, manifest_sha256: cafebabe}
-runtime: {os: Ubuntu 22.04, python: "3.10"}
-hardware: {cameras: 5}
-validation: {report: r.md, acceptance: a.md, smoke_test: 確認済}
+software: {{versions_ref: versions.yaml, versions_commit: abc1234}}
+inspection: {{version: PJ999-M2026.10.1, model_sha256: "{'c' * 64}", model_files: 156,
+             model_bytes: 5400000000, config_commit: abc1234, calibration: 良品100枚}}
+dataset:
+  training: {{id: DS-PJ999-v3, files: 1200, bytes: 2100000000, manifest_sha256: "{'a' * 64}"}}
+  evaluation: {{id: DS-PJ999-eval-v2, files: 300, bytes: 500000000, manifest_sha256: "{'b' * 64}"}}
+runtime: {{os: Ubuntu 22.04, python: "3.10"}}
+hardware: {{cameras: 5}}
+validation: {{report: r.md, acceptance: a.md, smoke_test: 確認済}}
 """
 RELEASE_OLD = RELEASE_NEW.replace("PJ999-R2026.10.1", "PJ999-R2026.09.2")
 DEPLOYMENT = """schema_version: 1
@@ -80,6 +83,61 @@ class _Records(unittest.TestCase):
         r = subprocess.run([sys.executable, str(CHECKER)],
                            capture_output=True, text=True, env=env)
         return r.returncode, r.stdout + r.stderr
+
+
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class ReleaseDataTest(_Records):
+    """System Release の記録の、 採用したモデルと Dataset（P1-07）。 1 か所ずつ崩す。"""
+
+    def test_bad_model_and_dataset_entries_are_rejected(self) -> None:
+        a = "a" * 64
+        cases = [
+            ("モデルの版の形", ("version: PJ999-M2026.10.1", "version: inspection-v12"), "inspection.version"),
+            ("モデルの版の案件の記号", ("version: PJ999-M2026.10.1", "version: PJ998-M2026.10.1"),
+             "inspection.version の案件の記号"),
+            ("モデルの sha256", (f'model_sha256: "{"c" * 64}"', "model_sha256: deadbeef"), "inspection.model_sha256"),
+            ("モデルのファイルの数", ("model_files: 156", "model_files: 0"), "inspection.model_files"),
+            ("真偽を数として読まない", ("model_bytes: 5400000000", "model_bytes: true"), "inspection.model_bytes"),
+            ("古い形の Dataset",
+             (f'training: {{id: DS-PJ999-v3, files: 1200, bytes: 2100000000, manifest_sha256: "{a}"}}',
+              "training: DS-v3"), "dataset.training は"),
+            ("学習用に評価用の ID", ("id: DS-PJ999-v3", "id: DS-PJ999-eval-v3"), "dataset.training.id"),
+            ("評価用の案件の記号", ("id: DS-PJ999-eval-v2", "id: DS-PJ998-eval-v2"), "dataset.evaluation.id の案件の記号"),
+            ("Dataset のファイルの数", ("files: 300", "files: -1"), "dataset.evaluation.files"),
+            ("数として読まれる sha256", (f'manifest_sha256: "{a}"', "manifest_sha256: 1234"),
+             "dataset.training.manifest_sha256"),
+            ("Dataset の欄が無い", ("files: 1200, ", ""), "dataset.training.files がありません"),
+            ("使わない古い欄", ("dataset:\n", "dataset:\n  manifest_sha256: cafebabe\n"),
+             "dataset.manifest_sha256 は使いません"),
+            ("学習用の案件の記号", ("id: DS-PJ999-v3", "id: DS-PJ998-v3"), "dataset.training.id の案件の記号"),
+            # **release_id が決まった形でないと、 案件の記号の照らしが黙って外れる**ので、 記録ごと止める
+            ("release_id の月が 1 桁", ("release_id: PJ999-R2026.10.1", "release_id: PJ999-R2026.1.1"),
+             "release_id が決まった形"),
+            ("release_id の記号が小文字", ("release_id: PJ999-R2026.10.1", "release_id: pj999-R2026.10.1"),
+             "release_id が決まった形"),
+        ]
+        for what, (old, new), msg in cases:
+            with self.subTest(what):
+                self.assertEqual(RELEASE_NEW.count(old), 1, f"置き換える所が 1 つに定まらない: {old}")
+                self.new.write_text(RELEASE_NEW.replace(old, new), encoding="utf-8")
+                code, out = self.run_check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(msg, out)
+        self.new.write_text(RELEASE_NEW, encoding="utf-8")
+        self.assertEqual(self.run_check()[0], 0)
+
+    def test_the_messages_do_not_show_the_values(self) -> None:
+        """形の違う欄に道や対応表を書いても、 知らせの文に出さない（欄の名前と決まった形だけを言う）。"""
+        mark = "ZZ-MARK-NOT-SHOWN"
+        for old in ("version: PJ999-M2026.10.1", "id: DS-PJ999-v3", "release_id: PJ999-R2026.10.1"):
+            with self.subTest(old):
+                key = old.split(":")[0]
+                self.new.write_text(RELEASE_NEW.replace(old, f"{key}: {mark}"), encoding="utf-8")
+                code, out = self.run_check()
+                self.assertEqual(code, 1, out)
+                lines = [ln for ln in out.splitlines() if "決まった形" in ln]
+                self.assertTrue(lines, out)
+                self.assertFalse([ln for ln in lines if mark in ln], "形の違う値を知らせの文に出した")
 
 
 @unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")

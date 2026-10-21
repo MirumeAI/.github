@@ -35,6 +35,12 @@ commit にある `pdm.lock.json` と同じことも照らす（CI は Private �
 `rollback_to`・`config_commit`・`artifacts`・`model_sha256` を持ち、 結果の欄
 （`smoke_test`・`verified`）は持たない（結果は検証の記録にだけ書く）。
 
+System Release の記録（P1-07）は、 採用したモデルの版（`<案件の記号>-M<年>.<月>.<番号>`）と、
+学習用・評価用の Dataset（`DS-<案件の記号>-v<番号>`・`DS-<案件の記号>-eval-v<番号>`）の
+それぞれに、 ファイルの数・大きさ・manifest の sha256 を持つ（データそのものは置き場に置き、
+Git にはどのデータかだけを書く）。 案件の記号は `release_id` と同じでなければならない
+（別の案件の物を混ぜない）。
+
 `validation/` の検証の記録（P1-05）は、 項目と全体の結果の食い違い・指す先の無い
 記録・`supersedes` の枝分かれを止め、 対象 × 手順の ID ごとの状態（一番新しい記録が
 PASS なら VERIFIED、 FAIL なら FAILED、 PARTIAL なら NOT VERIFIED）を出す。
@@ -61,8 +67,9 @@ RELEASE_FIELDS = {
     # Core の版。 **versions.yaml の内容は写さず参照する**
     #   （写すと二重管理になり、 片方を直しても効かない）。
     "software": ("versions_ref", "versions_commit"),
-    "inspection": ("version", "model_sha256", "config_commit", "calibration"),
-    "dataset": ("training", "evaluation", "manifest_sha256"),
+    "inspection": ("version", "model_sha256", "model_files", "model_bytes",
+                   "config_commit", "calibration"),
+    "dataset": ("training", "evaluation"),
     "runtime": ("os", "python"),
     "hardware": ("cameras",),
     "validation": ("report", "acceptance", "smoke_test"),
@@ -106,6 +113,12 @@ VR_SCOPES = ("product", "system", "deployment")
 VR_ENVIRONMENTS = ("real-machine", "bench", "ci")
 VR_RESULTS = ("PASS", "FAIL", "PARTIAL")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+#: System Release の ID と、 中のモデルの版・Dataset の ID（P1-07）。 どれも同じ案件の記号を持つ。
+RELEASE_ID_RE = re.compile(r"([A-Z0-9]+)-R[0-9]{4}\.[0-9]{2}\.[0-9]+")
+MODEL_VERSION_RE = re.compile(r"([A-Z0-9]+)-M[0-9]{4}\.[0-9]{2}\.[0-9]+")
+DATASET_ID_RE = {"training": re.compile(r"DS-([A-Z0-9]+)-v[0-9]+"),
+                 "evaluation": re.compile(r"DS-([A-Z0-9]+)-eval-v[0-9]+")}
+DATASET_FIELDS = ("id", "files", "bytes", "manifest_sha256")
 
 
 def _records(d: Path) -> list:
@@ -142,6 +155,62 @@ def _check_fields(name: str, data: dict, spec: dict, errors: list) -> None:
         for k in keys:
             if node.get(k) in (None, ""):
                 errors.append(f"{name}: {section}.{k} がありません")
+
+
+def _count(v, least: int) -> bool:
+    """ファイルの数・大きさ（整数。 真偽は数として読まない）。"""
+    return isinstance(v, int) and not isinstance(v, bool) and v >= least
+
+
+def _sha256_ok(v) -> bool:
+    """manifest の sha256（64 桁の小文字の 16 進。 数として読まれた値は、 先頭の 0 が消えうるので不可）。"""
+    return isinstance(v, str) and bool(HEX64_RE.fullmatch(v))
+
+
+def _same_code(name: str, label: str, value, rx, code, errors: list) -> None:
+    """名前の形と、 案件の記号が System Release と同じか。"""
+    if value in (None, ""):
+        return                                  # 無いことは _check_fields が言う
+    m = rx.fullmatch(str(value))
+    if not m:
+        errors.append(f"{name}: {label} の {value!r} は決まった名前の形ではありません")
+    elif code and m.group(1) != code:
+        errors.append(f"{name}: {label} の案件の記号が release_id と違います（別の案件の物を混ぜない）")
+
+
+def _check_release_data(name: str, d: dict, errors: list) -> None:
+    """採用したモデルと Dataset の版・数・大きさ・manifest の sha256（P1-07）。"""
+    m = RELEASE_ID_RE.fullmatch(str(d.get("release_id") or ""))
+    code = m.group(1) if m else None
+    ins = d.get("inspection")
+    if isinstance(ins, dict):
+        _same_code(name, "inspection.version", ins.get("version"), MODEL_VERSION_RE, code, errors)
+        if ins.get("model_sha256") not in (None, "") and not _sha256_ok(ins.get("model_sha256")):
+            errors.append(f"{name}: inspection.model_sha256 は 64 桁の小文字の 16 進を引用符で囲んで書いてください")
+        for k, least in (("model_files", 1), ("model_bytes", 0)):
+            if ins.get(k) not in (None, "") and not _count(ins.get(k), least):
+                errors.append(f"{name}: inspection.{k} は {least} 以上の整数にしてください")
+    ds = d.get("dataset")
+    if not isinstance(ds, dict):
+        return
+    if "manifest_sha256" in ds:
+        errors.append(f"{name}: dataset.manifest_sha256 は使いません（学習用・評価用のそれぞれに書く）")
+    for k, rx in DATASET_ID_RE.items():
+        node = ds.get(k)
+        if node in (None, ""):
+            continue
+        if not isinstance(node, dict):
+            errors.append(f"{name}: dataset.{k} は {'・'.join(DATASET_FIELDS)} を持つ形にしてください")
+            continue
+        for f in DATASET_FIELDS:
+            if node.get(f) in (None, ""):
+                errors.append(f"{name}: dataset.{k}.{f} がありません")
+        _same_code(name, f"dataset.{k}.id", node.get("id"), rx, code, errors)
+        for f, least in (("files", 1), ("bytes", 0)):
+            if node.get(f) not in (None, "") and not _count(node.get(f), least):
+                errors.append(f"{name}: dataset.{k}.{f} は {least} 以上の整数にしてください")
+        if node.get("manifest_sha256") not in (None, "") and not _sha256_ok(node.get("manifest_sha256")):
+            errors.append(f"{name}: dataset.{k}.manifest_sha256 は 64 桁の小文字の 16 進を引用符で囲んで書いてください")
 
 
 def _check_schema(name: str, data: dict, errors: list) -> None:
@@ -471,6 +540,7 @@ def main() -> int:
             continue
         _check_schema(p.name, d, errors)
         _check_fields(p.name, d, RELEASE_FIELDS, errors)
+        _check_release_data(p.name, d, errors)
         rid = d.get("release_id")
         if rid:
             known_ids.add(str(rid))

@@ -245,22 +245,29 @@ te() {
   local got; got="$(run_hook_env "$envs" "$cmd" "$cwd" "$tool")"
   if [ "$got" = "$exp" ]; then PASS=$((PASS+1));
   else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  [%s] %s\n' "$exp" "$got" \
-         "$(printf '%s' "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z]+):.*#PATH=<\1>:...#')" "$cmd"; fi
+         "$(printf '%s' "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z0-9]+):.*#PATH=<\1>:...#')" "$cmd"; fi
 }
 REAL_PY="$(command -v python3)"
-mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0"
+mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0" "$WORK/py_xutf"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/py_fail/python3"                    # 落ちる
 printf '#!/bin/sh\nexit 0\n' > "$WORK/py_silent/python3"                  # 何も出さない
 # 2 回目の呼び出しは、 引数に「-」（標準入力の script）があることで見分ける
 printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 1; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg/python3"   # 2 回目だけ落ちる
 printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 0; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg0/python3"  # 2 回目だけ何も出さない
-chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3" "$WORK/py_seg0/python3"
+# 入出力を UTF-8 にそろえる指定（-X utf8）が無ければ落ちる。 この機械の文字コードは UTF-8 なので、
+# 指定が無くても本物の python3 では判定が変わらず、 指定を外したことに気づけないため
+printf '#!/bin/sh\np=\nfor a in "$@"; do [ "$p" = "-X" ] && [ "$a" = "utf8" ] && exec "%s" "$@"; p="$a"; done\nexit 1\n' "$REAL_PY" > "$WORK/py_xutf/python3"
+chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3" "$WORK/py_seg0/python3" "$WORK/py_xutf/python3"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git push origin main"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git status"
 te DENY  "PATH=$WORK/py_silent:$PATH"          "git status"
 te DENY  "PATH=$WORK/py_silent:$PATH"          "src/pdm/cli/test.py" "$WORK/on_feature" Edit
 te DENY  "PATH=$WORK/py_seg:$PATH"             "git push origin main"
 te DENY  "PATH=$WORK/py_seg0:$PATH"            "git push origin main"
+# ふだんは通る命令でも拒否する（偽の python3 が効かなくなったら、 ここで気づく）
+te DENY  "PATH=$WORK/py_seg:$PATH"             "git status"
+te DENY  "PATH=$WORK/py_seg0:$PATH"            "git status"
+te ALLOW "PATH=$WORK/py_xutf:$PATH"            "git status"
 te DENY  "MIRUME_GUARD_ASSUME_BASH=4.3"        "git status"
 te DENY  "MIRUME_GUARD_ASSUME_BASH=3.2"        "git status"
 te ALLOW "MIRUME_GUARD_ASSUME_BASH=9.9"        "git status"

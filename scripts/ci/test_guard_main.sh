@@ -139,6 +139,8 @@ t DENY  "$WORK/on_feature/.claude/./hooks/guard-main.sh" "$WORK/on_feature" Edit
 t DENY  "$WORK/on_feature/.claude/hooks/../settings.json" "$WORK/on_feature" Write
 t DENY  '.claude\settings.local.json'   "$WORK/on_feature" Write
 t DENY  ".claude/Settings.json"         "$WORK/on_feature" Write
+t DENY  ".claude/settings.json "        "$WORK/on_feature" Write
+t DENY  ".claude./hooks/guard-main.sh"  "$WORK/on_feature" Edit
 t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" MultiEdit
 t DENY  ".claude/hooks/x.ipynb"         "$WORK/on_feature" NotebookEdit
 # ふつうのファイルは、 正規化しても止めない

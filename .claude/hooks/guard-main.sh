@@ -94,11 +94,13 @@ except Exception:
 ti = d.get("tool_input") or {}
 name = d.get("tool_name") or ""
 if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-    # 道は、 照らす前に正規化する（区切り・逆斜線・「.」「..」・大文字小文字）。
+    # 道は、 照らす前に正規化する（区切り・逆斜線・「.」「..」・大文字小文字・
+    # 各部分の末尾の空白と点。 Windows は末尾の空白と点を落として同じファイルにする）。
     # 同じファイルを別の書き方で指しても、 下の保護から外れないように
     p = str(ti.get("file_path") or ti.get("notebook_path") or "")
     if p:
         p = posixpath.normpath(p.replace("\\", "/")).lower()
+        p = "/".join(x.rstrip(" .") or x for x in p.split("/"))
     print("@@FILE@@" + p)
 else:
     print("@@CMD@@" + str(ti.get("command") or ""))

@@ -86,7 +86,7 @@ fi
 # 入出力は -X utf8 で UTF-8 にそろえる（環境の文字コードが cp932 などだと、「—」のような
 # 文字で落ちて、 正しい命令まで拒否してしまう。 -I なので PYTHONIOENCODING は効かない）。
 CMD="$(python3 -I -X utf8 -c '
-import json, sys
+import json, posixpath, sys
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -94,7 +94,14 @@ except Exception:
 ti = d.get("tool_input") or {}
 name = d.get("tool_name") or ""
 if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
-    print("@@FILE@@" + str(ti.get("file_path") or ""))
+    # 道は、 照らす前に正規化する（区切り・逆斜線・「.」「..」・大文字小文字・
+    # 各部分の末尾の空白と点。 Windows は末尾の空白と点を落として同じファイルにする）。
+    # 同じファイルを別の書き方で指しても、 下の保護から外れないように
+    p = str(ti.get("file_path") or ti.get("notebook_path") or "")
+    if p:
+        p = posixpath.normpath(p.replace("\\", "/")).lower()
+        p = "/".join(x.rstrip(" .") or x for x in p.split("/"))
+    print("@@FILE@@" + p)
 else:
     print("@@CMD@@" + str(ti.get("command") or ""))
 ' 2>/dev/null)" || deny "python3 で入力を読めない" "python3 -c 'print(1)' が動くかを確かめてください。"
@@ -109,6 +116,7 @@ esac
 
 # ------------------------------------------------- ファイル編集の保護
 # **Claude の Edit / Write で、ガード（.claude/hooks/）と settings.json・settings.local.json を書き換えさせない。**
+# 道は入力を読むときに正規化してある（小文字・「/」の区切り）。
 # settings.local.json に disableAllHooks を書くと、個人設定のガードまで止まるため、同じく守る。
 # ガードの変更は MirumeAI/.github の Pull Request で案を出し、人の承認（Human Adjudication）と
 # merge の後に、正本（.github の main）から写して同期する。人が手でファイルを写す必要はない。

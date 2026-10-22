@@ -21,7 +21,7 @@ Repository を解決してから Branch を判定し、 先頭の飾り（`env`�
 **ただしこれは「うっかり」を止める壁であって、 敵対的な回避を完全に塞ぐものではない。**
 ターミナルから直接実行した場合は防げない。 GitHub Free かつ Private Repository では
 Branch protection を設定できないため、 これと運用ルールが唯一の防護である。
-挙動は `scripts/ci/test_guard_main.sh` が 160 ケースで検証している。
+挙動は `scripts/ci/test_guard_main.sh` が 178 ケースで検証している。
 
 ## この Repository の位置づけ
 

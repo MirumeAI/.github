@@ -46,17 +46,20 @@ run_hook() {
   payload="$(python3 -c '
 import json,sys
 t,c=sys.argv[1],sys.argv[2]
-key="file_path" if t in ("Edit","Write") else "command"
+key={"NotebookEdit":"notebook_path"}.get(t, "file_path" if t in ("Edit","Write","MultiEdit") else "command")
 print(json.dumps({"tool_name":t,"tool_input":{key:c}}))' "$tool" "$cmd")"
   ( cd "$cwd" && printf '%s' "$payload" | bash "$HOOK" >/dev/null 2>&1 )
   [ $? -eq 2 ] && echo DENY || echo ALLOW
 }
 
+# 落ちたときの表示で、 一時の作業場所の道を伏せる（CI の記録に手元の道を出さない）
+_m() { local s="$1"; printf '%s' "${s//"$WORK"/<WORK>}"; }
+
 t() {
   local exp="$1" cmd="$2" cwd="${3:-$WORK/on_feature}" tool="${4:-Bash}"
   local got; got="$(run_hook "$cmd" "$cwd" "$tool")"
   if [ "$got" = "$exp" ]; then PASS=$((PASS+1));
-  else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  %s\n' "$exp" "$got" "$cmd"; fi
+  else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  %s\n' "$exp" "$got" "$(_m "$cmd")"; fi
 }
 
 echo "== 素直な書き方 =="
@@ -130,6 +133,17 @@ t DENY  ".claude/settings.json"         "$WORK/on_feature" Write
 # settings.local.json に disableAllHooks を書くと、個人設定のガードまで止まる
 t DENY  ".claude/settings.local.json"   "$WORK/on_feature" Write
 t DENY  "$WORK/on_feature/.claude/settings.local.json" "$WORK/on_feature" Edit
+# 同じファイルを別の書き方で指しても止める（道は照らす前に正規化する）
+t DENY  ".claude//settings.json"        "$WORK/on_feature" Write
+t DENY  "$WORK/on_feature/.claude/./hooks/guard-main.sh" "$WORK/on_feature" Edit
+t DENY  "$WORK/on_feature/.claude/hooks/../settings.json" "$WORK/on_feature" Write
+t DENY  '.claude\settings.local.json'   "$WORK/on_feature" Write
+t DENY  ".claude/Settings.json"         "$WORK/on_feature" Write
+t DENY  ".claude/hooks/guard-main.sh"   "$WORK/on_feature" MultiEdit
+t DENY  ".claude/hooks/x.ipynb"         "$WORK/on_feature" NotebookEdit
+# ふつうのファイルは、 正規化しても止めない
+t ALLOW "src/pdm/../pdm/cli/test.py"    "$WORK/on_feature" Edit
+t ALLOW "docs/claude/settings.json"     "$WORK/on_feature" Write
 
 echo "== タグは人が打つ（Product Release のタグ） =="
 # 新しい Product Release のタグを打つ・消す・付け替えるのは Core の maintainer（人）だけ。
@@ -235,7 +249,7 @@ run_hook_env() {
   payload="$(python3 -c '
 import json,sys
 t,c=sys.argv[1],sys.argv[2]
-key="file_path" if t in ("Edit","Write") else "command"
+key={"NotebookEdit":"notebook_path"}.get(t, "file_path" if t in ("Edit","Write","MultiEdit") else "command")
 print(json.dumps({"tool_name":t,"tool_input":{key:c}}))' "$tool" "$cmd")"
   ( cd "$cwd" && printf '%s' "$payload" | env "$envs" bash "$HOOK" >/dev/null 2>&1 )
   [ $? -eq 2 ] && echo DENY || echo ALLOW
@@ -245,7 +259,7 @@ te() {
   local got; got="$(run_hook_env "$envs" "$cmd" "$cwd" "$tool")"
   if [ "$got" = "$exp" ]; then PASS=$((PASS+1));
   else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  [%s] %s\n' "$exp" "$got" \
-         "$(printf '%s' "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z0-9]+):.*#PATH=<\1>:...#')" "$cmd"; fi
+         "$(_m "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z0-9]+):.*#PATH=<\1>:...#')" "$(_m "$cmd")"; fi
 }
 REAL_PY="$(command -v python3)"
 mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0" "$WORK/py_xutf"
@@ -292,6 +306,59 @@ te DENY  "PYTHONPATH=$WORK/mods"               "git push origin main"
 t DENY  "@@FILE@@x; git push origin main"
 t DENY  $'@@FILE@@x\ngit push origin main'
 t DENY  "@@FILE@@x; git push --force origin feature/1-x"
+
+echo "== Repository の設定のフックは、 ガードを動かせないときに拒否する =="
+# .claude/settings.json のガードのフックを、 書かれた命令のまま sh で流す。 Claude Code は
+# 終了コード 2 だけを拒否として扱うので、 ガードのファイルが無い・bash が無いときも 2 で
+# 終わらないと、 操作が通ってしまう。
+_ROOT="$(cd "$(dirname "$HOOK")/../.." && pwd)"
+mkdir -p "$WORK/no_guard"
+run_settings_hook() {
+  local cmd="$1" projdir="$2" tool="$3" value="$4" payload
+  payload="$(python3 -c '
+import json,sys
+t,c=sys.argv[1],sys.argv[2]
+key="file_path" if t != "Bash" else "command"
+print(json.dumps({"tool_name":t,"tool_input":{key:c}}))' "$tool" "$value")"
+  ( cd "$WORK/on_feature" && printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$projdir" sh -c "$cmd" >/dev/null 2>&1 )
+  [ $? -eq 2 ] && echo DENY || echo ALLOW
+}
+ts() {
+  local exp="$1" label="$2"; shift 2
+  local got; got="$(run_settings_hook "$@")"
+  if [ "$got" = "$exp" ]; then PASS=$((PASS+1));
+  else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  [.claude/settings.json] %s\n' "$exp" "$got" "$label"; fi
+}
+_HOOKS="$(python3 -c '
+import json,sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+for e in ((d.get("hooks") or {}).get("PreToolUse") or []):
+    for h in (e.get("hooks") or []):
+        c = str(h.get("command") or "")
+        if "guard-main.sh" in c:
+            print(str(e.get("matcher") or "") + "\t" + c)' "$_ROOT/.claude/settings.json")"
+_NB=0; _NE=0
+while IFS=$'\t' read -r _mt _cmd; do
+  [ -n "$_cmd" ] || continue
+  case "$_mt" in
+    Bash)
+      _NB=$((_NB+1))
+      ts ALLOW "Bash: ふつうの命令"            "$_cmd" "$_ROOT" Bash "ls"
+      ts DENY  "Bash: main への push"          "$_cmd" "$_ROOT" Bash "git push origin main"
+      ts DENY  "Bash: ガードのファイルが無い"   "$_cmd" "$WORK/no_guard" Bash "ls" ;;
+    *Edit*)
+      _NE=$((_NE+1))
+      ts ALLOW "$_mt: ふつうのファイル"         "$_cmd" "$_ROOT" Edit "src/a.py"
+      ts DENY  "$_mt: ガードの書き換え"         "$_cmd" "$_ROOT" Edit ".claude/hooks/guard-main.sh"
+      ts DENY  "$_mt: ガードのファイルが無い"   "$_cmd" "$WORK/no_guard" Edit "src/a.py" ;;
+  esac
+done <<< "$_HOOKS"
+# Bash と Edit のガードのフックが、 それぞれ 1 つずつある
+if [ "$_NB" = 1 ] && [ "$_NE" = 1 ]; then PASS=$((PASS+1));
+else FAIL=$((FAIL+1)); printf '  NG  .claude/settings.json のガードのフックの数（Bash %s・Edit %s。どちらも 1 のはず）\n' "$_NB" "$_NE"; fi
 
 echo
 echo "合格 $PASS / 不合格 $FAIL"

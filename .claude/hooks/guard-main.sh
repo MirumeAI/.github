@@ -81,7 +81,9 @@ if ! command -v python3 >/dev/null 2>&1; then
        "python3 を入れるか、 この操作を手元のターミナルで行ってください。"
 fi
 
-CMD="$(python3 -c '
+# python3 の入出力は UTF-8 にそろえる（環境の文字コードが cp932 などだと、「—」のような
+# 文字で落ちて、 正しい命令まで拒否してしまう）。
+CMD="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -124,7 +126,7 @@ CMD="${CMD#@@CMD@@}"
 
 # ------------------------------------------------------------ 前処理
 # 飾りを剥がし、 1行1コマンドへ分解する。
-SEGMENTS="$(python3 - "$CMD" <<'PY'
+SEGMENTS="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python3 - "$CMD" <<'PY'
 import re, shlex, sys
 
 print('@@SEG@@')

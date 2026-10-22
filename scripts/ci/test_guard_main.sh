@@ -237,7 +237,7 @@ import json,sys
 t,c=sys.argv[1],sys.argv[2]
 key="file_path" if t in ("Edit","Write") else "command"
 print(json.dumps({"tool_name":t,"tool_input":{key:c}}))' "$tool" "$cmd")"
-  ( cd "$cwd" && printf '%s' "$payload" | env $envs bash "$HOOK" >/dev/null 2>&1 )
+  ( cd "$cwd" && printf '%s' "$payload" | env "$envs" bash "$HOOK" >/dev/null 2>&1 )
   [ $? -eq 2 ] && echo DENY || echo ALLOW
 }
 te() {
@@ -248,20 +248,29 @@ te() {
          "$(printf '%s' "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z]+):.*#PATH=<\1>:...#')" "$cmd"; fi
 }
 REAL_PY="$(command -v python3)"
-mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg"
+mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/py_fail/python3"                    # 落ちる
 printf '#!/bin/sh\nexit 0\n' > "$WORK/py_silent/python3"                  # 何も出さない
 printf '#!/bin/sh\n[ "${1:-}" = "-" ] && exit 1\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg/python3"   # 2 回目だけ落ちる
-chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3"
+printf '#!/bin/sh\n[ "${1:-}" = "-" ] && exit 0\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg0/python3"  # 2 回目だけ何も出さない
+chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3" "$WORK/py_seg0/python3"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git push origin main"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git status"
 te DENY  "PATH=$WORK/py_silent:$PATH"          "git status"
 te DENY  "PATH=$WORK/py_silent:$PATH"          "src/pdm/cli/test.py" "$WORK/on_feature" Edit
 te DENY  "PATH=$WORK/py_seg:$PATH"             "git push origin main"
+te DENY  "PATH=$WORK/py_seg0:$PATH"            "git push origin main"
 te DENY  "MIRUME_GUARD_ASSUME_BASH=4.3"        "git status"
 te DENY  "MIRUME_GUARD_ASSUME_BASH=3.2"        "git status"
 te ALLOW "MIRUME_GUARD_ASSUME_BASH=9.9"        "git status"
 te DENY  "MIRUME_GUARD_TEST_INTERNAL_ERROR=1"  "git status"
+# 入出力の文字コードが UTF-8 でない環境（Windows の日本語の環境の cp932 など）でも、 同じ判定にする
+te ALLOW "PYTHONIOENCODING=cp932"              "echo 'a — b'"
+te DENY  "PYTHONIOENCODING=cp932"              "echo 'a — b'; git push origin main"
+# 直す前は、 決まった印で始まる Bash の命令を別の種類の入力として素通りさせていた（印の確かめで塞いだ）
+t DENY  "@@FILE@@x; git push origin main"
+t DENY  $'@@FILE@@x\ngit push origin main'
+t DENY  "@@FILE@@x; git push --force origin feature/1-x"
 
 echo
 echo "合格 $PASS / 不合格 $FAIL"

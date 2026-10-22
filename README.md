@@ -19,8 +19,9 @@ MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Re
 3. Issue 番号を含む Branch を作成する
 4. 実装・検証する
 5. Pull Request を作成する
-6. 原則 Squash and merge する（レビュー可能なメンバーがいる場合は Review 後）
-7. Issue を Close する
+6. merge する head で、手元の検査を流して PASS を PR に記録する（下の「merge の前の検査」）
+7. 原則 Squash and merge する（レビュー可能なメンバーがいる場合は Review 後）
+8. Issue を Close する
 
 ### Branch 命名例
 
@@ -31,6 +32,28 @@ MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Re
 ## 適用範囲
 
 この `.github` Repository のテンプレートは、MirumeAI Organization 配下の各 Repository に同種の独自テンプレートがない場合に既定値として利用されます。
+
+## merge の前の検査（`run_required_verification.py`）
+
+GitHub Actions は、Private の Repository では使いません（この Repository だけ動きます）。merge の前提は、**PR で動く workflow の段を、merge する head で手元で流して PASS すること**（Required Verification）です。命令を手で組み立てず、この道具で流します。
+
+```bash
+git -C <この Repository の clone> pull --ff-only     # 正本の道具を最新にする
+git -C <検査する Repository の clone> fetch origin
+python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
+    <検査する Repository の clone> --head <PR の head の commit>
+```
+
+- 検査する Repository の `.github/workflows/` から、`pull_request` で動く workflow を選びます（`paths` などの条件も、`origin/main` との差で見ます）。job と段は CI と同じ順で流します。再利用 workflow と正本の道具は、この clone の `origin/main` から取ります
+- job ごとに、新しいものを 3 つ用意して流します
+  - head の新しい clone
+  - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）
+  - 仮の HOME
+- 元の clone と HOME は変えません。手元の token や ssh の agent は、PR のコードに渡しません。pip で依存を入れるので、network が要ります
+- 知らない書き方（action・式・matrix など）があれば、何も流さずに止まります（終了コード 2）。落ちた段があれば FAIL です（終了コード 1）
+- PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。飛ばした試験の件数も入るので、0 でなければ理由を確かめます
+- `--list` を付けると、流す workflow・job・段を出すだけです。PyYAML が無ければ、道具用の venv を `~/.cache/mirumeai/` に作って入れます
+- **PR のコードを手元で動かします。** 中身を読んでから流してください
 
 ## 顧客の間の混入の検査（`customer-profile.yaml`）
 

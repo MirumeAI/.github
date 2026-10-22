@@ -44,16 +44,25 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
     <検査する Repository の clone> --head <PR の head の commit>
 ```
 
-- 検査する Repository の `.github/workflows/` から、`pull_request` で動く workflow を選びます（`paths` などの条件も、`origin/main` との差で見ます）。job と段は CI と同じ順で流します。再利用 workflow と正本の道具は、この clone の `origin/main` から取ります
+- 検査する Repository の `.github/workflows/` から、`pull_request` で動く workflow を選びます（`paths`・`branches`・`types` の条件も、`origin/main` との merge-base からの差で見ます）。job と段は CI と同じ順で流します。再利用 workflow と正本の道具は、この clone の `origin/main` から取ります
 - job ごとに、新しいものを 3 つ用意して流します
   - head の新しい clone
   - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）
   - 仮の HOME
-- 元の clone と HOME は変えません。手元の token や ssh の agent は、PR のコードに渡しません。pip で依存を入れるので、network が要ります
-- 知らない書き方（action・式・matrix など）があれば、何も流さずに止まります（終了コード 2）。落ちた段があれば FAIL です（終了コード 1）
-- PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。飛ばした試験の件数も入るので、0 でなければ理由を確かめます
+- 元の clone と HOME は変えません。環境変数は決めた名前（`PATH`・`LANG` など）だけを渡し、token・ssh の agent・git の設定などは渡しません。段が終わったら、後ろで動き続ける子の process も止めます（`setsid` で抜けたものは止められません）。pip で依存を入れるので、network が要ります
+- 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。落ちた段があれば FAIL です（終了コード 1）
+- PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。記録の行には、次のものが入ります
+  - head と、基準（`origin/main`）を含むか
+  - 正本の ref と commit
+  - 流した道具の版（正本と同じか）
+  - 段・試験・飛ばした試験の件数
+- 記録の行を見るときの決まり
+  - 「基準を含む: いいえ」なら、merge の前に main を取り込んで流し直します（GitHub の `pull_request` は、main と合わせた commit で流すため）
+  - 飛ばした試験が 0 でなければ、理由を確かめます
 - `--list` を付けると、流す workflow・job・段を出すだけです。PyYAML が無ければ、道具用の venv を `~/.cache/mirumeai/` に作って入れます
-- **PR のコードを手元で動かします。** 中身を読んでから流してください。仮の HOME と認証の取り除きは、手元の設定や認証をうっかり使わせないためのもので、悪意のあるコードを閉じ込める箱ではありません（同じ OS のユーザーで動くので、本物の HOME にも書けてしまいます）
+- **PR のコードを手元で動かします。** 中身を読んでから流してください
+  - 仮の HOME と環境変数の取り除きは、手元の設定や認証をうっかり使わせないためのもので、悪意のあるコードを閉じ込める箱ではありません
+  - PR のコードと pip で入る依存は、あなたの OS のユーザーの権限で動きます。本物の HOME の認証の file や手元のデータを読め、network にも出せます
 
 ## 顧客の間の混入の検査（`customer-profile.yaml`）
 

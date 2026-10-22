@@ -13,8 +13,8 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 すること:
 
   ・検査する Repository の `.github/workflows/` から、 `pull_request` で動く
-    workflow を選ぶ（`branches`・`paths`・`paths-ignore` の条件も見る。 変更の
-    ファイルは、 `--base` と head の merge-base からの差）
+    workflow を選ぶ（`branches`・`paths`・`paths-ignore`・`types` の条件も見る。
+    変更のファイルは、 `--base` と head の merge-base からの差）
   ・job を `needs` の順に、 段を書いた順に流す。 段が落ちたら、 その job の
     残りは `if: always()` などの段だけを流す（CI と同じ）
   ・再利用 workflow（`MirumeAI/.github/...@main`）と正本の道具は、 この道具を
@@ -22,21 +22,25 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     `actions/checkout` は、 head か正本の新しい clone に置き換える
   ・**job ごとに、 新しい clone・workflow の Python の版の新しい venv・仮の HOME
     で流す。** 元の clone と HOME は変えない（pip と Playwright の cache だけ共有）。
-    **PR のコードに、 手元の認証（token・ssh の agent）を渡さない**
-  ・**知らない書き方は、 流す前に止める。** 知らない action・式・matrix などを
-    黙って飛ばすと、 段の抜けた「PASS」になる
+    環境変数は、 決めた名前だけを渡す（token・ssh の agent・git の設定などは渡さない）。
+    段が終わったら、 後ろで動き続ける子の process も止める
+  ・**知らない書き方は、 流す前に止める。** 知らない action・式・値・matrix・
+    defaults などを黙って飛ばすと、 段の抜けた「PASS」になる
 
 結果は段ごとの終了コード・試験の件数・飛ばした試験の件数で、 PASS のときは
-PR に書く記録の行を出す。 終了コード: 0 PASS ／ 1 FAIL ／ 2 流せない
-（書き方・Python の版・引数・対象の workflow が無い）。
+PR に書く記録の行を出す。 記録の行には、 head が基準を含むか・正本の ref・
+流した道具の版（正本と同じか）も入れる。 終了コード: 0 PASS ／ 1 FAIL ／
+2 流せない（書き方・Python の版・引数・対象の workflow が無い）。
 
 **PR のコードを手元で動かす。** 中身を読んでから流す。 仮の HOME と環境変数の
 取り除きは、 手元の設定や認証を**うっかり**使わせないためのもので、 同じ OS の
-ユーザーで動くコードを閉じ込める箱ではない（本物の HOME にも書けてしまう）。
+ユーザーで動くコードを閉じ込める箱ではない（本物の HOME の認証の file や手元の
+データを読め、 network にも出せる）。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -55,6 +59,7 @@ except ImportError:
     yaml = None          # 無ければ、 道具用の venv を作って流し直す（_bootstrap_yaml）
 
 HERE = Path(__file__).resolve().parent
+TOOL_REL = "scripts/ci/run_required_verification.py"
 CANONICAL_SLUG = "MirumeAI/.github"
 EVENT = "pull_request"
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
@@ -63,18 +68,22 @@ RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
 #: 手元で同じものを取れる保証が無いので止める。
 REUSABLE = re.compile(r"^MirumeAI/\.github/(\.github/workflows/[^@/]+\.ya?ml)@main$")
 
-WORKFLOW_KEYS = {"name", "on", "permissions", "jobs", "env", "defaults", "concurrency", "run-name"}
+#: 読める鍵。 **`defaults` は入れない**（段の shell や置き場所を変えるのに、
+#: 読まずに流すと別の場所・別の shell で PASS になる）。
+WORKFLOW_KEYS = {"name", "on", "permissions", "jobs", "env", "concurrency", "run-name"}
 JOB_KEYS = {"name", "runs-on", "timeout-minutes", "steps", "needs", "if", "env",
-            "permissions", "defaults", "uses", "with", "concurrency"}
+            "permissions", "uses", "with", "concurrency"}
 STEP_KEYS = {"name", "id", "uses", "with", "run", "env", "if", "shell",
              "working-directory", "timeout-minutes", "continue-on-error"}
 PR_FILTER_KEYS = {"branches", "branches-ignore", "paths", "paths-ignore", "types"}
 
-#: PR のコードへ渡さない環境変数。 CI の job にも無いもの。
-_SECRET_NAME = re.compile(r"(?i)(token|secret|passw|api_?key|access_?key|private_?key|credential|auth|session|cookie)")
-_DROP_ENV = {"SSH_AUTH_SOCK", "SSH_ASKPASS", "GIT_ASKPASS", "VIRTUAL_ENV", "PYTHONPATH",
-             "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "XDG_CONFIG_HOME",
-             "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}
+#: PR のコードへ渡す環境変数。 **ここに無いものは渡さない**（token・ssh の agent・
+#: git の設定と認証・手元の画面へ届くものなど。 除く名前の表は、 抜けが出る）。
+_PASS_ENV = {"PATH", "LANG", "LANGUAGE", "TERM", "USER", "LOGNAME", "SHELL", "TZ",
+             "LD_LIBRARY_PATH", "FONTCONFIG_FILE", "FONTCONFIG_PATH",
+             "PIP_CACHE_DIR", "PLAYWRIGHT_BROWSERS_PATH"}
+#: proxy は、 認証（`user:pass@`）を含まないときだけ渡す
+_PROXY_ENV = {"http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"}
 
 
 class Unsupported(Exception):
@@ -158,7 +167,8 @@ class Expr:
     """workflow の式（`${{ }}` と `if:`）の、 今の workflow が使う範囲だけを読む。
 
     **知らない値・関数は止める**（Unsupported）。 黙って空にすると、 段の条件が
-    変わったまま流れる。 status の関数は job の今の状態（success / failure）で決まる。
+    変わったまま流れる。 status の関数は job の今の状態（success / failure /
+    skipped）で決まる。 演算子の強さは GitHub と同じ（`!` > `==` `!=` > `&&` > `||`）。
     """
 
     def __init__(self, ctx: dict, status: str = "success"):
@@ -193,26 +203,26 @@ class Expr:
         return v
 
     def _and(self):
-        v = self._not()
+        v = self._cmp()
         while self._peek() == ("op", "&&"):
             self._take()
-            rhs = self._not()
+            rhs = self._cmp()
             v = rhs if _truthy(v) else v
         return v
 
-    def _not(self):
-        if self._peek() == ("op", "!"):
-            self._take()
-            return not _truthy(self._not())
-        return self._cmp()
-
     def _cmp(self):
-        v = self._primary()
+        v = self._unary()
         if self._peek() in (("op", "=="), ("op", "!=")):
             op = self._take()
-            rhs = self._primary()
+            rhs = self._unary()
             return _equal(v, rhs) if op == "==" else not _equal(v, rhs)
         return v
+
+    def _unary(self):
+        if self._peek() == ("op", "!"):
+            self._take()
+            return not _truthy(self._unary())
+        return self._primary()
 
     def _primary(self):
         k, v = self._peek()
@@ -244,6 +254,7 @@ class Expr:
     def _lookup(self, name: str):
         parts = name.split(".")
         if parts[0] == "env":
+            # env の文脈は workflow・job・段に書いたもの（と GITHUB_ENV）だけ。 手元の環境変数は入れない
             return self.ctx.get("env", {}).get(".".join(parts[1:]), "")
         cur = self.ctx
         for p in parts:
@@ -313,7 +324,6 @@ def _matches(name: str, patterns: list) -> bool:
     """後ろの `!` の pattern が、 前の一致を打ち消す（GitHub と同じ順の決まり）。"""
     hit = False
     for p in patterns:
-        p = str(p)
         if p.startswith("!"):
             if _glob(p[1:]).match(name):
                 hit = False
@@ -323,19 +333,28 @@ def _matches(name: str, patterns: list) -> bool:
 
 
 def _pr_filter(on) -> dict | None:
-    """workflow が pull_request で動くなら、 その条件。 動かないなら None。"""
+    """workflow が pull_request で動くなら、 その条件。 動かないなら None。
+
+    `pull_request_target` は止める（base の側の workflow と権限で動くので、
+    head の workflow を流しても同じにならない）。
+    """
     if isinstance(on, str):
-        return {} if on == EVENT else None
-    if isinstance(on, list):
-        return {} if EVENT in on else None
-    if isinstance(on, dict):
-        if EVENT not in on:
-            return None
-        cfg = on[EVENT] or {}
-        if not isinstance(cfg, dict) or set(cfg) - PR_FILTER_KEYS:
-            raise Unsupported(f"pull_request の条件を読めません: {cfg!r}")
-        return cfg
-    raise Unsupported(f"on: を読めません: {on!r}")
+        events = {on}
+    elif isinstance(on, (list, dict)):
+        events = {str(e) for e in on}
+    else:
+        raise Unsupported(f"on: を読めません: {on!r}")
+    if "pull_request_target" in events:
+        raise Unsupported("pull_request_target の workflow は流せません")
+    if EVENT not in events:
+        return None
+    cfg = (on.get(EVENT) if isinstance(on, dict) else None) or {}
+    if not isinstance(cfg, dict) or set(cfg) - PR_FILTER_KEYS:
+        raise Unsupported(f"pull_request の条件を読めません: {cfg!r}")
+    for k, v in cfg.items():
+        if not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            raise Unsupported(f"pull_request の {k} は文字の並び（list）にしてください: {v!r}")
+    return cfg
 
 
 def _selected(cfg: dict, base_branch: str, changed: list) -> tuple:
@@ -367,9 +386,14 @@ def _slug(repo: Path) -> tuple:
     return (f"{m.group(1)}/{m.group(2)}" if m else f"local/{repo.name}"), (url or None)
 
 
+def _blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
 def _clone(src: Path, sha: str, dest: Path, origin_url: str | None) -> None:
     """head の新しい clone。 元の clone の作業ツリー・ref・設定は変えない。
 
+    `--shared` で元の objects を読むだけにする（大きな履歴を写さない）。
     LFS は CI の checkout と同じく取り出さない（pointer のまま）。
     """
     env = dict(os.environ, GIT_LFS_SKIP_SMUDGE="1", GIT_TERMINAL_PROMPT="0")
@@ -384,12 +408,26 @@ def _clone(src: Path, sha: str, dest: Path, origin_url: str | None) -> None:
                        capture_output=True, check=True)
 
 
+def _inside(base: Path, rel: str) -> Path:
+    """作業場所の中の道。 **外へ出る道（絶対の道・`..`）は止める。**"""
+    p = (base / rel).resolve()
+    b = base.resolve()
+    if p != b and b not in p.parents:
+        raise RuntimeError(f"作業場所の外の道は使えません: {rel!r}")
+    return p
+
+
+def _plain_rel(value: str, where: str) -> None:
+    if value.startswith("/") or ".." in Path(value).parts:
+        raise Unsupported(f"{where}: 作業場所の外へ出る道は使えません: {value!r}")
+
+
 # ------------------------------------------------------------------ 計画
 class Plan:
     """流す workflow・job・段を、 流す前に全部読んで確かめたもの。"""
 
     def __init__(self):
-        self.jobs: list = []        # dict（下の _job_entry）
+        self.jobs: list = []
         self.skipped: list = []     # (workflow, 理由)
         self.pythons: set = set()
 
@@ -403,10 +441,15 @@ def _load_yaml(text: str, where: str) -> dict:
     return d
 
 
-def _check_workflow_keys(d: dict, where: str) -> None:
-    unknown = set(d) - WORKFLOW_KEYS
+def _check_keys(d: dict, allowed: set, where: str) -> None:
+    unknown = set(d) - allowed
     if unknown:
         raise Unsupported(f"{where}: 知らない鍵 {sorted(unknown)}")
+
+
+def _minutes(v, where: str) -> None:
+    if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
+        raise Unsupported(f"{where}: timeout-minutes は正の数にしてください")
 
 
 def _check_steps(steps, where: str, target_slug: str) -> None:
@@ -414,14 +457,14 @@ def _check_steps(steps, where: str, target_slug: str) -> None:
         raise Unsupported(f"{where}: steps がありません")
     for i, s in enumerate(steps):
         w = f"{where} の段 {i + 1}"
-        if not isinstance(s, dict) or set(s) - STEP_KEYS:
-            raise Unsupported(f"{w}: 知らない鍵 {sorted(set(s) - STEP_KEYS) if isinstance(s, dict) else s!r}")
+        if not isinstance(s, dict):
+            raise Unsupported(f"{w}: 段を読めません")
+        _check_keys(s, STEP_KEYS, w)
         if ("run" in s) == ("uses" in s):
             raise Unsupported(f"{w}: run と uses のどちらか 1 つにしてください")
         if s.get("shell") not in (None, "bash", "sh"):
             raise Unsupported(f"{w}: shell {s.get('shell')!r} は流せません")
-        if not isinstance(s.get("timeout-minutes", 1), (int, float)) or isinstance(s.get("timeout-minutes"), bool):
-            raise Unsupported(f"{w}: timeout-minutes は数にしてください")
+        _minutes(s.get("timeout-minutes"), w)
         if not isinstance(s.get("continue-on-error", False), bool):
             raise Unsupported(f"{w}: continue-on-error は true / false にしてください")
         uses = s.get("uses")
@@ -430,9 +473,8 @@ def _check_steps(steps, where: str, target_slug: str) -> None:
         action = str(uses).split("@")[0]
         with_ = s.get("with") or {}
         if action == "actions/checkout":
-            extra = set(with_) - {"path", "repository", "fetch-depth"}
             repo = with_.get("repository")
-            if extra or repo not in (None, target_slug, CANONICAL_SLUG):
+            if set(with_) - {"path", "repository", "fetch-depth"} or repo not in (None, target_slug, CANONICAL_SLUG):
                 raise Unsupported(f"{w}: この checkout は流せません（{dict(with_)}）")
         elif action == "actions/setup-python":
             if set(with_) - {"python-version", "cache"} or not with_.get("python-version"):
@@ -443,15 +485,11 @@ def _check_steps(steps, where: str, target_slug: str) -> None:
 
 def _job_entry(wf: str, name: str, spec: dict, inputs: dict, needs: list, where: str,
                plan: Plan, target_slug: str) -> dict:
-    unknown = set(spec) - JOB_KEYS
-    if unknown:
-        raise Unsupported(f"{where}: 知らない鍵 {sorted(unknown)}")
+    _check_keys(spec, JOB_KEYS, where)
     runs_on = spec.get("runs-on")
     if not (isinstance(runs_on, str) and runs_on.startswith("ubuntu-")):
         raise Unsupported(f"{where}: runs-on {runs_on!r} は流せません（ubuntu だけ）")
-    t = spec.get("timeout-minutes", 1)
-    if not isinstance(t, (int, float)) or isinstance(t, bool):
-        raise Unsupported(f"{where}: timeout-minutes は数にしてください")
+    _minutes(spec.get("timeout-minutes"), where)
     _check_steps(spec.get("steps"), where, target_slug)
     # setup-python の版は inputs だけで決まる形にする（再利用 workflow は inputs.python-version）
     for s in spec["steps"]:
@@ -464,17 +502,35 @@ def _job_entry(wf: str, name: str, spec: dict, inputs: dict, needs: list, where:
 
 
 def _inputs(call_spec: dict, with_: dict) -> dict:
+    """再利用 workflow の入力。 **式は評価しない**（呼び出し側の式を手元で正しく評価できる
+    保証が無い。 読み流すと、 守りの段を開け閉めする入力が黙って変わる）。"""
     declared = call_spec.get("inputs") or {}
     unknown = set(with_) - set(declared)
     if unknown:
         raise Unsupported(f"再利用 workflow に無い入力: {sorted(unknown)}")
     out = {}
     for k, d in declared.items():
-        if (d or {}).get("required") and k not in with_ and "default" not in (d or {}):
+        d = d or {}
+        if d.get("required") and k not in with_ and "default" not in d:
             raise Unsupported(f"再利用 workflow の入力 {k} が渡されていません")
-        v = with_.get(k, (d or {}).get("default"))
-        if (d or {}).get("type") == "boolean" and isinstance(v, str):
-            v = v.strip().lower() == "true"
+        v = with_.get(k, d.get("default"))
+        if isinstance(v, str) and "${{" in v:
+            raise Unsupported(f"再利用 workflow の入力 {k} の式は流せません: {v!r}")
+        typ = d.get("type", "string")
+        if typ == "boolean":
+            if isinstance(v, str) and v.strip().lower() in ("true", "false"):
+                v = v.strip().lower() == "true"
+            elif v is None:
+                v = False
+            elif not isinstance(v, bool):
+                raise Unsupported(f"再利用 workflow の入力 {k} は true / false にしてください: {v!r}")
+        elif typ == "number":
+            if isinstance(v, bool) or not isinstance(v, (int, float, type(None))):
+                raise Unsupported(f"再利用 workflow の入力 {k} は数にしてください: {v!r}")
+        elif typ == "string":
+            v = "" if v is None else _to_str(v)
+        else:
+            raise Unsupported(f"再利用 workflow の入力 {k} の型 {typ!r} は流せません")
         out[k] = v
     return out
 
@@ -495,25 +551,26 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
         if not ok:
             plan.skipped.append((wf, why))
             continue
-        _check_workflow_keys(d, wf)
-        jobs = d.get("jobs") or {}
-        for jn, spec in jobs.items():
+        _check_keys(d, WORKFLOW_KEYS, wf)
+        for jn, spec in (d.get("jobs") or {}).items():
             if not isinstance(spec, dict):
                 raise Unsupported(f"{wf} の job {jn} を読めません")
             needs = spec.get("needs") or []
             needs = [needs] if isinstance(needs, str) else list(needs)
             if "uses" in spec:
                 m = REUSABLE.match(str(spec["uses"]))
-                if not m or set(spec) - {"uses", "with", "needs", "if", "permissions", "name"}:
+                if not m:
                     raise Unsupported(f"{wf} の job {jn}: 再利用 workflow {spec.get('uses')} は流せません")
+                _check_keys(spec, {"uses", "with", "needs", "if", "permissions", "name"}, f"{wf} の job {jn}")
                 rw = _load_yaml(_git(canonical, "show", f"{canonical_sha}:{m.group(1)}"), m.group(1))
-                _check_workflow_keys(rw, m.group(1))
+                _check_keys(rw, WORKFLOW_KEYS, m.group(1))
                 on = rw.get("on")
                 if not (isinstance(on, dict) and "workflow_call" in on):
                     raise Unsupported(f"{m.group(1)} は workflow_call で動きません")
                 inputs = _inputs(on["workflow_call"] or {}, spec.get("with") or {})
-                inner = rw.get("jobs") or {}
-                for ij, ispec in inner.items():
+                for ij, ispec in (rw.get("jobs") or {}).items():
+                    if not isinstance(ispec, dict):
+                        raise Unsupported(f"{m.group(1)} の job {ij} を読めません")
                     ineeds = ispec.get("needs") or []
                     ineeds = [ineeds] if isinstance(ineeds, str) else list(ineeds)
                     e = _job_entry(wf, f"{jn}/{ij}", ispec, inputs,
@@ -540,6 +597,33 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
     return plan
 
 
+def _precheck(jobs: list, probe: dict) -> None:
+    """式と道を、 流す前に全部読めるか確かめる（途中で止まると、 一部だけ流したことになる）。"""
+    for j in jobs:
+        where = f"{j['workflow']} の job {j['name']}"
+        ex = Expr({**probe, "inputs": j["inputs"], "env": {}})
+        for raw in (j["spec"].get("if"), j.get("caller_if")):
+            if raw is not None and not isinstance(raw, bool):
+                _cond(raw, ex)
+        defined = {}
+        for src in (j["workflow_env"], j["spec"].get("env") or {}):
+            for k, v in src.items():
+                defined[k] = _subst(str(v), Expr({**probe, "inputs": j["inputs"], "env": defined}))
+        for i, s in enumerate(j["spec"]["steps"], 1):
+            sex = Expr({**probe, "inputs": j["inputs"], "env": defined})
+            senv = {k: _subst(str(v), sex) for k, v in (s.get("env") or {}).items()}
+            sex = Expr({**probe, "inputs": j["inputs"], "env": {**defined, **senv}})
+            if s.get("if") is not None and not isinstance(s.get("if"), bool):
+                _cond(s["if"], sex)
+            for v in (s.get("run"), *((s.get("with") or {}).values())):
+                if isinstance(v, str):
+                    _subst(v, sex)
+            for key, v in (("working-directory", s.get("working-directory")),
+                           ("path", (s.get("with") or {}).get("path"))):
+                if isinstance(v, str):
+                    _plain_rel(_subst(v, sex), f"{where} の段 {i} の {key}")
+
+
 # ------------------------------------------------------------------ 流す
 _RAN = re.compile(r"^Ran (\d+) tests? in ", re.M)
 _SKIP = re.compile(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", re.M)
@@ -553,58 +637,55 @@ def _counts(log: str) -> tuple:
 
 
 def _base_env(real_cache: Path) -> dict:
-    env = {}
-    for k, v in os.environ.items():
-        if k in _DROP_ENV or _SECRET_NAME.search(k) or k.startswith(("GITHUB_", "RUNNER_", "CLAUDE")):
-            continue
-        env[k] = v
+    env = {k: v for k, v in os.environ.items()
+           if k in _PASS_ENV or k.startswith("LC_") or (k in _PROXY_ENV and "@" not in v)}
     env.setdefault("PIP_CACHE_DIR", str(real_cache / "pip"))
     env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(real_cache / "ms-playwright"))
     if not env.get("LANG", "").lower().endswith(("utf-8", "utf8")):
         env["LANG"] = "C.UTF-8"
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["CI"] = "true"
-    env["GITHUB_ACTIONS"] = "true"
-    env["RUNNER_OS"] = "Linux"
+    env.update({"GIT_TERMINAL_PROMPT": "0", "CI": "true", "GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux"})
     return env
 
 
-def _apply_github_files(env: dict, files: dict) -> None:
-    """段が GITHUB_ENV・GITHUB_PATH に書いたものを、 次の段へ渡す。"""
-    text = files["GITHUB_ENV"].read_text(encoding="utf-8")
-    lines, i = text.splitlines(), 0
+def _apply_github_files(env: dict, defined: dict, files: dict) -> None:
+    """段が GITHUB_ENV・GITHUB_PATH に書いたものを、 次の段へ渡す（GitHub と同じく、
+    GITHUB_ENV は env の文脈にも入り、 GITHUB_PATH は書いた順に PATH の先頭へ足す）。"""
+    lines, i = files["GITHUB_ENV"].read_text(encoding="utf-8").splitlines(), 0
     while i < len(lines):
-        ln = lines[i]
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$", ln)
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$", lines[i])
         if m:
-            end = lines.index(m.group(2), i + 1) if m.group(2) in lines[i + 1:] else None
-            if end is None:
+            if m.group(2) not in lines[i + 1:]:
                 raise RuntimeError("GITHUB_ENV の区切りが閉じていません")
-            env[m.group(1)] = "\n".join(lines[i + 1:end])
+            end = lines.index(m.group(2), i + 1)
+            env[m.group(1)] = defined[m.group(1)] = "\n".join(lines[i + 1:end])
             i = end + 1
             continue
-        if "=" in ln:
-            k, v = ln.split("=", 1)
-            env[k] = v
+        if "=" in lines[i]:
+            k, v = lines[i].split("=", 1)
+            env[k] = defined[k] = v
         i += 1
-    for p in reversed(files["GITHUB_PATH"].read_text(encoding="utf-8").splitlines()):
+    for p in files["GITHUB_PATH"].read_text(encoding="utf-8").splitlines():
         if p.strip():
             env["PATH"] = p.strip() + os.pathsep + env["PATH"]
     files["GITHUB_ENV"].write_text("")
     files["GITHUB_PATH"].write_text("")
 
 
-def _kill(proc: subprocess.Popen) -> None:
-    for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+def _kill_group(pgid: int) -> None:
+    """段の process の組を止める。 **段が終わった後も、 後ろで動く子を残さない**
+    （GitHub の runner も job の終わりに止める）。 setsid で抜けたものは止められない。"""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(proc.pid, sig)
+            os.killpg(pgid, sig)
         except ProcessLookupError:
             return
-        try:
-            proc.wait(timeout=wait)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
 
 
 def _run_job(job: dict, ctx_base: dict, a: argparse.Namespace, jobdir: Path, logdir: Path,
@@ -623,31 +704,31 @@ def _run_job(job: dict, ctx_base: dict, a: argparse.Namespace, jobdir: Path, log
                 "GITHUB_WORKSPACE": str(ws), "GITHUB_EVENT_NAME": EVENT,
                 "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": ctx_base["github"]["repository"],
                 "GITHUB_SHA": a.head_sha, "GITHUB_BASE_REF": ctx_base["github"]["base_ref"],
-                "GITHUB_HEAD_REF": "", **{k: str(v) for k, v in files.items()}})
+                "GITHUB_HEAD_REF": a.head_ref, **{k: str(v) for k, v in files.items()}})
     ctx = json.loads(json.dumps(ctx_base))
     ctx["github"]["workspace"] = str(ws)
     ctx["runner"]["temp"] = str(temp)
     ctx["inputs"] = job["inputs"]
-    wenv = {k: _subst(str(v), Expr({**ctx, "env": env})) for k, v in job["workflow_env"].items()}
-    env.update(wenv)
-    jenv = {k: _subst(str(v), Expr({**ctx, "env": env})) for k, v in (spec.get("env") or {}).items()}
-    env.update(jenv)
-    timeout = float(spec.get("timeout-minutes") or 360) * 60
-    deadline = time.monotonic() + timeout
+    defined = {}                    # env の文脈（workflow・job・段に書いたもの）
+    for src in (job["workflow_env"], spec.get("env") or {}):
+        for k, v in src.items():
+            defined[k] = _subst(str(v), Expr({**ctx, "env": defined}))
+    env.update(defined)
+    deadline = time.monotonic() + float(spec.get("timeout-minutes") or 360) * 60
     status, results = "success", []
     for i, step in enumerate(spec["steps"], 1):
         name = step.get("name") or step.get("uses") or str(step.get("run", "")).strip().splitlines()[0][:60]
-        ex = Expr({**ctx, "env": env}, status)
         r = {"n": i, "name": name, "result": "skipped", "secs": 0.0, "ran": 0, "skipped_tests": 0}
         results.append(r)
+        senv_def = {k: _subst(str(v), Expr({**ctx, "env": defined}, status))
+                    for k, v in (step.get("env") or {}).items()}
+        ex = Expr({**ctx, "env": {**defined, **senv_def}}, status)
         if not _cond(step.get("if"), ex):
             continue
         t0 = time.monotonic()
-        senv = dict(env)
-        senv.update({k: _subst(str(v), ex) for k, v in (step.get("env") or {}).items()})
         log = logdir / f"{i:02d}.log"
         try:
-            ok = _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline,
+            ok = _run_step(step, ex, {**env, **senv_def}, ws, temp, log, a, pythons, jobdir, env, deadline,
                            float(step["timeout-minutes"]) * 60 if step.get("timeout-minutes") else None)
         except RuntimeError as e:
             log.write_text(f"{e}\n", encoding="utf-8")
@@ -657,11 +738,11 @@ def _run_job(job: dict, ctx_base: dict, a: argparse.Namespace, jobdir: Path, log
         r["ran"], r["skipped_tests"] = _counts(text)
         if ok:
             r["result"] = "ok"
-            _apply_github_files(env, files)
+            _apply_github_files(env, defined, files)
         elif step.get("continue-on-error") is True:
             r["result"] = "failed（続けた）"
         else:
-            r["result"] = "timeout" if time.monotonic() >= deadline else "failed"
+            r["result"] = "timeout" if time.monotonic() >= deadline or "時間の上限" in text else "failed"
             status = "failure"
     return {"status": status, "steps": results}
 
@@ -672,7 +753,7 @@ def _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline, 
     if uses:
         action = uses.split("@")[0]
         if action == "actions/checkout":
-            dest = ws / with_["path"] if with_.get("path") else ws
+            dest = _inside(ws, with_.get("path") or "")
             if with_.get("repository") == CANONICAL_SLUG:
                 _clone(a.canonical, a.canonical_sha, dest, "https://github.com/MirumeAI/.github.git")
             else:
@@ -692,9 +773,12 @@ def _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline, 
         return True
     script = temp / f"step-{log.stem}.sh"
     script.write_text(_subst(str(step["run"]), ex), encoding="utf-8")
-    cmd = (["sh", "-e", str(script)] if step.get("shell") == "sh"
-           else ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)])
-    cwd = ws / _subst(step["working-directory"], ex) if step.get("working-directory") else ws
+    shell = step.get("shell")
+    # GitHub と同じ: 書かないときは bash -e、 bash と書いたときは pipefail も
+    cmd = (["sh", "-e", str(script)] if shell == "sh"
+           else ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)] if shell == "bash"
+           else ["bash", "-e", str(script)])
+    cwd = _inside(ws, _subst(step["working-directory"], ex)) if step.get("working-directory") else ws
     remaining = deadline - time.monotonic()
     limit = min(remaining, step_timeout) if step_timeout else remaining
     if limit <= 0:
@@ -706,12 +790,15 @@ def _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline, 
         try:
             rc = proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
-            _kill(proc)
+            _kill_group(proc.pid)
+            proc.wait()
             fh.write(f"\n時間の上限（{limit:.0f} 秒）を過ぎたので止めました\n".encode())
             return False
         except KeyboardInterrupt:
-            _kill(proc)
+            _kill_group(proc.pid)
             raise
+        finally:
+            _kill_group(proc.pid)
     return rc == 0
 
 
@@ -751,12 +838,28 @@ def _order(jobs: list) -> list:
 
 def _rmtree(path: Path) -> None:
     def force(func, p, _exc):
-        os.chmod(p, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+        if not os.path.islink(p):
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
         func(p)
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, onexc=force)
     else:
         shutil.rmtree(path, onerror=force)
+
+
+def _head_ref(target: Path, head: str, head_sha: str) -> str:
+    """GITHUB_HEAD_REF に入れる、 PR の元の枝の名前。 分からなければ空でない仮の名前。"""
+    names = [head] if head != "HEAD" else []
+    names.append("HEAD")
+    for name in names:
+        full = _git(target, "rev-parse", "--symbolic-full-name", name, check=False)
+        if full.startswith("refs/heads/"):
+            return full[len("refs/heads/"):]
+        if full.startswith("refs/remotes/") and full.count("/") >= 3:
+            return full.split("/", 3)[3]
+        if name == head:
+            break
+    return f"pr-{head_sha[:12]}"
 
 
 # ------------------------------------------------------------------ main
@@ -769,7 +872,7 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--canonical-ref", default="origin/main", help="正本の道具と再利用 workflow を取る ref")
     ap.add_argument("--python", action="append", default=[], metavar="版=道",
                     help="workflow の Python の版の interpreter（既定は PATH の python<版>）")
-    ap.add_argument("--work", help="clone・venv・仮の HOME を置く場所（既定は一時の dir）")
+    ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir）")
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
@@ -784,47 +887,45 @@ def main(argv: list | None = None) -> int:
         print(f"流せません: {e}（基準の ref が無いときは、 先に git fetch してください）", file=sys.stderr)
         return 2
     a.target_slug, a.origin_url = _slug(a.target)
+    a.head_ref = _head_ref(a.target, a.head, a.head_sha)
     merge_base = _git(a.target, "merge-base", base_sha, a.head_sha, check=False)
     if not merge_base:
         print(f"流せません: {a.base} と head に共通の祖先がありません", file=sys.stderr)
         return 2
-    changed = [f for f in _git(a.target, "diff", "--name-only", merge_base, a.head_sha).splitlines() if f]
+    changed = [f for f in _git(a.target, "diff", "--no-renames", "--name-only", merge_base,
+                               a.head_sha).splitlines() if f]
     base_branch = re.sub(r"^(?:refs/remotes/)?origin/", "", a.base)
-    up_to_date = subprocess.run(["git", "-C", str(a.target), "merge-base", "--is-ancestor", base_sha,
-                                 a.head_sha]).returncode == 0
+    has_base = merge_base == base_sha
+    tool_blob = _blob_sha(Path(__file__).resolve().read_bytes())
+    canon_blob = _git(a.canonical, "rev-parse", f"{a.canonical_sha}:{TOOL_REL}", check=False)
+    tool_note = f"道具 {tool_blob[:12]}（{'正本と同じ' if tool_blob == canon_blob else '正本と違う'}）"
+    base_note = f"基準 {a.base} {base_sha[:12]} を含む: {'はい' if has_base else 'いいえ'}"
+    canon_note = f"正本の道具 {CANONICAL_SLUG} {a.canonical_ref} {a.canonical_sha[:12]}"
+    # github.head_ref は入れない（手元では分からない値を、 違う値で評価しない）
+    probe = {"github": {"workspace": "", "event_name": EVENT, "sha": a.head_sha, "base_ref": base_branch,
+                        "repository": a.target_slug, "repository_owner": a.target_slug.split("/")[0],
+                        "event": {"pull_request": {"base": {"sha": base_sha, "ref": base_branch},
+                                                   "head": {"sha": a.head_sha}}}},
+             "runner": {"os": "Linux", "temp": ""}}
     try:
         plan = plan_for(a.target, a.head_sha, a.canonical, a.canonical_sha, base_branch, changed, a.target_slug)
         if not plan.jobs:
             why = "、 ".join(f"{w}（{r}）" for w, r in plan.skipped) or "workflow がありません"
             raise Unsupported(f"pull_request で動く workflow がありません（PASS とは言えません）。 対象外: {why}")
         jobs = _order(plan.jobs)
+        _precheck(jobs, probe)
         pythons = {} if a.list else _python_map(plan.pythons, a.python)
-        # 式を流す前に読めるか確かめる（知らない値で止まるなら、 何も流さないうちに止める）
-        probe = {"github": {"workspace": "", "event_name": EVENT, "sha": a.head_sha, "base_ref": base_branch,
-                            "head_ref": "", "repository": a.target_slug, "repository_owner": a.target_slug.split("/")[0],
-                            "event": {"pull_request": {"base": {"sha": base_sha, "ref": base_branch},
-                                                       "head": {"sha": a.head_sha}}}},
-                 "runner": {"os": "Linux", "temp": ""}}
-        for j in jobs:
-            ex = Expr({**probe, "inputs": j["inputs"], "env": {}})
-            for raw in [j["spec"].get("if"), j.get("caller_if")]:
-                if raw is not None and not isinstance(raw, bool):
-                    _cond(raw, ex)
-            for s in j["spec"]["steps"]:
-                for v in [s.get("run"), s.get("working-directory"), *((s.get("env") or {}).values()),
-                          *((s.get("with") or {}).values())]:
-                    if isinstance(v, str):
-                        _subst(v, ex)
-                if s.get("if") is not None and not isinstance(s.get("if"), bool):
-                    _cond(s["if"], ex)
     except Unsupported as e:
         print(f"流せません: {e}", file=sys.stderr)
         return 2
 
     print(f"===== Required Verification: {a.target_slug}")
-    print(f"head: {a.head_sha}（{a.base} は head の祖先: {'はい' if up_to_date else 'いいえ'}）")
-    print(f"正本の道具: {CANONICAL_SLUG} {a.canonical_sha[:12]}（{a.canonical_ref}）")
+    print(f"head: {a.head_sha}（{base_note}）")
+    print(f"{canon_note}・{tool_note}")
     print(f"変更のファイル: {len(changed)}（merge-base {merge_base[:12]}）")
+    if not has_base:
+        print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
+              " merge の前に main を取り込んで流し直してください")
     for wf, why in plan.skipped:
         print(f"対象外: {wf}（{why}）")
     if a.list:
@@ -862,10 +963,10 @@ def main(argv: list | None = None) -> int:
             res = _run_job(j, probe, a, work / f"job-{idx:02d}", jlog, pythons, real_cache)
             outcome[key] = res["status"]
             results[label] = res
-            secs = time.monotonic() - t0
-            print(f"\n{label}: {'PASS' if res['status'] == 'success' else 'FAIL'}（{secs:.0f} 秒）")
+            print(f"\n{label}: {'PASS' if res['status'] == 'success' else 'FAIL'}（{time.monotonic() - t0:.0f} 秒）")
             for r in res["steps"]:
-                tests = f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "") if r["ran"] else ""
+                tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "")
+                         if r["ran"] else "")
                 print(f"  {r['n']:02d} {r['result']:<8} {r['name']}（{r['secs']} 秒{tests}）")
             if not a.keep:
                 _rmtree(work / f"job-{idx:02d}")
@@ -880,12 +981,14 @@ def main(argv: list | None = None) -> int:
     n_tests = sum(s["ran"] for s in ran)
     n_skip = sum(s["skipped_tests"] for s in ran)
     passed = all(v in ("success", "skipped") for v in outcome.values()) and bool(results)
-    summary = {"repository": a.target_slug, "head": a.head_sha, "canonical": a.canonical_sha,
-               "base": base_sha, "merge_base": merge_base, "up_to_date": up_to_date,
+    summary = {"repository": a.target_slug, "head": a.head_sha, "head_ref": a.head_ref,
+               "base": base_sha, "merge_base": merge_base, "head_has_base": has_base,
+               "canonical_ref": a.canonical_ref, "canonical": a.canonical_sha,
+               "tool_blob": tool_blob, "tool_same_as_canonical": tool_blob == canon_blob,
                "passed": passed, "jobs": results, "skipped_workflows": plan.skipped}
     (logs / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     wfs = len({j["workflow"] for j in jobs})
-    detail = (f"{a.target_slug} head {a.head_sha[:12]}・正本の道具 {CANONICAL_SLUG} {a.canonical_sha[:12]}・"
+    detail = (f"{a.target_slug} head {a.head_sha[:12]}・{base_note}・{canon_note}・{tool_note}・"
               f"workflow {wfs}・job {len(results)}・段 {len(ran)}・試験 {n_tests} 件・飛ばした試験 {n_skip} 件・"
               f"{time.monotonic() - t_all:.0f} 秒")
     print()

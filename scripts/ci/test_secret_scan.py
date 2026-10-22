@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -120,6 +121,8 @@ class TheValidatorsFollowCiRootTest(unittest.TestCase):
             src = (HERE.parents[1] / ".claude" / "hooks"
                    / "guard-main.sh").read_text(encoding="utf-8")
             (hook_dir / "guard-main.sh").write_text(src, encoding="utf-8")
+            # 回帰テストは、 呼び出し側の .claude/settings.json のフックも確かめる
+            shutil.copy(HERE.parents[1] / ".claude" / "settings.json", root / ".claude")
             env = dict(os.environ, CI_ROOT=str(root))
             r = subprocess.run(["bash", str(HERE / "test_guard_main.sh")],
                                capture_output=True, text=True, env=env)
@@ -199,6 +202,7 @@ class TheDocumentedCountMustMatchTest(unittest.TestCase):
             src = (HERE.parents[1] / ".claude" / "hooks"
                    / "guard-main.sh").read_text(encoding="utf-8")
             (hooks / "guard-main.sh").write_text(src, encoding="utf-8")
+            shutil.copy(HERE.parents[1] / ".claude" / "settings.json", root / ".claude")
             if claude_md is not None:
                 (root / "CLAUDE.md").write_text(claude_md, encoding="utf-8")
             env = dict(os.environ, CI_ROOT=str(root))

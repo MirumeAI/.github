@@ -358,7 +358,7 @@ while IFS=$'\t' read -r _mt _cmd; do
 done <<< "$_HOOKS"
 # Bash と Edit のガードのフックが、 それぞれ 1 つずつある
 if [ "$_NB" = 1 ] && [ "$_NE" = 1 ]; then PASS=$((PASS+1));
-else FAIL=$((FAIL+1)); printf '  NG  .claude/settings.json のガードのフックの数（Bash %s・Edit %s。どちらも 1 のはず）\n' "$_NB" "$_NE"; fi
+else FAIL=$((FAIL+1)); printf '  NG  .claude/settings.json のガードのフックの数（Bash %s・Edit %s。どちらも 1 のはず。ファイルが無いときも 0）\n' "$_NB" "$_NE"; fi
 
 echo
 echo "合格 $PASS / 不合格 $FAIL"

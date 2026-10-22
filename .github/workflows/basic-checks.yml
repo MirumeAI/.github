@@ -127,3 +127,11 @@ jobs:
       # 守りを 1 つずつ壊すと落ちることも確かめる。 PyYAML が要る（上で入れる）。
       - name: 顧客の間の混入の検査そのもの
         run: python scripts/ci/test_customer_isolation.py
+
+      # **merge の前提の検査（Required Verification）を流す道具そのもの。**
+      # Private の Repository は Actions を使わないので、 この道具の PASS が
+      # merge の前提になる。 段を黙って飛ばす・落ちた段を通す・知らない書き方を
+      # 読み流すと、 確かめていない head が merge される。 小さな Repository で
+      # 実際に流して確かめる（守りを 1 つずつ壊すと落ちることも確かめた）。
+      - name: 手元の検査を流す道具
+        run: python scripts/ci/test_run_required_verification.py

@@ -8,8 +8,9 @@ MirumeAI Organization 配下の開発では、原則として以下の流れで�
 4. 実装・検証する
 5. Pull Requestを作成する
 6. レビュー可能なメンバーがいる場合はReviewを受ける
-7. 原則としてSquash and mergeする
-8. IssueをCloseする
+7. merge する head で手元の検査を流し、PASS の記録の行を PR に書く（`MirumeAI/.github` の `scripts/ci/run_required_verification.py`。使い方は同じ Repository の README）
+8. 原則としてSquash and mergeする
+9. IssueをCloseする
 
 ## Branch naming
 

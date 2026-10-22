@@ -251,8 +251,9 @@ REAL_PY="$(command -v python3)"
 mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/py_fail/python3"                    # 落ちる
 printf '#!/bin/sh\nexit 0\n' > "$WORK/py_silent/python3"                  # 何も出さない
-printf '#!/bin/sh\n[ "${1:-}" = "-" ] && exit 1\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg/python3"   # 2 回目だけ落ちる
-printf '#!/bin/sh\n[ "${1:-}" = "-" ] && exit 0\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg0/python3"  # 2 回目だけ何も出さない
+# 2 回目の呼び出しは、 引数に「-」（標準入力の script）があることで見分ける
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 1; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg/python3"   # 2 回目だけ落ちる
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 0; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg0/python3"  # 2 回目だけ何も出さない
 chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3" "$WORK/py_seg0/python3"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git push origin main"
 te DENY  "PATH=$WORK/py_fail:$PATH"            "git status"
@@ -267,6 +268,19 @@ te DENY  "MIRUME_GUARD_TEST_INTERNAL_ERROR=1"  "git status"
 # 入出力の文字コードが UTF-8 でない環境（Windows の日本語の環境の cp932 など）でも、 同じ判定にする
 te ALLOW "PYTHONIOENCODING=cp932"              "echo 'a — b'"
 te DENY  "PYTHONIOENCODING=cp932"              "echo 'a — b'; git push origin main"
+# 作業の場所や PYTHONPATH に、 標準と同じ名前の module（ここでは読むと落ちる json.py と shlex.py。
+# 1 回目と 2 回目の python3 がそれぞれ読む）があっても、 それを読まずに同じ判定にする
+# （読むと、 判断できずにすべてを拒否してしまう）
+setup_repo "$WORK/on_feature_mod" feature/1-x
+mkdir -p "$WORK/mods"
+for m in json shlex; do
+  printf 'raise ImportError("x")\n' > "$WORK/on_feature_mod/$m.py"
+  printf 'raise ImportError("x")\n' > "$WORK/mods/$m.py"
+done
+t ALLOW "git status"                           "$WORK/on_feature_mod"
+t DENY  "git push origin main"                 "$WORK/on_feature_mod"
+te ALLOW "PYTHONPATH=$WORK/mods"               "git status"
+te DENY  "PYTHONPATH=$WORK/mods"               "git push origin main"
 # 直す前は、 決まった印で始まる Bash の命令を別の種類の入力として素通りさせていた（印の確かめで塞いだ）
 t DENY  "@@FILE@@x; git push origin main"
 t DENY  $'@@FILE@@x\ngit push origin main'

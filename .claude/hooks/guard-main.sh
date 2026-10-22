@@ -81,9 +81,11 @@ if ! command -v python3 >/dev/null 2>&1; then
        "python3 を入れるか、 この操作を手元のターミナルで行ってください。"
 fi
 
-# python3 の入出力は UTF-8 にそろえる（環境の文字コードが cp932 などだと、「—」のような
-# 文字で落ちて、 正しい命令まで拒否してしまう）。
-CMD="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python3 -c '
+# python3 は -I で起動する。 作業の場所の module と PYTHON* の環境変数を読まない
+# （作業の場所に標準と同じ名前のファイル、 たとえば json.py があると、 それを読んで判定が変わる）。
+# 入出力は -X utf8 で UTF-8 にそろえる（環境の文字コードが cp932 などだと、「—」のような
+# 文字で落ちて、 正しい命令まで拒否してしまう。 -I なので PYTHONIOENCODING は効かない）。
+CMD="$(python3 -I -X utf8 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -126,7 +128,7 @@ CMD="${CMD#@@CMD@@}"
 
 # ------------------------------------------------------------ 前処理
 # 飾りを剥がし、 1行1コマンドへ分解する。
-SEGMENTS="$(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python3 - "$CMD" <<'PY'
+SEGMENTS="$(python3 -I -X utf8 - "$CMD" <<'PY'
 import re, shlex, sys
 
 print('@@SEG@@')

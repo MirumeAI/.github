@@ -227,6 +227,72 @@ t ALLOW "python3 scripts/ci/basic_checks.py"
 t ALLOW "src/pdm/cli/test.py"           "$WORK/on_feature" Edit
 t ALLOW "git switch -c feature/3-z"
 
+echo "== 判断できないときは拒否する（壊れた python3・古い bash・内部の失敗） =="
+# 環境を変えて流す。 古い bash の実機は CI に無いので、 版を低く装う環境変数で確かめる
+# （bash 4.3 の実機では、 直す前の hook で、 引数の無い `git push` の 3 件が落ちた。 2026-10-22）。
+run_hook_env() {
+  local envs="$1" cmd="$2" cwd="$3" tool="$4" payload
+  payload="$(python3 -c '
+import json,sys
+t,c=sys.argv[1],sys.argv[2]
+key="file_path" if t in ("Edit","Write") else "command"
+print(json.dumps({"tool_name":t,"tool_input":{key:c}}))' "$tool" "$cmd")"
+  ( cd "$cwd" && printf '%s' "$payload" | env "$envs" bash "$HOOK" >/dev/null 2>&1 )
+  [ $? -eq 2 ] && echo DENY || echo ALLOW
+}
+te() {
+  local exp="$1" envs="$2" cmd="$3" cwd="${4:-$WORK/on_feature}" tool="${5:-Bash}"
+  local got; got="$(run_hook_env "$envs" "$cmd" "$cwd" "$tool")"
+  if [ "$got" = "$exp" ]; then PASS=$((PASS+1));
+  else FAIL=$((FAIL+1)); printf '  NG  期待=%-5s 実際=%-5s  [%s] %s\n' "$exp" "$got" \
+         "$(printf '%s' "$envs" | sed -E 's#^PATH=[^:]*/(py_[a-z0-9]+):.*#PATH=<\1>:...#')" "$cmd"; fi
+}
+REAL_PY="$(command -v python3)"
+mkdir -p "$WORK/py_fail" "$WORK/py_silent" "$WORK/py_seg" "$WORK/py_seg0" "$WORK/py_xutf"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/py_fail/python3"                    # 落ちる
+printf '#!/bin/sh\nexit 0\n' > "$WORK/py_silent/python3"                  # 何も出さない
+# 2 回目の呼び出しは、 引数に「-」（標準入力の script）があることで見分ける
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 1; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg/python3"   # 2 回目だけ落ちる
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-" ] && exit 0; done\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/py_seg0/python3"  # 2 回目だけ何も出さない
+# 入出力を UTF-8 にそろえる指定（-X utf8）が無ければ落ちる。 この機械の文字コードは UTF-8 なので、
+# 指定が無くても本物の python3 では判定が変わらず、 指定を外したことに気づけないため
+printf '#!/bin/sh\np=\nfor a in "$@"; do [ "$p" = "-X" ] && [ "$a" = "utf8" ] && exec "%s" "$@"; p="$a"; done\nexit 1\n' "$REAL_PY" > "$WORK/py_xutf/python3"
+chmod +x "$WORK/py_fail/python3" "$WORK/py_silent/python3" "$WORK/py_seg/python3" "$WORK/py_seg0/python3" "$WORK/py_xutf/python3"
+te DENY  "PATH=$WORK/py_fail:$PATH"            "git push origin main"
+te DENY  "PATH=$WORK/py_fail:$PATH"            "git status"
+te DENY  "PATH=$WORK/py_silent:$PATH"          "git status"
+te DENY  "PATH=$WORK/py_silent:$PATH"          "src/pdm/cli/test.py" "$WORK/on_feature" Edit
+te DENY  "PATH=$WORK/py_seg:$PATH"             "git push origin main"
+te DENY  "PATH=$WORK/py_seg0:$PATH"            "git push origin main"
+# ふだんは通る命令でも拒否する（偽の python3 が効かなくなったら、 ここで気づく）
+te DENY  "PATH=$WORK/py_seg:$PATH"             "git status"
+te DENY  "PATH=$WORK/py_seg0:$PATH"            "git status"
+te ALLOW "PATH=$WORK/py_xutf:$PATH"            "git status"
+te DENY  "MIRUME_GUARD_ASSUME_BASH=4.3"        "git status"
+te DENY  "MIRUME_GUARD_ASSUME_BASH=3.2"        "git status"
+te ALLOW "MIRUME_GUARD_ASSUME_BASH=9.9"        "git status"
+te DENY  "MIRUME_GUARD_TEST_INTERNAL_ERROR=1"  "git status"
+# 入出力の文字コードが UTF-8 でない環境（Windows の日本語の環境の cp932 など）でも、 同じ判定にする
+te ALLOW "PYTHONIOENCODING=cp932"              "echo 'a — b'"
+te DENY  "PYTHONIOENCODING=cp932"              "echo 'a — b'; git push origin main"
+# 作業の場所や PYTHONPATH に、 標準と同じ名前の module（ここでは読むと落ちる json.py と shlex.py。
+# 1 回目と 2 回目の python3 がそれぞれ読む）があっても、 それを読まずに同じ判定にする
+# （読むと、 判断できずにすべてを拒否してしまう）
+setup_repo "$WORK/on_feature_mod" feature/1-x
+mkdir -p "$WORK/mods"
+for m in json shlex; do
+  printf 'raise ImportError("x")\n' > "$WORK/on_feature_mod/$m.py"
+  printf 'raise ImportError("x")\n' > "$WORK/mods/$m.py"
+done
+t ALLOW "git status"                           "$WORK/on_feature_mod"
+t DENY  "git push origin main"                 "$WORK/on_feature_mod"
+te ALLOW "PYTHONPATH=$WORK/mods"               "git status"
+te DENY  "PYTHONPATH=$WORK/mods"               "git push origin main"
+# 直す前は、 決まった印で始まる Bash の命令を別の種類の入力として素通りさせていた（印の確かめで塞いだ）
+t DENY  "@@FILE@@x; git push origin main"
+t DENY  $'@@FILE@@x\ngit push origin main'
+t DENY  "@@FILE@@x; git push --force origin feature/1-x"
+
 echo
 echo "合格 $PASS / 不合格 $FAIL"
 

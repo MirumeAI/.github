@@ -280,7 +280,7 @@ class PathsAndEnvTest(E2E):
                 steps:
                   - run: |
                       test "$HOME" != "$REAL_HOME_FOR_TEST"
-                      test -z "${GH_TOKEN:-}${SSH_AUTH_SOCK:-}"
+                      test -z "${GH_TOKEN:-}${SSH_AUTH_SOCK:-}${AWS_ACCESS_KEY_ID:-}${CLAUDE_X:-}"
                       touch "$HOME/written-by-pr"
                       echo "FOO=bar" >> "$GITHUB_ENV"
                   - run: test "$FOO" = bar
@@ -288,7 +288,8 @@ class PathsAndEnvTest(E2E):
         real_home = self.root / "real-home"
         real_home.mkdir()
         p = self.run_it(t, env={"HOME": str(real_home), "REAL_HOME_FOR_TEST": str(real_home),
-                                "GH_TOKEN": "dummy", "SSH_AUTH_SOCK": "/nowhere"})
+                                "GH_TOKEN": "dummy", "SSH_AUTH_SOCK": "/nowhere",
+                                "AWS_ACCESS_KEY_ID": "dummy", "CLAUDE_X": "dummy"})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertFalse((real_home / "written-by-pr").exists(), "本物の HOME に書かせない")
 

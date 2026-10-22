@@ -53,7 +53,7 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
 - 知らない書き方（action・式・matrix など）があれば、何も流さずに止まります（終了コード 2）。落ちた段があれば FAIL です（終了コード 1）
 - PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。飛ばした試験の件数も入るので、0 でなければ理由を確かめます
 - `--list` を付けると、流す workflow・job・段を出すだけです。PyYAML が無ければ、道具用の venv を `~/.cache/mirumeai/` に作って入れます
-- **PR のコードを手元で動かします。** 中身を読んでから流してください
+- **PR のコードを手元で動かします。** 中身を読んでから流してください。仮の HOME と認証の取り除きは、手元の設定や認証をうっかり使わせないためのもので、悪意のあるコードを閉じ込める箱ではありません（同じ OS のユーザーで動くので、本物の HOME にも書けてしまいます）
 
 ## 顧客の間の混入の検査（`customer-profile.yaml`）
 

@@ -30,7 +30,9 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 PR に書く記録の行を出す。 終了コード: 0 PASS ／ 1 FAIL ／ 2 流せない
 （書き方・Python の版・引数・対象の workflow が無い）。
 
-**PR のコードを手元で動かす。** 中身を読んでから流す。
+**PR のコードを手元で動かす。** 中身を読んでから流す。 仮の HOME と環境変数の
+取り除きは、 手元の設定や認証を**うっかり**使わせないためのもので、 同じ OS の
+ユーザーで動くコードを閉じ込める箱ではない（本物の HOME にも書けてしまう）。
 """
 from __future__ import annotations
 
@@ -69,7 +71,7 @@ STEP_KEYS = {"name", "id", "uses", "with", "run", "env", "if", "shell",
 PR_FILTER_KEYS = {"branches", "branches-ignore", "paths", "paths-ignore", "types"}
 
 #: PR のコードへ渡さない環境変数。 CI の job にも無いもの。
-_SECRET_NAME = re.compile(r"(?i)(token|secret|password|passwd|api_?key|credential)")
+_SECRET_NAME = re.compile(r"(?i)(token|secret|passw|api_?key|access_?key|private_?key|credential|auth|session|cookie)")
 _DROP_ENV = {"SSH_AUTH_SOCK", "SSH_ASKPASS", "GIT_ASKPASS", "VIRTUAL_ENV", "PYTHONPATH",
              "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "XDG_CONFIG_HOME",
              "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}

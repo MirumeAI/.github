@@ -13,7 +13,8 @@
 #   - `;` `&&` `||` `|` と改行で区切って、 1つずつ見る
 #   - `git -C <dir>` と `cd <dir> &&` を追って、 **どの Repository に対する
 #     操作か**を特定してから Branch を調べる
-#   - 判断できないときは **拒否側へ倒す** (通してしまうより止めるほうが安い)
+#   - 判断できないときは **拒否側へ倒す** (通してしまうより止めるほうが安い)。
+#     古い bash・python3 の失敗・途中で落ちたときも、 黙って通さず拒否する
 #   - **Product Release のタグは人（Core の maintainer）が打つ。** Agent の
 #     `git tag` の作成・削除・付け替えと、 タグの push・削除を止める
 #     （一覧と確かめは通す。 人が自分のターミナルで打つタグは止めない）
@@ -21,6 +22,15 @@
 # 保護する Branch は MIRUME_PROTECTED_BRANCH で変えられる (既定 main)。
 
 set -uo pipefail
+
+# **判断できないまま終わったら、 拒否する。** 決まった終わり方は 0（通す）と 2（拒否）だけ。
+# それ以外（未定義の変数で落ちた・python3 が落ちた など）で終わると、 Claude Code は
+# 2 以外を「拒否ではない」として通してしまう（bash 4.3 で、 引数の無い `git push` が
+# 終了コード 1 で落ちて通ることを確かめた。 2026-10-22）。
+trap '_rc=$?; if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
+  echo "MirumeAI 開発ルールにより拒否しました: ガードが判断できないまま終わった（終了コード $_rc）" >&2
+  exit 2
+fi' EXIT
 
 PROTECTED="${MIRUME_PROTECTED_BRANCH:-}"
 [ -n "$PROTECTED" ] || PROTECTED="main"
@@ -31,6 +41,30 @@ deny() {
   echo "Issue 番号付きの作業 Branch を作り、 Pull Request 経由で変更してください。" >&2
   exit 2
 }
+
+# **bash 4.4 より古いと、 判定の途中で落ちる**（空の配列と set -u。 macOS の既定は 3.2）。
+# 落ちても上の trap で拒否になるが、 何が足りないかを言ってから止める。
+# 試験では MIRUME_GUARD_ASSUME_BASH（例 4.3）で古い版を装える。 **低くする向きにだけ効く**
+# （高い版を書いても、 本当の版より新しくはならない）。
+_bv_major="${BASH_VERSINFO[0]}"; _bv_minor="${BASH_VERSINFO[1]}"
+case "${MIRUME_GUARD_ASSUME_BASH:-}" in
+  [0-9]*.[0-9]*)
+    _am="${MIRUME_GUARD_ASSUME_BASH%%.*}"; _an="${MIRUME_GUARD_ASSUME_BASH#*.}"; _an="${_an%%.*}"
+    case "$_am$_an" in
+      *[!0-9]*) ;;
+      *) if [ "$_am" -lt "$_bv_major" ] || { [ "$_am" -eq "$_bv_major" ] && [ "$_an" -lt "$_bv_minor" ]; }; then
+           _bv_major="$_am"; _bv_minor="$_an"
+         fi ;;
+    esac ;;
+esac
+if [ "$_bv_major" -lt 4 ] || { [ "$_bv_major" -eq 4 ] && [ "$_bv_minor" -lt 4 ]; }; then
+  deny "bash $_bv_major.$_bv_minor ではコマンドを正しく検査できない（4.4 以上が要る）" \
+       "新しい bash を PATH の先に置いてください（macOS では Homebrew の bash）。"
+fi
+
+# 試験のためだけの入口: 内部の失敗を起こし、 上の trap が拒否に替えることを確かめる。
+# **拒否の向きにしか効かない。**
+[ -z "${MIRUME_GUARD_TEST_INTERNAL_ERROR:-}" ] || exit 3
 
 TAG_HINT_NEW="新しい Product Release のタグは、 Core の maintainer（人）が自分のターミナルで打ちます。 Agent は命令の案と確かめだけを出してください。"
 TAG_HINT_KEEP="タグは消さない・動かさない（LEGACY を含む）。 Agent は、 タグの push・削除・付け替えの命令も、 その案も出しません。"
@@ -58,11 +92,15 @@ name = d.get("tool_name") or ""
 if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
     print("@@FILE@@" + str(ti.get("file_path") or ""))
 else:
-    print(ti.get("command") or "")
-' 2>/dev/null)"
+    print("@@CMD@@" + str(ti.get("command") or ""))
+' 2>/dev/null)" || deny "python3 で入力を読めない" "python3 -c 'print(1)' が動くかを確かめてください。"
 
+# **python3 が在っても、 動いているとは限らない**（例: Windows の Store の代わりの python3 は
+# 何も出さずに終わる）。 決まった印で始まる出力のときだけ先へ進む。
 case "$CMD" in
   "@@PARSE_ERROR@@") deny "入力を解釈できない" "" ;;
+  "@@FILE@@"*|"@@CMD@@"*) ;;
+  *) deny "python3 の出力を読めない（python3 が正しく動いていない）" "python3 -c 'print(1)' が動くかを確かめてください。" ;;
 esac
 
 # ------------------------------------------------- ファイル編集の保護
@@ -81,12 +119,15 @@ case "$CMD" in
     exit 0 ;;
 esac
 
+CMD="${CMD#@@CMD@@}"
 [ -n "$CMD" ] || exit 0
 
 # ------------------------------------------------------------ 前処理
 # 飾りを剥がし、 1行1コマンドへ分解する。
 SEGMENTS="$(python3 - "$CMD" <<'PY'
 import re, shlex, sys
+
+print('@@SEG@@')
 
 raw = sys.argv[1]
 
@@ -147,7 +188,12 @@ for c in chunks:
     toks[0] = toks[0].lstrip('\\').rsplit('/', 1)[-1]
     print('\x1f'.join(toks))
 PY
-)"
+)" || deny "python3 で命令を分けられない" "python3 -c 'print(1)' が動くかを確かめてください。"
+
+case "$SEGMENTS" in
+  "@@SEG@@"*) SEGMENTS="${SEGMENTS#@@SEG@@}" ;;
+  *) deny "python3 の出力を読めない（命令を分けられない）" "python3 -c 'print(1)' が動くかを確かめてください。" ;;
+esac
 
 # cd で移動した先を追う（`cd X && git push` に効かせる）
 CWD_OVERRIDE=""

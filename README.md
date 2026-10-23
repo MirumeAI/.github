@@ -16,13 +16,13 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
 | `.claude/scripts/issue-form.sh` | Issue Form の雛形と、本文の形の確かめ | 各 Repository に写す |
 | `.claude/settings.json` | この Repository のガードのフックと権限の設定 | 新しい顧客案件の Repository の設定の元。各 Repository の設定は、それぞれの Repository が持つ |
-| `scripts/ci/` | 共通の検査の道具（機械チェック・import の確かめ・ガードの回帰テスト・顧客の値の混入・顧客の間の混入・写しの照合・Release の識別と記録・Organization の監査・merge の前の検査など）と、その試験 | 再利用 workflow から呼ぶ。`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`customer_data_check.py` は各 Repository に写す |
+| `scripts/ci/` | 共通の検査の道具（機械チェック・import の確かめ・ガードの回帰テスト・顧客の値の混入・顧客の間の混入・写しの照合・Release の識別と記録・Organization の監査・merge の前の検査など）と、その試験 | 再利用 workflow から呼ぶもの（`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`copy_sync_check.py`・`customer_isolation_check.py`・`release_record_check.py`）、各 Core の workflow が写しを流すもの（`customer_data_check.py`）、各 Core のタグの CI が流すもの（`release_identity_check.py`）、手で流すもの（`run_required_verification.py`・`org_audit.py`・`new_customer_repo.py`）がある。`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`customer_data_check.py` は各 Repository に写す |
 | `.github/workflows/basic-checks-reusable.yml` | 各 Repository が呼ぶ再利用 workflow（共通の検査の段） | 各 Repository の workflow から呼ぶ |
 | `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
 | `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
 
 - **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします
-- ガード（`.claude/hooks/`）とその回帰テスト、設定のフックを変える Pull Request は、merge の前に人の判断が要ります
+- 守りの境に当たる変更（ガード `.claude/hooks/` とその回帰テスト、`.claude/settings.json` のフックと禁止、CI の守りの検査〔秘密の走査・顧客の値の混入・顧客の間の混入・写しの照合と `.ci-copy-allow`・Release の識別〕とそれを走らせる workflow など）を変える Pull Request は、merge の前に人の判断が要ります（一覧の正本は、development-docs の `02_github_workflow/pull_request_review.md` の「人の判断が要る変更」）
 - 開発の手順と判断の決まり（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です
 
 ## Issue Forms

@@ -1,10 +1,29 @@
 # MirumeAI GitHub Default Templates
 
-MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Request テンプレートです。
+MirumeAI Organization 配下の Repository で共通に使うものの正本です。Issue / Pull Request テンプレートのほか、ガード・共通の command・共通の検査の道具・顧客案件の Repository の雛形を置きます（下の「この Repository の中身」）。
 
 > **重要**
 > この Repository (`MirumeAI/.github`) は Public で運用します。
 > 顧客名、社内URL、IPアドレス、秘密情報、具体的な認証情報などは記載しないでください。
+
+## この Repository の中身（正本の地図）
+
+| 場所 | 中身 | 使われ方 |
+|---|---|---|
+| `.github/ISSUE_TEMPLATE/` | Issue Form（Feature・Bug・Experiment） | Organization の各 Repository の既定（下の「適用範囲」） |
+| `.github/PULL_REQUEST_TEMPLATE.md` | Pull Request のテンプレート | 同上 |
+| `.claude/hooks/guard-main.sh` | ガード（`main` への直接の commit・push や、ガードと設定の書き換えなどを拒否する） | 各 Repository に写す |
+| `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
+| `.claude/scripts/issue-form.sh` | Issue Form の雛形と、本文の形の確かめ | 各 Repository に写す |
+| `.claude/settings.json` | この Repository のガードのフックと権限の設定 | 新しい顧客案件の Repository の設定の元。各 Repository の設定は、それぞれの Repository が持つ |
+| `scripts/ci/` | 共通の検査の道具（機械チェック・import の確かめ・ガードの回帰テスト・顧客の値の混入・顧客の間の混入・写しの照合・Release の識別と記録・Organization の監査・merge の前の検査など）と、その試験 | 再利用 workflow から呼ぶもの（`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`copy_sync_check.py`・`customer_isolation_check.py`・`release_record_check.py`）、各 Core の workflow が写しを流すもの（`customer_data_check.py`）、各 Core のタグの CI が流すもの（`release_identity_check.py`）、手で流すもの（`run_required_verification.py`・`org_audit.py`・`new_customer_repo.py`）がある。`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`customer_data_check.py` は各 Repository に写す |
+| `.github/workflows/basic-checks-reusable.yml` | 各 Repository が呼ぶ再利用 workflow（共通の検査の段） | 各 Repository の workflow から呼ぶ |
+| `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
+| `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
+
+- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします
+- 守りの境に当たる変更（ガード `.claude/hooks/` とその回帰テスト、`.claude/settings.json` のフックと禁止、CI の守りの検査〔秘密の走査・顧客の値の混入・顧客の間の混入・写しの照合と `.ci-copy-allow`・Release の識別〕とそれを走らせる workflow など）を変える Pull Request は、merge の前に人の判断が要ります（一覧の正本は、development-docs の `02_github_workflow/pull_request_review.md` の「人の判断が要る変更」）
+- 開発の手順と判断の決まり（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です
 
 ## Issue Forms
 

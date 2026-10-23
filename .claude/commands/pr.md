@@ -15,6 +15,7 @@ main からの差分: !`git diff main...HEAD --stat | tail -30`
 3. 不要な生成物やログが含まれていないか
 4. Issue の完了条件 / 成功条件を満たしているか
 5. 必要なテスト・動作確認・実験を実施したか
+6. 本文と commit の文に、顧客名・顧客の値・社内 URL・IP・認証情報・手元の道を書いていないか（`MirumeAI/.github` は Public。本文は作った時点で公開される）
 
 ## 2. テンプレートを取得する
 
@@ -57,13 +58,14 @@ gh api repos/MirumeAI/.github/contents/.github/PULL_REQUEST_TEMPLATE.md --jq .co
 ## 5. 検査の記録
 
 作成の前に、この Branch の head で Required Verification（正本の検査）を流し、PASS の記録の行を確認結果に書く。
+先に、`.github` の clone で `git pull --ff-only`、この Repository の clone で `git fetch origin` をしておく（道具は自分で取り込まない。古いままだと、古い基準や古い正本で流れる）。
 
 ```bash
 python3 <.github の clone>/scripts/ci/run_required_verification.py <この Repository の clone> --head "$(git rev-parse HEAD)"
 ```
 
 - 流し方と記録の行の読み方は、`MirumeAI/.github` の README の「merge の前の検査」
-- FAIL のときと「基準を含む: いいえ」のときは、直すか main を取り込んでから流し直す
+- 終了コード 1（FAIL）・2（流せない）のときは、直してから流し直す。「基準を含む: いいえ」なら、main を取り込んでから流し直す。飛ばした試験が 0 でなければ、理由を確かめる
 - head が変わったら流し直し、記録の行を書き直す
 
 ## 6. 作成
@@ -74,6 +76,6 @@ python3 <.github の clone>/scripts/ci/run_required_verification.py <この Repo
 gh pr create --draft --repo MirumeAI/<repository> --base main --title "<要約>" --body-file <ファイル>
 ```
 
-**この command では merge しない。** merge は、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の条件をすべて満たしてから行う（head の固定・Required Verification の PASS・Reviewer A・B の BLOCKER・MAJOR・IN-PR REQUIRED FIXES が 0・人の判断が要る変更でない）。人の判断が要る変更は、人の判断を待つ。
+**この command では merge しない。** merge は、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の条件をすべて満たしてから行う（head の固定・Required Verification の PASS・Reviewer A・B の BLOCKER・MAJOR・IN-PR REQUIRED FIXES が 0・人の判断が要る変更でない）。人の判断が要る変更と、follow-up が守り・構成・本番・壊す操作の判断を含むときは、人の判断を待つ。人の確認（Human Verification）が要る PR（顧客 Repository の混入の検査の宣言の値を変える PR など）は、人が自分で書いた人の確認の記録も待つ。
 
 このリポジトリの変更なら `/docs-sync` の確認も併せて実施する。

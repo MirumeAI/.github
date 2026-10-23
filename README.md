@@ -19,7 +19,7 @@ MirumeAI Organization 配下の Repository で共通利用する Issue / Pull Re
 3. Issue 番号を含む Branch を作成する
 4. 実装・検証する
 5. 手元の検査を流して PASS の記録の行を書き、Pull Request を作成する（下の「merge の前の検査」）
-6. レビュー可能なメンバーがいる場合は Review を受ける。独立したレビュー（Reviewer A・B）を受けたら、Merge の門（`MirumeAI/development-docs` の `02_github_workflow/pull_request_review.md`）の条件を満たしてから merge する
+6. レビュー可能なメンバーがいる場合は Review を受ける。独立したレビュー（Reviewer A・B）を受けたら、Merge の門（`MirumeAI/development-docs` の `02_github_workflow/pull_request_review.md`）の条件を満たしてから merge する。Agent が merge するのは、独立したレビューと Merge の門を通したときだけ（人の判断が要る変更は人の判断の後）。人の確認は、誰が merge しても省かない（同じ文書の「どの Pull Request でも省かないこと」）
 7. merge する head で検査が PASS していることを確かめ、原則 Squash and merge する
 8. Issue を Close する
 

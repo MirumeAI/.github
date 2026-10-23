@@ -554,6 +554,12 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
     plan = Plan()
     listing = _git_paths(target, "ls-tree", "--name-only", head, ".github/workflows/", check=False)
     files = sorted(f for f in listing if f.endswith((".yml", ".yaml")))
+    # **名前のまま読むようになったので、 出力を崩す名前は流す前に止める**（#73）。 改行などの
+    # 制御文字は「対象外」の行や見出しに混ざり、 記録の行に似た行を作れる。 UTF-8 でない名前
+    # （surrogateescape の文字）は、 流した後に記録を書く所で落ちる。 前は黙って読まれなかった
+    for f in files:
+        if any(ord(c) < 0x20 or ord(c) == 0x7F or 0xDC80 <= ord(c) <= 0xDCFF for c in f):
+            raise Unsupported(f"workflow のファイルの名前に、 制御文字か UTF-8 でない文字があります: {ascii(f)}")
     for f in files:
         wf = Path(f).name
         d = _load_yaml(_git(target, "show", f"{head}:{f}"), wf)

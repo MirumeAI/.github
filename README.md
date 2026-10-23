@@ -12,6 +12,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 |---|---|---|
 | `.github/ISSUE_TEMPLATE/` | Issue Form（Feature・Bug・Experiment） | Organization の各 Repository の既定（下の「適用範囲」） |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Pull Request のテンプレート | 同上 |
+| `SECURITY.md` | 脆弱性と秘密の漏れの報告のしかた（GitHub の非公開の脆弱性報告で受ける） | 同上 |
 | `.claude/hooks/guard-main.sh` | ガード（`main` への直接の commit・push や、ガードと設定の書き換えなどを拒否する） | 各 Repository に写す |
 | `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
 | `.claude/scripts/issue-form.sh` | Issue Form の雛形と、本文の形の確かめ | 各 Repository に写す |
@@ -50,7 +51,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 
 ## 適用範囲
 
-この `.github` Repository のテンプレートは、MirumeAI Organization 配下の各 Repository に同種の独自テンプレートがない場合に既定値として利用されます。
+この `.github` Repository のテンプレートと `SECURITY.md` は、MirumeAI Organization 配下の各 Repository（Private を含む）に同種の独自のファイルがない場合に既定値として利用されます。
 
 ## merge の前の検査（`run_required_verification.py`）
 

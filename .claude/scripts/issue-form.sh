@@ -8,6 +8,9 @@
 #   issue-form.sh skeleton <feature|bug|experiment>
 #   issue-form.sh check    <feature|bug|experiment> <file>
 #
+# 終了コード: 0 は OK、1 は check の NG、2 は確かめられない
+# （引数・ファイル・gh が無い・正本を取得できない）。
+#
 # ラベルをこのファイルへ書き写さない。常に正本から取得する。
 # Issue の種別（Organization の Issue Type）も Form の `type:` から取る。
 
@@ -17,29 +20,49 @@ FORM_REPO="MirumeAI/.github"
 FORM_DIR=".github/ISSUE_TEMPLATE"
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
 _FORM_CACHE=""
 _FORM_CACHE_TYPE=""
 
-fetch_form() {
-  local type="$1"
+# 正本を最初に 1 回だけ取得し、Form の形を確かめる。**取得できないときは止まる。**
+# 以前は取得を $(…) の中で行っていたため、失敗しても空の正本として続き、
+# 見出しの無い本文に check が OK を返していた。
+load_form() {
+  local type="$1" src raw
   case "$type" in
     feature|bug|experiment) ;;
     *) echo "種別は feature / bug / experiment のいずれかです: $type" >&2; exit 2 ;;
   esac
-  if [ "$_FORM_CACHE_TYPE" = "$type" ]; then
-    printf '%s\n' "$_FORM_CACHE"
-    return 0
-  fi
   if ! command -v gh >/dev/null 2>&1; then
     echo "gh コマンドが必要です。01_getting_started/claude_code_setup.md を参照してください。" >&2
-    exit 1
+    exit 2
   fi
-  _FORM_CACHE="$(gh api "repos/${FORM_REPO}/contents/${FORM_DIR}/${type}.yml" --jq .content | base64 -d)"
+  src="repos/${FORM_REPO}/contents/${FORM_DIR}/${type}.yml"
+  if ! raw="$(gh api "$src" --jq .content)"; then
+    echo "Issue Form の正本を取得できません（gh api $src）。gh auth status と network を確かめてください。" >&2
+    exit 2
+  fi
+  if ! _FORM_CACHE="$(printf '%s' "$raw" | base64 -d 2>/dev/null)"; then
+    echo "Issue Form の正本を読めません（base64 として読めない）: $src" >&2
+    exit 2
+  fi
+  if ! printf '%s\n' "$_FORM_CACHE" | grep -q '^body:' \
+     || ! printf '%s\n' "$_FORM_CACHE" | grep -q '^      label: '; then
+    echo "Issue Form の正本に、Form の形（body: と見出し）がありません: $src" >&2
+    exit 2
+  fi
   _FORM_CACHE_TYPE="$type"
+}
+
+# 読み込んだ正本を出す（load_form の後だけ使う）
+fetch_form() {
+  if [ "$_FORM_CACHE_TYPE" != "$1" ]; then
+    echo "内部の誤り: Issue Form の正本を読み込んでいません: $1" >&2
+    exit 2
+  fi
   printf '%s\n' "$_FORM_CACHE"
 }
 
@@ -188,8 +211,10 @@ check() {
 [ $# -ge 1 ] || usage
 cmd="$1"; shift
 case "$cmd" in
-  labels)   [ $# -eq 1 ] || usage; labels "$1" ;;
-  skeleton) [ $# -eq 1 ] || usage; skeleton "$1" ;;
-  check)    [ $# -eq 2 ] || usage; check "$1" "$2" ;;
+  labels)   [ $# -eq 1 ] || usage; load_form "$1"; labels "$1" ;;
+  skeleton) [ $# -eq 1 ] || usage; load_form "$1"; skeleton "$1" ;;
+  check)    [ $# -eq 2 ] || usage
+            [ -f "$2" ] || { echo "ファイルがありません: $2" >&2; exit 2; }
+            load_form "$1"; check "$1" "$2" ;;
   *) usage ;;
 esac

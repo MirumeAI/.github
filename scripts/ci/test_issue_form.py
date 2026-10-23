@@ -24,7 +24,15 @@ SCRIPT = ROOT / ".claude" / "scripts" / "issue-form.sh"
 
 #: `gh api repos/<正本>/contents/<Form> --jq .content` の代わり。
 #: 正本の API と同じく base64 で返す。 読む場所は FAKE_FORMS。
+#: FAKE_GH_MODE で、 取得に失敗する形（落ちる・空・壊れた中身・見出しが無い・body が無い）を返す。
 FAKE_GH = """#!/usr/bin/env bash
+case "${FAKE_GH_MODE:-}" in
+  fail)    echo "gh: HTTP 404 (fake)" >&2; exit 1 ;;
+  empty)   exit 0 ;;
+  garbage) echo 'not base64 !!!'; exit 0 ;;
+  nolabel) printf 'name: x\\nbody:\\n' | base64; exit 0 ;;
+  nobody)  printf '      label: x\\n' | base64; exit 0 ;;
+esac
 for a in "$@"; do
   case "$a" in */ISSUE_TEMPLATE/*.yml) f="${a##*/}" ;; esac
 done
@@ -43,14 +51,14 @@ def _form_type(path: Path) -> "str | None":
     return m.group(1) if m else None
 
 
-def _run(args, forms_dir=FORMS):
+def _run(args, forms_dir=FORMS, mode=""):
     """`issue-form.sh` を差し替えた gh で実行する。"""
     with tempfile.TemporaryDirectory() as d:
         gh = Path(d) / "gh"
         gh.write_text(FAKE_GH, encoding="utf-8")
         gh.chmod(0o755)
         env = dict(os.environ, PATH=f"{d}:{os.environ['PATH']}",
-                   FAKE_FORMS=str(forms_dir))
+                   FAKE_FORMS=str(forms_dir), FAKE_GH_MODE=mode)
         return subprocess.run(["bash", str(SCRIPT), *args], env=env,
                               capture_output=True, text=True)
 
@@ -120,6 +128,46 @@ class TheScriptReadsTheTypeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Issue の種別: なし", r.stderr)
         self.assertNotIn("--type （", r.stderr)
+
+
+class AFetchFailureStopsTest(unittest.TestCase):
+    """**正本を取得できないときは、 OK を返さずに止まる（終了コード 2）。**
+
+    以前は取得を $(…) の中で行っていたため、 失敗しても空の正本として続き、
+    見出しの無い本文に check が OK を返していた（2026-10-22 の開発環境の監査）。
+    """
+
+    #: 取得に失敗する形と、 止まった理由の文（どの確かめが止めたか）
+    MODES = {"fail": "取得できません", "empty": "Form の形", "garbage": "読めません",
+             "nolabel": "Form の形", "nobody": "Form の形"}
+
+    def test_check_does_not_say_ok(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8",
+                                         delete=False) as b:
+            b.write("本文だけで、 見出しが無い Issue\n")
+        try:
+            for mode, why in self.MODES.items():
+                with self.subTest(mode=mode):
+                    r = _run(["check", "feature", b.name], mode=mode)
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertNotIn("OK", r.stdout)
+                    self.assertIn(why, r.stderr)
+        finally:
+            os.unlink(b.name)
+
+    def test_skeleton_and_labels_stop(self) -> None:
+        for cmd in ("skeleton", "labels"):
+            for mode, why in self.MODES.items():
+                with self.subTest(cmd=cmd, mode=mode):
+                    r = _run([cmd, "feature"], mode=mode)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertEqual(r.stdout, "", "取得できないのに雛形や見出しを出した")
+                    self.assertIn(why, r.stderr)
+
+    def test_a_missing_file_is_reported_before_fetching(self) -> None:
+        r = _run(["check", "feature", "/nonexistent/issue.md"], mode="fail")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("ファイルがありません", r.stderr)
 
 
 if __name__ == "__main__":

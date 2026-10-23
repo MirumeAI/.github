@@ -54,12 +54,26 @@ gh api repos/MirumeAI/.github/contents/.github/PULL_REQUEST_TEMPLATE.md --jq .co
 - Experiment は成功条件に対する結果を記載する
 - 顧客差分を含む場合は対象Componentと分類を記載する。`Both` の場合は各 Core の Issue / PR / Release と、顧客側で採用する Version 組合せを書く
 
-## 5. 作成
+## 5. 検査の記録
 
-ユーザーの承認を得てから作成する。Merge は行わない。
+作成の前に、この Branch の head で Required Verification（正本の検査）を流し、PASS の記録の行を確認結果に書く。
 
 ```bash
-gh pr create --repo MirumeAI/<repository> --base main --title "<要約>" --body-file <ファイル>
+python3 <.github の clone>/scripts/ci/run_required_verification.py <この Repository の clone> --head "$(git rev-parse HEAD)"
 ```
+
+- 流し方と記録の行の読み方は、`MirumeAI/.github` の README の「merge の前の検査」
+- FAIL のときと「基準を含む: いいえ」のときは、直すか main を取り込んでから流し直す
+- head が変わったら流し直し、記録の行を書き直す
+
+## 6. 作成
+
+本文をユーザーに見せ、承認を得てから Draft で作成する（依頼が作成まで任せているときは、そのまま作成してよい）。
+
+```bash
+gh pr create --draft --repo MirumeAI/<repository> --base main --title "<要約>" --body-file <ファイル>
+```
+
+**この command では merge しない。** merge は、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の条件をすべて満たしてから行う（head の固定・Required Verification の PASS・Reviewer A・B の BLOCKER・MAJOR・IN-PR REQUIRED FIXES が 0・人の判断が要る変更でない）。人の判断が要る変更は、人の判断を待つ。
 
 このリポジトリの変更なら `/docs-sync` の確認も併せて実施する。

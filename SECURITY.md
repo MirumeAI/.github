@@ -15,6 +15,7 @@ GitHub の非公開の脆弱性報告（Private vulnerability reporting）で受
 
 - 秘密の値そのもの（token・パスワード・鍵）。どこに、どの種類の秘密があるかだけを書いてください
 - 個人の情報、顧客の名前・設定の値・データ
+- 顧客の案件の Repository についての報告では、Repository の名前を書かず「顧客の案件の Repository」と書いてください（どの Repository かは、受けた人が確かめます）
 
 ## Organization のメンバーへ
 

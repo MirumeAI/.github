@@ -22,8 +22,10 @@ MirumeAI 標準開発ルールに従ってください。
 │   ├── feature.yml      … 新機能・機能改善・ドキュメント改善（種別 Feature）
 │   ├── bug.yml          … 不具合修正（種別 Bug）
 │   ├── experiment.yml   … AI・アルゴリズム・性能評価（種別 Experiment）
-│   └── config.yml       … blank_issues_enabled: false
+│   └── config.yml       … blank_issues_enabled: false。脆弱性は非公開の報告へ案内する（contact_links）
+├── VULNERABILITY_REPORT.yml … 非公開の脆弱性報告のフォーム
 └── PULL_REQUEST_TEMPLATE.md
+SECURITY.md              … 脆弱性と秘密の漏れの報告のしかた（根に置く）
 ```
 
 ここに置いたテンプレートは、各 Repository に同種の独自テンプレートが**無い場合のみ**既定値として使われます。

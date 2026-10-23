@@ -434,6 +434,31 @@ class FiltersTest(E2E):
         self.assertEqual(self._selected('{pull_request: {branches: ["develop"]}}', {}, "t6"), 2)
         self.assertEqual(self._selected('{pull_request: {types: ["closed"]}}', {}, "t7"), 2)
 
+    def test_non_ascii_names_match_the_filters(self):
+        """ASCII でない名前のファイルの変更も paths に合い、 その名前の workflow も読む（#73）。
+
+        git の既定（core.quotepath）では `"docs/\\343..."` の形で出て、 `docs/**` に合わず、
+        その workflow が黙って「対象外」になっていた。 workflow の名前も同じ形で出て、
+        `.yml` で終わらず読まれなかった。
+        """
+        self.assertEqual(self._selected('{pull_request: {paths: ["docs/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t8"), 0)
+        self.assertEqual(self._selected('{pull_request: {paths: ["docs/手順書/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t9"), 0)
+        self.assertEqual(self._selected('{pull_request: {paths-ignore: ["docs/手順書/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t10"), 2)
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """, name="検査.yml"), {"a.txt": "x"}, name="t11")
+        p = self.run_it(t, "--list")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("検査.yml", p.stdout)
+
 
 class EnvironmentTest(E2E):
 

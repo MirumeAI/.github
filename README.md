@@ -44,7 +44,7 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
     <検査する Repository の clone> --head <PR の head の commit>
 ```
 
-- 検査する Repository の `.github/workflows/` から、`pull_request` で動く workflow を選びます（`paths`・`branches`・`types` の条件も、`origin/main` との merge-base からの差で見ます）。job と段は CI と同じ順で流します。再利用 workflow と正本の道具は、この clone の `origin/main` から取ります
+- 検査する Repository の `.github/workflows/` から、`pull_request` で動く workflow を選びます（`paths`・`branches`・`types` の条件も、`origin/main` との merge-base からの差で見ます。日本語など ASCII でない名前のファイルも、名前のまま照らします。#73）。job と段は CI と同じ順で流します。再利用 workflow と正本の道具は、この clone の `origin/main` から取ります
 - job ごとに、新しいものを 3 つ用意して流します
   - head の新しい clone
   - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）

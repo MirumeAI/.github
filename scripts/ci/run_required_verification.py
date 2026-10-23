@@ -380,6 +380,20 @@ def _git(repo: Path, *args, check=True) -> str:
     return p.stdout.strip()
 
 
+def _git_paths(repo: Path, cmd: str, *args, check=True) -> list:
+    """git が出すファイルの名前の一覧。 **-z で読む**（#73）。
+
+    既定（`core.quotepath=true`）では、 ASCII でない名前が `"docs/\\343\\203..."` の形（引用と
+    8 進）で出て、 workflow の `paths` に合わず、 その workflow が黙って「対象外」になった。
+    -z なら名前をそのまま NUL で区切って出す（改行を含む名前も 1 つのまま）。
+    """
+    p = subprocess.run(["git", "-C", str(repo), cmd, "-z", *args], capture_output=True)
+    if check and p.returncode:
+        err = p.stderr.decode("utf-8", "replace").strip()
+        raise Unsupported(f"git {cmd} {' '.join(args)} が失敗しました: {err}")
+    return [f for f in p.stdout.decode("utf-8", "surrogateescape").split("\0") if f]
+
+
 def _slug(repo: Path) -> tuple:
     url = _git(repo, "remote", "get-url", "origin", check=False)
     m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", url)
@@ -538,8 +552,14 @@ def _inputs(call_spec: dict, with_: dict) -> dict:
 def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_branch: str,
              changed: list, target_slug: str) -> Plan:
     plan = Plan()
-    listing = _git(target, "ls-tree", "--name-only", head, ".github/workflows/", check=False)
-    files = sorted(f for f in listing.splitlines() if f.endswith((".yml", ".yaml")))
+    listing = _git_paths(target, "ls-tree", "--name-only", head, ".github/workflows/", check=False)
+    files = sorted(f for f in listing if f.endswith((".yml", ".yaml")))
+    # **名前のまま読むようになったので、 出力を崩す名前は流す前に止める**（#73）。 改行などの
+    # 制御文字は「対象外」の行や見出しに混ざり、 記録の行に似た行を作れる。 UTF-8 でない名前
+    # （surrogateescape の文字）は、 流した後に記録を書く所で落ちる。 前は黙って読まれなかった
+    for f in files:
+        if any(ord(c) < 0x20 or ord(c) == 0x7F or 0xDC80 <= ord(c) <= 0xDCFF for c in f):
+            raise Unsupported(f"workflow のファイルの名前に、 制御文字か UTF-8 でない文字があります: {ascii(f)}")
     for f in files:
         wf = Path(f).name
         d = _load_yaml(_git(target, "show", f"{head}:{f}"), wf)
@@ -892,8 +912,7 @@ def main(argv: list | None = None) -> int:
     if not merge_base:
         print(f"流せません: {a.base} と head に共通の祖先がありません", file=sys.stderr)
         return 2
-    changed = [f for f in _git(a.target, "diff", "--no-renames", "--name-only", merge_base,
-                               a.head_sha).splitlines() if f]
+    changed = _git_paths(a.target, "diff", "--no-renames", "--name-only", merge_base, a.head_sha)
     base_branch = re.sub(r"^(?:refs/remotes/)?origin/", "", a.base)
     has_base = merge_base == base_sha
     tool_blob = _blob_sha(Path(__file__).resolve().read_bytes())

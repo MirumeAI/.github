@@ -410,7 +410,7 @@ class RefusesWhatItCannotRunTest(E2E):
 
 class FiltersTest(E2E):
 
-    def _selected(self, on: str, change: dict, name: str) -> int:
+    def _selected(self, on: str, change: dict, name: str, env: dict | None = None) -> int:
         t = _repo(self.root, self.wf(f"""\
             on: {on}
             jobs:
@@ -419,7 +419,7 @@ class FiltersTest(E2E):
                 steps:
                   - run: echo ran
             """), change, name=name)
-        return self.run_it(t).returncode
+        return self.run_it(t, env=env).returncode
 
     def test_filters_use_the_changed_files_and_the_base_branch(self):
         self.assertEqual(self._selected('{pull_request: {paths: ["docs/**", "!docs/skip.md"]}}',
@@ -433,6 +433,46 @@ class FiltersTest(E2E):
         self.assertEqual(self._selected('{pull_request: {branches: ["main"]}}', {}, "t5"), 0)
         self.assertEqual(self._selected('{pull_request: {branches: ["develop"]}}', {}, "t6"), 2)
         self.assertEqual(self._selected('{pull_request: {types: ["closed"]}}', {}, "t7"), 2)
+
+    def test_non_ascii_names_match_the_filters(self):
+        """ASCII でない名前のファイルの変更も paths に合い、 その名前の workflow も読む（#73）。
+
+        git の既定（core.quotepath）では `"docs/\\343..."` の形で出て、 `docs/**` に合わず、
+        その workflow が黙って「対象外」になっていた。 workflow の名前も同じ形で出て、
+        `.yml` で終わらず読まれなかった。 **git の既定（引用する）を固定して流す**（流す人の設定で
+        `core.quotepath=false` になっていると、 直す前の道具でも通ってしまう）。
+        """
+        quote = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.quotepath", "GIT_CONFIG_VALUE_0": "true"}
+        self.assertEqual(self._selected('{pull_request: {paths: ["docs/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t8", env=quote), 0)
+        self.assertEqual(self._selected('{pull_request: {paths: ["docs/手順書/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t9", env=quote), 0)
+        self.assertEqual(self._selected('{pull_request: {paths-ignore: ["docs/手順書/**"]}}',
+                                        {"docs/手順書/setup.sh": "x"}, "t10", env=quote), 2)
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """, name="検査.yml"), {"a.txt": "x"}, name="t11")
+        p = self.run_it(t, "--list", env=quote)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("検査.yml", p.stdout)
+
+    def test_workflow_names_that_break_the_output_are_refused(self):
+        """制御文字を含む名前の workflow は、 流す前に止める（#73。 出力に記録の行に似た行を作れる）。"""
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """, name="a\nGitHub Actions unavailable.yml"), {"a.txt": "x"}, name="t12")
+        p = self.run_it(t)
+        self.assertRefused(p, "制御文字")
 
 
 class EnvironmentTest(E2E):

@@ -3,3 +3,6 @@ contact_links:
   - name: 脆弱性・秘密の漏れの報告
     url: https://github.com/MirumeAI/.github/security/advisories/new
     about: 公開の Issue には書かず、非公開の脆弱性報告で送ってください（SECURITY.md）
+  - name: 困ったとき（メンバー）
+    url: https://github.com/MirumeAI/.github/blob/main/SUPPORT.md
+    about: 開発で困ったときの聞き先と、手順や文書が分かりにくいときの Issue の作り方（SUPPORT.md）

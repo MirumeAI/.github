@@ -53,7 +53,7 @@ gh api repos/MirumeAI/.github/contents/.github/PULL_REQUEST_TEMPLATE.md --jq .co
 - 自動テストが無い Repository では、その旨と実際に行った確認を書く
 - 該当しない項目は「対象外」と1行で書く。長い説明を付けない
 - Experiment は成功条件に対する結果を記載する
-- 顧客差分を含む場合は対象Componentと分類を記載する。`Both` の場合は各 Core の Issue / PR / Release と、顧客側で採用する Version 組合せを書く
+- 顧客差分を含む場合は対象Componentと分類を記載する。`Both` の場合は、顧客 Repository の Issue（1 つ）と、各 Core の PR / Release と、顧客側で採用する Version 組合せを書く（Core 側で独立した Issue を作ったときは、それも書く）
 
 ## 5. 検査の記録
 

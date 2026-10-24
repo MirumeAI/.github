@@ -40,7 +40,7 @@ argument-hint: [顧客要求の内容]
 1. 対象Component と判断根拠
 2. 実装分類と判断根拠
 3. 確認すべきコード・設定の場所
-4. `Both` の場合: 親 Customer Issue と各 Core Issue の構成案
+4. `Both` の場合: 顧客 Repository の Issue（1 つ）・各 Core の Pull Request・各 Core の Product Release（タグは人が打つ）・顧客 Repository の `versions.yaml` で選ぶ組合せ（撮像側の lock と合うことを確かめる）の構成案。Core 側で独立した Issue が要るのは、その Core 単独で意味のある変更になり他の顧客にも影響する場合と、Core の公開 Interface を変える場合（Architecture Review の対象）だけ（development-docs の `03_customer_development/customer_specific_development.md` の「Bothの場合」）
 5. Core へ還元すべき共通機能があるか
 6. Architecture Review が必要なら、決めるべき論点の一覧
 

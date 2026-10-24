@@ -43,6 +43,7 @@ SUPPORT.md               … 困ったときの案内（根に置く。実際の
 1. テンプレートを変更する
 2. `MirumeAI/development-docs` の次のドキュメントと矛盾しないか確認する
    - `02_github_workflow/issue.md`
+   - `02_github_workflow/github_rules.md`（開発の手順。§5 に Pull Request の本文に書くこと）
    - `02_github_workflow/pull_request_review.md`
    - `02_github_workflow/organization_templates.md`
    - `00_management/current_github_operation.md`

@@ -68,7 +68,7 @@ fi
 
 TAG_HINT_NEW="新しい Product Release のタグは、 Core の maintainer（人）が自分のターミナルで打ちます。 Agent は命令の案と確かめだけを出してください。"
 TAG_HINT_KEEP="タグは消さない・動かさない（LEGACY を含む）。 Agent は、 タグの push・削除・付け替えの命令も、 その案も出しません。"
-RELEASE_HINT="GitHub Release は、 確かめに合格したタグから CI が作ります。 手で作らない・変えない・消さない。"
+RELEASE_HINT="GitHub Release は、 人も Agent も手で作らない・変えない・消さない。 今は GitHub Actions を使わないので、 CI も Release を作りません（作る仕組みは後で決める）。"
 
 # $1 が $2 の略（$3 文字以上の頭）か。 git は紛れの無い旗の略を受け付ける（--tag・--del など）
 prefix_of() { [ "${#1}" -ge "$3" ] && [ "${2#"$1"}" != "$2" ]; }

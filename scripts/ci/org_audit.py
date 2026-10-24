@@ -487,7 +487,7 @@ def main() -> int:
     gh = Gh()
     if not gh.available:
         print("gh コマンドが無いので監査できません。"
-              " 01_getting_started/claude_code_setup.md を参照してください。",
+              " development-docs の 01_getting_started/getting_started.md（準備）の §2 を参照してください。",
               file=sys.stderr)
         return 0 if not a.exit_code else 1
 

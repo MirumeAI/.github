@@ -37,7 +37,7 @@ load_form() {
     *) echo "種別は feature / bug / experiment のいずれかです: $type" >&2; exit 2 ;;
   esac
   if ! command -v gh >/dev/null 2>&1; then
-    echo "gh コマンドが必要です。01_getting_started/claude_code_setup.md を参照してください。" >&2
+    echo "gh コマンドが必要です。development-docs の 01_getting_started/getting_started.md（準備）の §2 を参照してください。" >&2
     exit 2
   fi
   src="repos/${FORM_REPO}/contents/${FORM_DIR}/${type}.yml"

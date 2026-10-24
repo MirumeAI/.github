@@ -10,9 +10,10 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 
 | 場所 | 中身 | 使われ方 |
 |---|---|---|
-| `.github/ISSUE_TEMPLATE/` | Issue Form（Feature・Bug・Experiment）と、Issue を作る画面の設定（`config.yml`。白紙の Issue を止め、脆弱性は非公開の報告へ案内する） | Organization の各 Repository の既定（下の「適用範囲」） |
+| `.github/ISSUE_TEMPLATE/` | Issue Form（Feature・Bug・Experiment）と、Issue を作る画面の設定（`config.yml`。白紙の Issue を止め、脆弱性は非公開の報告へ、困ったときは `SUPPORT.md` へ案内する） | Organization の各 Repository の既定（下の「適用範囲」） |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Pull Request のテンプレート | 同上 |
 | `SECURITY.md` | 脆弱性と秘密の漏れの報告のしかた（GitHub の非公開の脆弱性報告で受ける） | 同上 |
+| `SUPPORT.md` | 困ったときの案内（メンバーは入口ページの「困ったとき」へ。文書の分かりにくさは development-docs の Issue へ） | 同上 |
 | `.github/VULNERABILITY_REPORT.yml` | 非公開の脆弱性報告のフォーム（書かないものの注意と欄） | 同上 |
 | `.claude/hooks/guard-main.sh` | ガード（`main` への直接の commit・push や、ガードと設定の書き換えなどを拒否する） | 各 Repository に写す |
 | `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
@@ -52,7 +53,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 
 ## 適用範囲
 
-この `.github` Repository のテンプレートと `SECURITY.md` は、MirumeAI Organization 配下の各 Repository（Private を含む）に同種の独自のファイルがない場合に既定値として利用されます。
+この `.github` Repository のテンプレートと `SECURITY.md`・`SUPPORT.md` は、MirumeAI Organization 配下の各 Repository（Private を含む）に同種の独自のファイルがない場合に既定値として利用されます。
 
 ## merge の前の検査（`run_required_verification.py`）
 

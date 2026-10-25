@@ -233,6 +233,7 @@ while IFS= read -r line; do
   # ---- 対象 Repository を決める ----
   TARGET="${CWD_OVERRIDE:-.}"
   ARGS=()
+  OTHER_REPO=""                              # --git-dir・--work-tree を付けた（対象の Repository を確かに読めない）
   i=1
   while [ $i -lt ${#TOK[@]} ]; do
     t="${TOK[$i]}"
@@ -250,14 +251,39 @@ while IFS= read -r line; do
             remote.*.push=*) deny "設定で送り先が決まる push (git -c remote.<名前>.push)" "対象: $TARGET" ;;
           esac
           i=$((i+2)); continue ;;
-        --git-dir=*|--work-tree=*) i=$((i+1)); continue ;;
-        -*) i=$((i+1)); continue ;;
+        # 値を取る全体の旗。 値を離した形（--git-dir <道>）も読み、 値を子命令と取り違えない
+        --git-dir|--work-tree) OTHER_REPO="$t"; i=$((i+2)); continue ;;
+        --git-dir=*|--work-tree=*) OTHER_REPO="${t%%=*}"; i=$((i+1)); continue ;;
+        --namespace|--super-prefix|--attr-source) i=$((i+2)); continue ;;
+        --namespace=*|--super-prefix=*|--attr-source=*|--exec-path=*) i=$((i+1)); continue ;;
+        --config-env|--config-env=*)            # --config-env=<名前>=<環境変数>
+          if [ "$t" = "--config-env" ]; then kv="${TOK[$((i+1))]:-}"; i=$((i+2)); else kv="${t#--config-env=}"; i=$((i+1)); fi
+          kn="$(printf '%s' "${kv%%=*}" | tr '[:upper:]' '[:lower:]')"
+          case "$kn" in
+            push.followtags|push.default|remote.*.push|branch.*.merge)
+              deny "設定を外から渡す push の設定 (git --config-env $kn)" "対象: $TARGET" ;;
+          esac
+          continue ;;
+        # 値を取らない全体の旗（git の説明書の一覧）
+        -p|--paginate|-P|--no-pager|--no-replace-objects|--no-lazy-fetch|--no-optional-locks|--no-advice\
+          |--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--exec-path\
+          |--version|-v|--help|-h|--html-path|--man-path|--info-path)
+          i=$((i+1)); continue ;;
+        # **読めない全体の旗は止める**（値を取る旗を読み違えると、 値を子命令と取り違える）
+        -*) deny "読めない git 全体の旗 ($t)" "対象: $TARGET" ;;
       esac
     fi
     ARGS+=("$t"); i=$((i+1))
   done
   sub="${ARGS[0]:-}"
   rest=("${ARGS[@]:1}")
+  # --git-dir・--work-tree で別の Repository を指すと、 ガードは今の場所の Branch を見てしまう。 書き込みは止める
+  if [ "$prog" = "git" ] && [ -n "$OTHER_REPO" ]; then
+    case "$sub" in
+      commit|merge|rebase|cherry-pick|revert|am|push|branch|update-ref|tag|reset|switch|checkout|pull|fetch)
+        deny "git $OTHER_REPO を付けた $sub（対象の Repository を確かに読めない）" "-C <道> で Repository を指してください。" ;;
+    esac
+  fi
   joined=" ${rest[*]} "
 
   cur_branch() { git -C "$TARGET" symbolic-ref --quiet --short HEAD 2>/dev/null \
@@ -363,7 +389,12 @@ while IFS= read -r line; do
             *:*) src="${r%%:*}"; dst="${r#*:}"
                  case "$dst" in HEAD|@|refs/heads/HEAD) deny "送り先に HEAD という名前の Branch（$a）" "対象: $TARGET" ;; esac ;;
             *) src="$r"; dst="$r"
-               case "$dst" in HEAD|@) dst="$(cur_branch)" ;; esac ;;
+               case "$dst" in
+                 HEAD|@)
+                   # --delete HEAD は、 相手の refs/heads/HEAD を消す（今の Branch ではない）
+                   if [ "$del_flag" = "1" ]; then deny "HEAD という名前の Branch の削除（$a）" "対象: $TARGET"; fi
+                   dst="$(cur_branch)" ;;
+               esac ;;
           esac
           case "$dst" in
             refs/heads/*) dst="${dst#refs/heads/}" ;;
@@ -443,7 +474,8 @@ while IFS= read -r line; do
           *refs/tags/*) deny "タグの付け替え・削除 (git update-ref)" "$TAG_HINT_KEEP" ;;
         esac
         for a in "${rest[@]}"; do
-          if prefix_of "$a" --stdin 5; then deny "まとめての付け替え (git update-ref $a)" "対象: $TARGET"; fi
+          # git は --s・--st の短い略も --stdin として受け付ける
+          if prefix_of "$a" --stdin 3; then deny "まとめての付け替え (git update-ref $a)" "対象: $TARGET"; fi
         done
         # 1 つ目の位置の引数が、 付け替える ref（-m の値は飛ばす）
         ref=""; skip=0

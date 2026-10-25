@@ -155,6 +155,25 @@ class OnlyChangedFilesWithBaseTest(unittest.TestCase):
         self.assertNotIn("no_such_line_name", r.stdout + r.stderr, "基準の名前を出した")
         self.assertEqual(self.run_checker("--base").returncode, 2, "基準の無い --base を通した")
 
+    def test_an_option_like_base_is_refused(self) -> None:
+        out = self.root / "written.txt"
+        r = self.run_checker(f"--base=--output={out}")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertFalse(out.exists(), "基準の値を git の旗として読ませた")
+
+    def test_a_sub_folder_root_still_sees_the_change(self) -> None:
+        self.commit({"sub/conf/profile": f"token: {_GH}\n", "sub/ok.txt": "ok\n"})
+        env = local_env(self.root / "sub")
+        r = subprocess.run([sys.executable, str(CHECKER), "--base", "base_line"], capture_output=True, text=True, env=env)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("らしき文字列", r.stdout)
+        self.assertIn("分かれ目 ", r.stdout)
+
+    def test_no_change_is_not_a_pass(self) -> None:
+        r = self.run_checker("--base", "HEAD")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("足した・変えたファイルがありません", r.stdout)
+
 
 class TheValidatorsFollowCiRootTest(unittest.TestCase):
     """**3 つとも `CI_ROOT` を見ること。**

@@ -256,10 +256,19 @@ def _git_files(root: Path, *extra: str) -> list[str]:
 
 
 def changed_files(root: Path, base: str) -> "set[str] | None":
-    """基準（base）と HEAD の分かれ目からの差で、 足した・変えた・名前を変えたファイル。 取れなければ None。"""
+    """基準（base）と HEAD の分かれ目からの差で、 足した・変えた・名前を変えたファイル。 取れなければ None。
+
+    基準は commit を指すものだけを受け付ける（`-` で始まる値を git の旗として読ませない）。"""
+    if not base or base.startswith("-"):
+        return None
     try:
-        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", "--diff-filter=ACMRT",
-                            f"{base}...HEAD", "--"], capture_output=True)
+        v = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                            f"{base}^{{commit}}"], capture_output=True)
+        if v.returncode != 0:
+            return None
+        # --relative: CI_ROOT が Repository の下のフォルダでも、 道を CI_ROOT からの相対にそろえる
+        r = subprocess.run(["git", "-C", str(root), "diff", "--relative", "--name-only", "-z", "--diff-filter=ACMRT",
+                            "--end-of-options", f"{base}...HEAD", "--"], capture_output=True)
     except OSError:
         return None
     if r.returncode != 0:
@@ -397,7 +406,23 @@ def main(argv: "list[str] | None" = None) -> int:
             print("ERROR: 基準からの差を取れません（基準が手元にあるか、 HEAD と分かれ目があるかを確かめてください）")
             return 2
         files = [f for f in files if f.as_posix() in changed]
-        print(f"基準からの差だけを見ます（変わったファイル {len(changed)} 件）")
+        seen = {f.as_posix() for f in files}
+        unseen = [c for c in changed if c not in seen
+                  and not (SKIP_DIRS & set(Path(c).parts))
+                  and not any(fnmatch.fnmatch(c, pat) for pat in ignores)]
+        fork = subprocess.run(["git", "-C", str(root), "merge-base", base, "HEAD"],
+                              capture_output=True, text=True).stdout.strip()[:12] or "不明"
+        # **分かれ目は commit の 12 桁だけを出す**（基準の名前は出さない）
+        print(f"基準からの差だけを見ます（分かれ目 {fork}・変わったファイル {len(changed)} 件・見るファイル {len(files)} 件）")
+        if unseen:
+            print(f"ERROR: 変わったのに見られないファイルが {len(unseen)} 件あります（追跡していない・"
+                  "ファイルでないなど。CI_ROOT と基準を確かめてください）")
+            return 2
+        if not changed:
+            # 差が 0 件で PASS にすると、 基準の取り違え（HEAD そのものなど）に気づけない
+            print("ERROR: 基準からの差に、 足した・変えたファイルがありません（基準を確かめてください。"
+                  "消しただけの変更なら、 その旨を記録に書いてください）")
+            return 2
     # **元の道を出すのは、 手元で --show-paths を付けたときだけ。**
     open_paths = show_paths
     rid_of = FileIds(open_paths)

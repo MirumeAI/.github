@@ -54,6 +54,15 @@ setup_upstream() {
 }
 setup_upstream "$WORK/up_work" feature/4-w feature/4-w
 setup_upstream "$WORK/up_main" feature/5-v main
+# 設定で送り先が決まる Repository（push.default=matching・remote.<名前>.push）
+mkdir -p "$WORK/unborn"; git -C "$WORK/unborn" init -q -b main        # 最初の commit の前の main
+setup_repo "$WORK/up_cfg_main" feature/8-s                             # upstream の設定だけがある（追跡用の ref が無い）
+git -C "$WORK/up_cfg_main" config branch.feature/8-s.remote origin
+git -C "$WORK/up_cfg_main" config branch.feature/8-s.merge refs/heads/main
+setup_repo "$WORK/matching" feature/6-u
+git -C "$WORK/matching" config push.default matching
+setup_repo "$WORK/rpush" feature/7-t
+git -C "$WORK/rpush" config remote.origin.push "refs/heads/x:refs/heads/x"
 # 手元にあるタグ（タグの push・削除・付け替えの場面に使う。 この一時の Repository の中だけ）
 git -C "$WORK/on_feature" tag v0.9.0
 
@@ -284,6 +293,36 @@ t ALLOW "git branch --merged main"
 t ALLOW "git branch -f feature/1-x HEAD"
 t ALLOW "git update-ref refs/heads/feature/1-x HEAD"
 t ALLOW "git pull --ff-only"                 "$WORK/on_main"
+# 子命令の後ろの -C・-c と、 git branch の長い旗の略（MirumeAI/.github#97 の Reviewer A の所見）
+t DENY  "git branch -C feature/1-x main"
+t DENY  "git branch -c feature/1-x legacy_line"
+t DENY  "git branch --del main"
+t DENY  "git branch --dele legacy_line"
+t DENY  "git branch --mov main"
+t DENY  "git branch --cop feature/1-x main"
+t DENY  "git branch --forc main HEAD"
+t DENY  "git branch -m feature/9-q"          "$WORK/on_main"
+t DENY  "git commit -C HEAD"                 "$WORK/on_main"
+t ALLOW "git branch -m feature/9-q"          "$WORK/on_feature"
+t ALLOW "git branch --format='%(refname)'"
+t ALLOW "git branch --contains HEAD"
+t ALLOW "git branch --list 'feature/*'"
+# 送り先の HEAD・--branches・設定で送り先が決まる push・追跡用の ref
+t DENY  "git push origin feature/1-x:HEAD"
+t DENY  "git push --branches origin"
+t DENY  "git push --bran origin"
+t DENY  "git -c push.default=matching push"
+t DENY  "git -c remote.origin.push=refs/heads/x:refs/heads/x push"
+t DENY  "git push"                           "$WORK/matching"
+t DENY  "git push origin"                    "$WORK/rpush"
+t DENY  "git update-ref refs/remotes/origin/main HEAD"
+t ALLOW "git -c push.default=current push"
+# 生まれていない main・追跡用の ref の無い upstream・update-ref の略と大文字（Reviewer B の所見）
+t DENY  "git commit -m first"                "$WORK/unborn"
+t DENY  "git push"                           "$WORK/up_cfg_main"
+t DENY  "git update-ref --stdi"
+t DENY  "git update-ref refs/HEADS/main HEAD"
+t DENY  "git update-ref REFS/TAGS/v9.9.9 HEAD"
 t ALLOW "git push origin feature/1-x"
 t ALLOW "git push -u origin fix/2-y"
 t ALLOW "git commit -m 'work'"

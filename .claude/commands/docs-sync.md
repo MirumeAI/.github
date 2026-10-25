@@ -1,5 +1,5 @@
 ---
-description: development-docs / .github の変更時に必要な整合確認と changelog 追記を行う
+description: development-docs / .github の変更時に必要な整合確認と、変更記録の要否の確認と追記を行う
 ---
 
 GitHub 運用、`MirumeAI/.github`、`MirumeAI/development-docs` を変更したので、次を確認・実施してください。
@@ -15,21 +15,15 @@ GitHub 運用、`MirumeAI/.github`、`MirumeAI/development-docs` を変更した
 
 確認していない GitHub 設定を「実装済み」と書かない。
 
-## 2. changelog 追記
+## 2. 変更記録
 
-`00_management/implementation_changelog.md` の「変更履歴」先頭に1件追加する。
+`00_management/implementation_changelog.md` の「記録ルール」に当たる変更（GitHub の設定を変えた・運用ルールそのものを変えた・社内開発手順書の更新が要る・後から理由を探しそうな判断をした）なら、「記録（1行形式）」の先頭に 1 行を足す。当たらなければ書かない。
 
 ```markdown
-### YYYY-MM-DD 変更の要約
-
-- **関連Issue／Pull Request**: #番号／URL
-- **変更内容**:
-- **変更理由**:
-- **影響範囲**:
-- **社内開発手順書で更新すべき章**:
+- YYYY-MM-DD #<Issue番号> 変更の要約（社内開発手順書で更新すべき章があれば、その章）
 ```
 
-Issue / PR 番号が未発行なら `未作成` と記録し、発行後に更新する。
+番号は Issue の番号を書く（Pull Request の番号は、作る前は分からないため）（別の Repository の Issue は `MirumeAI/<Repository>#<番号>` と書く）。並んだ Pull Request と衝突したら、両方の行を残す（新しいものを上）。
 
 ## 3. .github との矛盾確認
 

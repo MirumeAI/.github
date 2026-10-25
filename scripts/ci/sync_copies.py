@@ -30,10 +30,17 @@ Pull Request を、 まとめて作る。
 守ること:
 
   ・顧客 Repository の名前を出力に出さない（「顧客 Repository 1」と呼ぶ）。
-    git・gh・検査の出力はそのまま出さず、 状態の置き場の `runs/<…>/logs/` に
-    書く。 **記録と本文のファイルには名前が残るので、 そのまま表示しない**
+    git・gh・検査の出力はそのまま出さず、 状態の置き場の `runs/<…>/logs/` に、
+    名前を伏せて書く。 **記録には伏せきれない値が残りうるし、 本文のファイル
+    （`bodies/`）には名前が残るので、 どちらもそのまま表示しない**。 状態の置き場は
+    本人だけが読める形（0700）にする
   ・作業 Branch（`feature/<数>-…`）にだけ push する。 main へは push しない。
-    force push しない
+    force push しない。 push の直前に push 先を確かめ直す。 正本の clone の
+    origin も確かめる（違う中身を正本として写さない）
+  ・Required Verification の記録の行が、 基準の main を含み、 道具が正本と同じで
+    なければ、 Pull Request を作らない
+  ・commit と本文の終わりの行（`--trailer`・`--pr-footer`。 Claude Code の印など）は
+    状態に残し、 流し直しで付け忘れても消さない
   ・正本の履歴に無い中身の写し（手で直したもの）は、 置き換えずに止まる
     （`--overwrite-unknown` で置き換え、 本文に書く）
   ・`.ci-copy-allow` に書かれた写しは触らない
@@ -133,14 +140,22 @@ class Result:
     err: str
 
 
-class Runner:
-    """外の命令を流し、 出力を記録のファイルにだけ書く（画面には出さない）。"""
+#: 記録のファイルを示すときに添える注意（名前は伏せて書くが、 伏せきれない値が残りうる）
+LOG_NOTE = "名前は伏せて書いたが、 値が残りうるので、 そのまま表示しない"
 
-    def __init__(self, log: Path, sleep) -> None:
+
+class Runner:
+    """外の命令を流し、 出力を記録のファイルにだけ書く（画面には出さない）。
+
+    記録にも、 分かっている名前は伏せて書く（`mask`）。 中身を読む命令（`git show`・
+    Organization の一覧・Issue の題の一覧）は、 出力を記録に書かない（`quiet`）。"""
+
+    def __init__(self, log: Path, sleep, mask=None) -> None:
         self.log = log
         self.sleep = sleep
+        self.mask = mask or (lambda s: s)
 
-    def __call__(self, args, *, cwd=None, check=True, retries=1, binary=False,
+    def __call__(self, args, *, cwd=None, check=True, retries=1, binary=False, quiet=False,
                  env=None, what="") -> Result:
         args = [str(a) for a in args]
         rc, out, err = 1, b"", b""
@@ -150,28 +165,36 @@ class Runner:
                 rc, out, err = r.returncode, r.stdout, r.stderr
             except OSError as e:
                 rc, out, err = 127, b"", str(e).encode()
-            self._write(args, rc, b"" if binary else out, err)
+            self._write(args, rc, b"" if (binary or quiet) else out, err)
             if rc == 0:
                 break
             if attempt + 1 < retries:
                 self.sleep(RETRY_SLEEP)
         if check and rc != 0:
-            raise Stop(f"{what or args[0]} が失敗しました（終了コード {rc}。記録: {self.log}）")
+            raise Stop(f"{what or args[0]} が失敗しました（終了コード {rc}。記録: {self.log}。{LOG_NOTE}）")
         return Result(rc, out if binary else out.decode("utf-8", "replace"),
                       err.decode("utf-8", "replace"))
 
     def _write(self, args, rc, out: bytes, err: bytes) -> None:
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        with self.log.open("ab") as f:
-            f.write(("$ " + " ".join(args) + f"  → {rc}\n").encode())
-            f.write(out[-20000:] + err[-20000:] + b"\n")
+        text = "$ " + " ".join(args) + f"  → {rc}\n" + (out[-20000:] + err[-20000:]).decode("utf-8", "replace")
+        with self.log.open("a", encoding="utf-8") as f:
+            f.write(self.mask(text) + "\n")
 
 
 # ---------------------------------------------------------------- 正本
 class Canonical:
-    def __init__(self, root: Path, run: Runner) -> None:
+    def __init__(self, root: Path, run: Runner, remote_base: "str | None" = None) -> None:
         self.root, self.run = root, run
-        run(["git", "-C", root, "fetch", "-q", "origin"], retries=3, what="正本の fetch")
+        if remote_base is not None:
+            # 違う中身を正本として写さないよう、 正本の clone の origin を確かめる
+            want = {f"{remote_base}/{CANONICAL}.git", f"{remote_base}/{CANONICAL}"}
+            for kind in ([], ["--push"]):
+                got = run(["git", "-C", root, "remote", "get-url", *kind, "origin"], check=False).out.strip()
+                if got not in want:
+                    raise Fatal(f"正本の clone（{root}）の origin が {ORG}/{CANONICAL} ではありません")
+        run(["git", "-C", root, "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+            retries=3, what="正本の fetch")
         self.commit = run(["git", "-C", root, "rev-parse", "origin/main"]).out.strip()
 
     def blob(self, rel: str) -> "bytes | None":
@@ -179,9 +202,9 @@ class Canonical:
         return r.out if r.rc == 0 else None
 
     def known(self, oid: str) -> bool:
-        """正本の履歴に、 この中身が一度でもあったか（前の版の写しか）。"""
-        r = self.run(["git", "-C", self.root, "log", "--all", "-1", "--format=%H",
-                      f"--find-object={oid}"], check=False)
+        """正本の main の履歴に、 この中身が一度でもあったか（前の版の写しか）。"""
+        r = self.run(["git", "-C", self.root, "log", "-1", "--format=%H", f"--find-object={oid}",
+                      self.commit], check=False)
         return r.rc == 0 and bool(r.out.strip())
 
     def contains(self, oid: str) -> bool:
@@ -236,7 +259,7 @@ class Target:
 
 
 def discover(gh, state_dir: Path, mask: Masker) -> list:
-    r = gh(["repo", "list", ORG, "--limit", "500", "--json", "name,isArchived"], retries=3,
+    r = gh(["repo", "list", ORG, "--limit", "500", "--json", "name,isArchived"], retries=3, quiet=True,
            what="Repository の一覧")
     names = sorted(x["name"] for x in json.loads(r.out or "[]")
                    if not x.get("isArchived") and x["name"] != CANONICAL)
@@ -257,11 +280,18 @@ def discover(gh, state_dir: Path, mask: Masker) -> list:
                      else f"そのほかの Repository {alias[1:]}")
             mask.add(name, label)
         out.append(Target(name, alias, label, state_dir / "clones" / alias))
-    state_dir.mkdir(parents=True, exist_ok=True)
     amap_file.write_text(json.dumps(amap, ensure_ascii=False, indent=1), encoding="utf-8")
     order = list(KNOWN.values())
     return sorted(out, key=lambda t: (order.index(t.alias) if t.alias in order else len(order),
                                       t.alias[0], int(t.alias[1:]) if t.alias[1:].isdigit() else 0))
+
+
+def check_origin(run: Runner, repo: Path, url: str) -> None:
+    """fetch と push の先が、 その Repository であること（insteadOf を展開した後の値で見る）。"""
+    for kind in ([], ["--push"]):
+        got = run(["git", "-C", repo, "remote", "get-url", *kind, "origin"], check=False).out.strip()
+        if got != url:
+            raise Stop(f"clone の origin が違います（{repo}）。 消してから流し直してください")
 
 
 def ensure_clone(t: Target, run: Runner, remote_base: str) -> None:
@@ -269,10 +299,7 @@ def ensure_clone(t: Target, run: Runner, remote_base: str) -> None:
     if not (t.clone / ".git").exists():
         t.clone.parent.mkdir(parents=True, exist_ok=True)
         run(["git", "clone", "-q", url, t.clone], retries=3, what="clone")
-    for kind in ([], ["--push"]):
-        got = run(["git", "-C", t.clone, "remote", "get-url", *kind, "origin"]).out.strip()
-        if got != url:
-            raise Stop(f"clone の origin が違います（{t.clone}）。 消してから流し直してください")
+    check_origin(run, t.clone, url)
     run(["git", "-C", t.clone, "fetch", "-q", "--prune", "origin"], retries=3, what="fetch")
 
 
@@ -322,6 +349,10 @@ def analyze(t: Target, canon: Canonical, cases: int, run: Runner) -> Analysis:
         if rel in allow:
             a.files.append((rel, "allow"))
             continue
+        # symlink などの写しは書き換えない（書くとリンクの先、 つまり作業ツリーの外へ書く）
+        mode = run(["git", "-C", t.clone, "ls-tree", main, "--", rel]).out.split()[:1]
+        if mode not in (["100644"], ["100755"]):
+            raise Stop(f"写しが普通のファイルではありません（{rel}）")
         want = canon.blob(rel)
         if want is None:
             raise Stop(f"正本に無い写しがあります: {rel}")
@@ -387,8 +418,15 @@ def pr_title(subject: str, source: int) -> str:
 
 
 def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
-            rv_line: str, overwritten: list, footer: str) -> str:
+            rv_line: str, overwritten: list, footer: str, first: str = "") -> str:
     ref = f"`{ORG}/{CANONICAL}` の main {canon.commit[:12]}。`{ORG}/{CANONICAL}#{source}`"
+    purpose = f"共通のファイルの写しを、正本（{ref}）に合わせる。"
+    related = f"`{ORG}/{CANONICAL}#{source}`"
+    if first and first != canon.commit:
+        # 同期の途中で正本が進んだ。 写す中身には、 その間に main に入った変更も含まれる
+        purpose += (f"同期を始めた後に正本の main が進んだ（{first[:12]} → {canon.commit[:12]}）ので、"
+                    "その間に main に入った正本の Pull Request の変更も含む。")
+        related += f"と、正本の main の {first[:12]}..{canon.commit[:12]} の変更"
     change = ([f"- この Repository が持つ写し（{_list(a.changes())}）を正本の中身に置き換えた（バイトで同じ）"]
               if a.changes() else [])
     change += [f"- `{rel}` の回帰テストの件数の行を {cases} にした" for rel, _, _ in a.count_changes()]
@@ -396,7 +434,7 @@ def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
         change.append(f"- **正本の履歴に無い中身を置き換えた**: {_list(overwritten)}（`--overwrite-unknown`）")
     body = [
         "## 関連Issue", "", f"Closes #{issue}", "",
-        "## 変更目的", "", f"共通のファイルの写しを、正本（{ref}）に合わせる。", "",
+        "## 変更目的", "", purpose, "",
         "## 変更内容", "", *change, "",
         "## 確認結果", "",
         "- [x] Issueの完了条件を満たしている",
@@ -412,7 +450,7 @@ def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
         "- 分類: 対象外",
         "- Coreへの還元: なし",
         "- Core Versionへの影響: なし",
-        f"- 関連Issue・PR・Release: `{ORG}/{CANONICAL}#{source}`",
+        f"- 関連Issue・PR・Release: {related}",
         "- Architecture Review: なし", "",
         "## Reviewerに確認してほしい点", "",
         "- 正本の中身をそのまま写す同期の Pull Request か（差が写しと件数の行だけ・中身が正本と同じ・"
@@ -425,7 +463,7 @@ def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
 
 # ---------------------------------------------------------------- 1 つの Repository を進める
 def check_work_branch(br: str) -> None:
-    if not WORK_BRANCH.match(br):
+    if not WORK_BRANCH.fullmatch(br):
         raise Stop(f"作業 Branch の形（feature/<数>-…）でない Branch には push しません: {br}")
 
 
@@ -444,6 +482,7 @@ class Ctx:
     state: dict
     rv: object
     sleep: object
+    remote_base: str
 
     def save(self) -> None:
         f = self.run_dir / "state.json"
@@ -464,11 +503,13 @@ def ensure_issue(ctx: Ctx, t: Target, a: Analysis) -> int:
     r = ctx.run(["bash", ctx.canon.root / ".claude" / "scripts" / "issue-form.sh", "check", "feature", body],
                 check=False)
     if r.rc != 0 or not r.out.startswith("OK"):
-        raise Fatal(f"Issue の本文が正本の Issue Form に合いません（記録: {ctx.run.log}）。 道具の本文を直してください")
+        raise Fatal(f"Issue の本文が正本の Issue Form に合いません（記録: {ctx.run.log}。{LOG_NOTE}）。"
+                    " 道具の本文を直してください")
     for _ in range(3):
         # 作った直後に止まったときに二重に作らないよう、 同じ題の開いた Issue を先に探す
+        # （題には案件の言葉が入りうるので、 一覧は記録に書かない）
         r = ctx.gh(["issue", "list", "-R", repo, "--state", "open", "--limit", "100", "--json", "number,title"],
-                   retries=3, what="Issue の一覧")
+                   retries=3, quiet=True, what="Issue の一覧")
         for it in json.loads(r.out or "[]"):
             if it.get("title") == title:
                 return int(it["number"])
@@ -478,7 +519,7 @@ def ensure_issue(ctx: Ctx, t: Target, a: Analysis) -> int:
         if r.rc == 0 and m:
             return int(m.group(1))
         ctx.sleep(RETRY_SLEEP)
-    raise Stop(f"Issue を作れませんでした（記録: {ctx.run.log}）")
+    raise Stop(f"Issue を作れませんでした（記録: {ctx.run.log}。{LOG_NOTE}）")
 
 
 def ensure_worktree(ctx: Ctx, t: Target, br: str) -> Path:
@@ -486,8 +527,15 @@ def ensure_worktree(ctx: Ctx, t: Target, br: str) -> Path:
     wt = ctx.run_dir / "wt" / t.alias
     if not wt.exists():
         run(["git", "-C", t.clone, "worktree", "prune"])
-        has = run(["git", "-C", t.clone, "rev-parse", "--verify", "-q", f"refs/heads/{br}"], check=False).rc == 0
-        args = [wt, br] if has else ["--no-track", "-b", br, wt, "origin/main"]
+
+        def has(ref: str) -> bool:
+            return run(["git", "-C", t.clone, "rev-parse", "--verify", "-q", ref], check=False).rc == 0
+        if has(f"refs/heads/{br}"):
+            args = [wt, br]
+        else:
+            # 状態の置き場を失っても、 push 済みの作業 Branch から続ける
+            start = f"origin/{br}" if has(f"refs/remotes/origin/{br}") else "origin/main"
+            args = ["--no-track", "-b", br, wt, start]
         run(["git", "-C", t.clone, "worktree", "add", "-q", *args], what="作業ツリーの作成")
     cur = run(["git", "-C", wt, "symbolic-ref", "--short", "HEAD"], check=False).out.strip()
     if cur != br:
@@ -510,6 +558,9 @@ def bring_main(run: Runner, wt: Path) -> None:
 def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
     """写しを正本の中身にし、 件数の行を直す。 変えた道を返す。"""
     touched = []
+    for rel in a.changes() + [rel for rel, _, _ in a.counts]:
+        if (wt / rel).is_symlink():
+            raise Stop(f"写しか件数の行のファイルが symlink です（{rel}）")
     for rel in a.changes():
         want = ctx.canon.blob(rel)
         p = wt / rel
@@ -533,12 +584,16 @@ def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     rc, text = ctx.rv(wt, head, log)
+    log.write_text(ctx.run.mask(text), encoding="utf-8")   # 記録にも名前は伏せて残す
     lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(RECORD)]
     if rc != 0 or not lines:
-        raise Stop(f"Required Verification が PASS しませんでした（記録: {log}）")
+        raise Stop(f"Required Verification が PASS しませんでした（記録: {log}。{LOG_NOTE}）")
     line = lines[-1]
     if "を含む: はい" not in line:
         raise Stop(f"Required Verification の基準が main を含みません（記録: {log}）")
+    if "（正本と同じ）" not in line:
+        raise Stop(f"Required Verification の道具が正本の main と違います（記録: {log}）。"
+                   " 正本の clone を main にしてから流し直してください")
     m = re.search(r"試験 ([0-9]+) 件・飛ばした試験 ([0-9]+) 件", line)
     summary = f"試験 {m.group(1)} 件・飛ばした {m.group(2)} 件" if m else "件数は記録の行に無い"
     return line, summary
@@ -583,11 +638,15 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
     head = run(["git", "-C", wt, "rev-parse", "HEAD"]).out.strip()
     diff = run(["git", "-C", wt, "diff", "--name-only", "origin/main...HEAD"]).out.split()
     if not diff:
-        return f"差が無い（Issue #{st['issue']} は、 確かめてから閉じてください）"
+        return (f"差が無い（Issue #{st['issue']} と、 作っていれば Pull Request を、 確かめてから閉じてください）")
     expected = set(SHARED) | {rel for rel, _, _ in a.counts}
     extra = sorted(set(diff) - expected)
     if extra:
-        raise Stop(f"写しと件数の行のほかの差があります（{_list(extra)}）。 作業ツリー {wt} を確かめてください")
+        # 道に案件の言葉が入りうるので、 画面には数だけを出す
+        with run.log.open("a", encoding="utf-8") as f:
+            f.write(run.mask(f"# {t.alias} の写しと件数の行のほかの差: {', '.join(extra)}\n"))
+        raise Stop(f"写しと件数の行のほかの差が {len(extra)} ファイルあります（道は記録: {run.log}。{LOG_NOTE}）。"
+                   f" 写しでない直しが要る同期は、 この道具の外で、 作業ツリー {wt} から手で続けてください")
     if st.get("rv_head") != head:
         st["rv_line"], st["rv_summary"] = run_rv(ctx, t, wt, head)
         st["rv_head"] = head
@@ -597,10 +656,12 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
         if remote and run(["git", "-C", wt, "merge-base", "--is-ancestor", remote, head], check=False).rc != 0:
             raise Stop(f"push 先の {br} に、 手元に無い commit があります（force push はしません）")
         check_work_branch(br)
+        check_origin(run, wt, f"{ctx.remote_base}/{t.name}.git")     # push の直前に、 push 先を確かめ直す
         run(["git", "-C", wt, "push", "-q", "-u", "origin", br], retries=3, what="push")
     overwritten = [rel for rel in unknown if rel in diff]
     body = _write_body(ctx, f"{t.alias}-pr.md",
-                       pr_body(st["issue"], a, ctx.canon, ctx.source, ctx.cases, st["rv_line"], overwritten, ctx.footer))
+                       pr_body(st["issue"], a, ctx.canon, ctx.source, ctx.cases, st["rv_line"], overwritten,
+                               ctx.footer, ctx.state.get("canonical_first", "")))
     repo = f"{ORG}/{t.name}"
     if "pr" not in st:
         r = ctx.gh(["pr", "list", "-R", repo, "--head", br, "--state", "all", "--json", "number,state"],
@@ -616,7 +677,7 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
                        retries=1, what="Pull Request の作成")
             m = re.search(r"/pull/([0-9]+)\s*$", str(r.out))
             if not m:
-                raise Stop(f"Pull Request の番号を読めません（記録: {run.log}）")
+                raise Stop(f"Pull Request の番号を読めません（記録: {run.log}。{LOG_NOTE}）")
             st["pr"] = int(m.group(1))
         st["pr_head"] = None
         ctx.save()
@@ -656,10 +717,13 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
 
     state_dir = args.state_dir.expanduser().resolve()
     run_dir = state_dir / "runs" / (f"github-{args.source}" if args.source else "plan")
-    run = Runner(run_dir / "logs" / "commands.log", sleep)
+    # 顧客 Repository の clone を置くので、 本人だけが読める置き場にする
+    state_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(state_dir, 0o700)
+    run = Runner(run_dir / "logs" / "commands.log", sleep, mask)
     gh = lambda a, **k: run(["gh", *a], **k)                # noqa: E731
     try:
-        canon = Canonical(args.canonical.resolve(), run)
+        canon = Canonical(args.canonical.resolve(), run, remote_base)
         check_templates(canon)
         if args.source:
             check_source(gh, canon, args.source)
@@ -681,13 +745,19 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     if args.cmd == "apply":
         before = state.get("canonical")
         if before and before != canon.commit:
-            say(f"正本が進みました（{before[:12]} → {canon.commit[:12]}）。 新しい正本に合わせます")
+            say(f"正本が進みました（{before[:12]} → {canon.commit[:12]}）。 新しい正本に合わせ、 本文にその範囲を書きます")
         state["source"], state["canonical"] = args.source, canon.commit
+        state.setdefault("canonical_first", canon.commit)
+        # commit と本文の終わりの行（Claude Code の印など）は、 流し直しで付け忘れても消えないよう残す
+        if args.trailer:
+            state["trailers"] = args.trailer
+        if args.pr_footer:
+            state["pr_footer"] = args.pr_footer
         run_dir.mkdir(parents=True, exist_ok=True)
     ctx = Ctx(run, gh, canon, cases, args.source or 0, getattr(args, "subject", DEFAULT_SUBJECT),
-              getattr(args, "trailer", []), getattr(args, "pr_footer", ""),
+              state.get("trailers", []), state.get("pr_footer", ""),
               getattr(args, "overwrite_unknown", False), run_dir, state,
-              rv or default_rv(canon.root), sleep)
+              rv or default_rv(canon.root), sleep, remote_base)
     if args.cmd == "apply":
         ctx.save()
 

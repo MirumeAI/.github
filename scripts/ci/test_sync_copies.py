@@ -147,6 +147,7 @@ class World:
         gh.chmod(0o755)
         self.rv_fail: set = set()
         self.rv_fail_rc_only: set = set()       # 記録の行らしい文は出たが、 終了コードが失敗
+        self.rv_line: dict = {}                 # 名前 → 記録の行の差し替え（基準を含まない・道具が正本と違う）
         self.rv_calls: list = []
         self._canonical()
         self.db_path = base / "gh.json"
@@ -234,10 +235,18 @@ class World:
         self.rv_calls.append((name, head))
         if name in self.rv_fail:
             return 1, f"結果: FAIL（{S.ORG}/{name} head {head[:12]}）\n"
+        contains, tools = self.rv_line.get(name, ("はい", "正本と同じ"))
         text = ("結果: PASS\n記録の行（PR に書く）:\n"
-                f"{S.RECORD}（{S.ORG}/{name} head {head[:12]}・基準 origin/main 0123456789ab を含む: はい・"
+                f"{S.RECORD}（{S.ORG}/{name} head {head[:12]}・基準 origin/main 0123456789ab を含む: {contains}・"
+                f"正本の道具 MirumeAI/.github origin/main 0123456789ab・道具 0123456789ab（{tools}）・"
                 "試験 10 件・飛ばした試験 0 件・1 秒）\n")
         return (1 if name in self.rv_fail_rc_only else 0), text
+
+    def wt(self, alias: str) -> Path:
+        return self.state / "runs" / "github-97" / "wt" / alias
+
+    def state_file(self) -> Path:
+        return self.state / "runs" / "github-97" / "state.json"
 
     def main(self, *argv) -> "tuple[int, str]":
         self.save()
@@ -455,6 +464,147 @@ class SyncTest(unittest.TestCase):
         self.assertIn("雛形", out)
         self.assertEqual(self.w.db["issues"], {})
 
+    # ------------------------------------------------------------ 止まる場面（守りを 1 つずつ）
+    def test_other_diff_stops_and_hides_paths(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "c2")[0], 0)
+        wt = self.w.wt("c2")
+        (wt / "notes-beta-plant.txt").write_text("x\n", encoding="utf-8")
+        git("-C", wt, "add", "-A")
+        git("-C", wt, "commit", "-q", "-m", "写しでない直し")
+        code, out = self.w.main("apply", "--source", "97", "--only", "c2")
+        self.assertEqual(code, 1)
+        self.assertIn("ほかの差が 1 ファイル", out)
+        self.assertNoSecret(out)                                  # 道（beta を含む）を出さない
+
+    def test_remote_branch_with_unknown_commit_stops(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        br = self.w.db["prs"][f"{S.ORG}/PDM"][0]["head"]
+        other = self.w.base / "other-pdm"
+        git("clone", "-q", "-b", br, self.w.remotes / "PDM.git", other)
+        (other / "x.txt").write_text("x\n", encoding="utf-8")
+        git("-C", other, "add", "-A")
+        git("-C", other, "commit", "-q", "-m", "ほかの人の commit")
+        git("-C", other, "push", "-q", "origin", f"HEAD:{br}")
+        self.w.push_main("PDM", "README.md", b"new\n")          # 手元の head が変わり、 push が要る
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("手元に無い commit", out)
+
+    def test_record_must_contain_main_and_canonical_tools(self) -> None:
+        for variant, msg in ((("いいえ", "正本と同じ"), "main を含みません"),
+                             (("はい", "正本と違う"), "正本の main と違います")):
+            self.w.rv_line = {"PDM": variant}
+            code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+            self.assertEqual(code, 1, variant)
+            self.assertIn(msg, out)
+            self.assertNotIn(f"{S.ORG}/PDM", self.w.db["prs"])
+
+    def test_clone_origin_must_match(self) -> None:
+        self.assertEqual(self.w.main("plan")[0], 0)
+        git("-C", self.w.state / "clones" / "pdm", "remote", "set-url", "--push", "origin",
+            self.w.remotes / "development-docs.git")
+        code, out = self.w.main("plan", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("clone の origin が違います", out)
+
+    def test_canonical_origin_must_match(self) -> None:
+        git("-C", self.w.canon, "remote", "set-url", "origin", self.w.remotes / "PDM.git")
+        code, out = self.w.main("plan")
+        self.assertEqual(code, 2)
+        self.assertIn("正本の clone", out)
+
+    def test_closed_pr_stops_when_state_is_lost(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        self.w.db["prs"][f"{S.ORG}/PDM"][0]["state"] = "CLOSED"
+        self.w.state_file().unlink()
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("既に閉じています", out)
+
+    def test_non_work_branch_in_state_is_refused(self) -> None:
+        self.w.rv_fail = {"PDM"}
+        self.w.main("apply", "--source", "97", "--only", "pdm")       # 作業ツリーと commit まで（push しない）
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["branch"] = "main"
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        self.w.rv_fail = set()
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("作業 Branch の形", out)
+        self.assertEqual(set(self.w.remote_heads("PDM")), {"refs/heads/main"})
+
+    def test_bad_issue_body_stops_before_creating(self) -> None:
+        with mock.patch.object(S, "issue_body", lambda *a: "### 目的\n\nx\n"):
+            code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 2)
+        self.assertIn("Issue Form に合いません", out)
+        self.assertEqual(self.w.db["issues"], {})
+
+    def test_uncommitted_change_in_worktree_stops(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        (self.w.wt("pdm") / "scratch.txt").write_text("x\n", encoding="utf-8")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("commit していない変更", out)
+
+    def test_symlink_copy_is_refused(self) -> None:
+        other = self.w.base / "sym-pdm"
+        git("clone", "-q", self.w.remotes / "PDM.git", other)
+        rel = ".claude/hooks/guard-main.sh"
+        (other / rel).unlink()
+        os.symlink("../../outside.txt", other / rel)
+        git("-C", other, "add", "-A")
+        git("-C", other, "commit", "-q", "-m", "symlink")
+        git("-C", other, "push", "-q", "origin", "HEAD:main")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm", "--overwrite-unknown")
+        self.assertEqual(code, 1)
+        self.assertIn("普通のファイルではありません", out)
+        self.assertNotIn(f"{S.ORG}/PDM", self.w.db["issues"])
+
+    # ------------------------------------------------------------ 続け方
+    def test_lost_state_dir_resumes_from_pushed_branch(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97")[0], 0)
+        shutil.rmtree(self.w.state)
+        code, out = self.w.main("apply", "--source", "97")
+        self.assertEqual(code, 0, out)
+        for name in ("development-docs", "PDM", SECRET[1]):
+            self.assertEqual(len(self.w.db["issues"][f"{S.ORG}/{name}"]), 1, name)
+            self.assertEqual(len(self.w.db["prs"][f"{S.ORG}/{name}"]), 1, name)
+
+    def test_canonical_advanced_is_written_in_body(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        rel = ".claude/hooks/guard-main.sh"
+        self.w.canon_commit(rel, v(rel, 3))
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("正本が進みました", out)
+        (pr,) = self.w.db["prs"][f"{S.ORG}/PDM"]
+        self.assertEqual(self.w.remote_show("PDM", pr["head"], rel), v(rel, 3))
+        self.assertIn("同期を始めた後に正本の main が進んだ", pr["body"])
+
+    def test_footer_and_trailer_are_kept_on_rerun(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm", "--pr-footer", "🤖 印",
+                                     "--trailer", "Co-Authored-By: x <x@example.invalid>")[0], 0)
+        rel = ".claude/hooks/guard-main.sh"
+        self.w.canon_commit(rel, v(rel, 3))                     # 新しい commit が要る形にする
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")    # 終わりの行を付け忘れる
+        self.assertEqual(code, 0, out)
+        (pr,) = self.w.db["prs"][f"{S.ORG}/PDM"]
+        self.assertTrue(pr["body"].rstrip().endswith("🤖 印"))
+        msg = git("--git-dir", self.w.remotes / "PDM.git", "log", "-1", "--format=%B", pr["head"])
+        self.assertIn("Co-Authored-By: x <x@example.invalid>", msg)
+
+    def test_logs_hide_names_and_state_dir_is_private(self) -> None:
+        self.w.rv_fail = {SECRET[1]}
+        # 顧客 Repository にある Issue の題には案件の言葉が入りうる（Repository の名前の形でないので伏せられない）
+        self.w.db["issues"][f"{S.ORG}/{SECRET[1]}"] = [[5, "beta-plant の調整"]]
+        self.w.main("apply", "--source", "97")
+        logs = list((self.w.state / "runs").rglob("*.log"))
+        self.assertTrue(logs)
+        for f in logs:
+            self.assertNoSecret(f.read_text(encoding="utf-8"))
+        self.assertEqual(self.w.state.stat().st_mode & 0o777, 0o700)
+
     def test_unknown_alias_is_rejected(self) -> None:
         code, out = self.w.main("plan", "--only", "zz")
         self.assertEqual(code, 2)
@@ -495,9 +645,24 @@ class WorkBranchTest(unittest.TestCase):
     def test_only_work_branches(self) -> None:
         S.check_work_branch("feature/12-sync-copies")
         for bad in ("main", "feature/x-sync", "feature/12-x:main", "feature/12-X", "fix/12-x",
-                    "feature/12-x/../main", "+feature/12-x"):
+                    "feature/12-x/../main", "+feature/12-x", "feature/12-x\n"):
             with self.assertRaises(S.Stop, msg=bad):
                 S.check_work_branch(bad)
+
+
+class CheckOriginTest(unittest.TestCase):
+    """push の直前にも、 fetch と push の先がその Repository であることを確かめる。"""
+
+    def test_push_url_must_match(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "r"
+            git("init", "-q", repo)
+            git("-C", repo, "remote", "add", "origin", "/x/PDM.git")
+            run = S.Runner(Path(td) / "log", lambda s: None)
+            S.check_origin(run, repo, "/x/PDM.git")
+            git("-C", repo, "remote", "set-url", "--push", "origin", "/x/other.git")
+            with self.assertRaises(S.Stop):
+                S.check_origin(run, repo, "/x/PDM.git")
 
 
 class MaskerTest(unittest.TestCase):

@@ -82,6 +82,14 @@ jobs:
       - name: 複製の照合そのもの
         run: python scripts/ci/test_copy_sync.py
 
+      # **写しの同期の Pull Request をまとめて作る道具。** 正本を変えるたびに
+      # その都度の script で 6 つの Repository へ同期していた（#93・#95・#97）。
+      # 顧客 Repository の名前を出さない・作業 Branch にだけ push する・二重に
+      # 作らない・落ちた検査で Pull Request を作らないことを、 手元の架空の
+      # Repository で確かめる（gh は差し替え。 守りを 1 つずつ壊すと落ちることも確かめた）。
+      - name: 写しの同期の道具
+        run: python scripts/ci/test_sync_copies.py
+
       # **顧客案件の Repository を作る道具が、 漏れなく作ること。**
       # 手で作ると、 main を守る hook、 Team の権限、 Squash だけにする
       # 設定、 Dependabot Alerts が漏れても気づけなかった。 作った中身が

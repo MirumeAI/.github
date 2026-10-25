@@ -23,7 +23,7 @@ GitHub 運用、`MirumeAI/.github`、`MirumeAI/development-docs` を変更した
 - YYYY-MM-DD #<Issue番号> 変更の要約（社内開発手順書で更新すべき章があれば、その章）
 ```
 
-番号は Issue の番号を書く（Pull Request の番号は、作る前は分からないため）。並んだ Pull Request と衝突したら、両方の行を残す（新しいものを上）。
+番号は Issue の番号を書く（Pull Request の番号は、作る前は分からないため）（別の Repository の Issue は `MirumeAI/<Repository>#<番号>` と書く）。並んだ Pull Request と衝突したら、両方の行を残す（新しいものを上）。
 
 ## 3. .github との矛盾確認
 

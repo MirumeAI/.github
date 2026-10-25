@@ -37,6 +37,23 @@ setup_repo() {
 }
 setup_repo "$WORK/on_main" main
 setup_repo "$WORK/on_feature" feature/1-x
+# 作業 Branch の形でない Branch（LEGACY の長期 Branch に見立てた名前と demo。 案件の名前は使わない）と、
+# ほかの作業 Branch の形（fix/・experiment/）
+setup_repo "$WORK/on_legacy" legacy_line
+setup_repo "$WORK/on_demo" demo
+setup_repo "$WORK/on_fix" fix/2-y
+setup_repo "$WORK/on_exp" experiment/3-z
+# upstream がある作業 Branch（名前に / がある）と、 upstream が main の作業 Branch
+setup_upstream() {
+  local dir="$1" branch="$2" up="$3"
+  setup_repo "$dir" "$branch"
+  git -C "$dir" remote add origin https://example.invalid/repo.git   # 無いと upstream が解決できない
+  git -C "$dir" update-ref "refs/remotes/origin/$up" HEAD
+  git -C "$dir" config "branch.$branch.remote" origin
+  git -C "$dir" config "branch.$branch.merge" "refs/heads/$up"
+}
+setup_upstream "$WORK/up_work" feature/4-w feature/4-w
+setup_upstream "$WORK/up_main" feature/5-v main
 # 手元にあるタグ（タグの push・削除・付け替えの場面に使う。 この一時の Repository の中だけ）
 git -C "$WORK/on_feature" tag v0.9.0
 
@@ -215,7 +232,6 @@ t ALLOW "git tag -l --format='%(refname:short)' 'v0.4*'"
 t ALLOW "git tag --column"
 t ALLOW "git tag -n --sort=-v:refname"
 t ALLOW "git tag --merged main v1.2.3"
-t ALLOW "git push origin --delete v2-old-branch"
 t ALLOW "gh api repos/o/r/git/refs/tags"
 t ALLOW "gh api repos/o/r/releases --paginate"
 t ALLOW "git push --atomic origin feature/1-x"
@@ -228,6 +244,46 @@ t ALLOW "git tag --contains HEAD"
 t ALLOW "git tag --points-at HEAD"
 t ALLOW "git tag -v v0.9.0"
 t ALLOW "git push origin --delete feature/old"
+# ---- 作業 Branch の形でない Branch はすべて守る（development-docs #220）----
+t DENY  "git push origin --delete v2-old-branch"
+t DENY  "git commit -m x"                    "$WORK/on_legacy"
+t DENY  "git merge feature/1-x"              "$WORK/on_legacy"
+t DENY  "git push"                           "$WORK/on_legacy"
+t DENY  "git push origin HEAD"               "$WORK/on_legacy"
+t DENY  "git push origin HEAD"               "$WORK/on_main"
+t DENY  "git push origin legacy_line"
+t DENY  "git push origin feature/1-x:legacy_line"
+t DENY  "git push origin HEAD:refs/heads/legacy_line"
+t DENY  "git push origin --delete legacy_line"
+t DENY  "git push origin :legacy_line"
+t DENY  "git push origin demo"
+t DENY  "git commit -m x"                    "$WORK/on_demo"
+t DENY  "git push --repo=origin main"
+t DENY  "git push --repo origin main"
+t DENY  "git push -o ci.skip origin main"
+t DENY  "git push origin refs/notes/commits"
+t DENY  "git push"                           "$WORK/up_main"
+t DENY  "git branch -f legacy_line HEAD"
+t DENY  "git branch -D legacy_line"
+t DENY  "git branch -m legacy_line"
+t DENY  "git branch -f main HEAD"
+t DENY  "git update-ref refs/heads/legacy_line HEAD"
+t DENY  "git update-ref -d refs/heads/main"
+t ALLOW "git push origin HEAD"
+t ALLOW "git push"                           "$WORK/up_work"
+t ALLOW "git push origin HEAD:refs/heads/feature/1-x"
+t ALLOW "git push -o ci.skip origin feature/1-x"
+t ALLOW "git push --repo=origin feature/1-x"
+t ALLOW "git push origin fix/2-y:fix/2-y"
+t ALLOW "git push origin experiment/3-z"
+t ALLOW "git commit -m x"                    "$WORK/on_fix"
+t ALLOW "git commit -m x"                    "$WORK/on_exp"
+t ALLOW "git branch -D feature/old"
+t ALLOW "git branch -a"
+t ALLOW "git branch --merged main"
+t ALLOW "git branch -f feature/1-x HEAD"
+t ALLOW "git update-ref refs/heads/feature/1-x HEAD"
+t ALLOW "git pull --ff-only"                 "$WORK/on_main"
 t ALLOW "git push origin feature/1-x"
 t ALLOW "git push -u origin fix/2-y"
 t ALLOW "git commit -m 'work'"

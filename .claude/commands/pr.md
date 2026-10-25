@@ -65,7 +65,7 @@ python3 <.github の clone>/scripts/ci/run_required_verification.py <この Repo
 ```
 
 - 流し方と記録の行の読み方は、`MirumeAI/.github` の README の「merge の前の検査」
-- 終了コード 1（FAIL）・2（流せない）のときは、直してから流し直す（今ある長期 Branch〔LEGACY〕を base にした PR で流せない〔終了コード 2〕ときだけは、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の LEGACY の決まりに従い、木にある試験を流して PASS した記録を書く。FAIL は LEGACY でも直してから流し直す）。「基準を含む: いいえ」なら、main を取り込んでから流し直す。飛ばした試験が 0 でなければ、理由を確かめる
+- 終了コード 1（FAIL）・2（流せない）のときは、直してから流し直す（今ある長期 Branch〔LEGACY〕を base にした PR で流せない〔終了コード 2〕ときだけは、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の LEGACY の決まりに従い、木にある試験を流して PASS した記録と、正本の機械チェックを変わったファイルだけで流して PASS した記録（`CI_ROOT=<作業ツリー> python3 <.github の clone>/scripts/ci/basic_checks.py --base origin/<長期 Branch>`）を書く。FAIL は LEGACY でも直してから流し直す）。「基準を含む: いいえ」なら、main を取り込んでから流し直す。飛ばした試験が 0 でなければ、理由を確かめる
 - head が変わったら流し直し、記録の行を書き直す
 
 ## 6. 作成

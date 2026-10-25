@@ -15,7 +15,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `SECURITY.md` | 脆弱性と秘密の漏れの報告のしかた（GitHub の非公開の脆弱性報告で受ける） | 同上 |
 | `SUPPORT.md` | 困ったときの案内（メンバーは入口ページの「困ったとき」へ。文書の分かりにくさは development-docs の Issue へ） | 同上 |
 | `.github/VULNERABILITY_REPORT.yml` | 非公開の脆弱性報告のフォーム（書かないものの注意と欄） | 同上 |
-| `.claude/hooks/guard-main.sh` | ガード（`main` への直接の commit・push や、ガードと設定の書き換えなどを拒否する） | 各 Repository に写す |
+| `.claude/hooks/guard-main.sh` | ガード（作業 Branch〔`feature/`・`fix/`・`experiment/`〕でない Branch〔`main`・LEGACY の長期 Branch など〕への直接の commit・push・削除や、ガードと設定の書き換えなどを拒否する） | 各 Repository に写す |
 | `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
 | `.claude/scripts/issue-form.sh` | Issue Form の雛形と、本文の形の確かめ | 各 Repository に写す |
 | `.claude/settings.json` | この Repository のガードのフックと権限の設定 | 新しい顧客案件の Repository の設定の元。各 Repository の設定は、それぞれの Repository が持つ |

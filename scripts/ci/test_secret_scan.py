@@ -97,6 +97,65 @@ class SecretScanCoversEveryTextFileTest(unittest.TestCase):
             self.assertNotIn("NG", r.stdout + r.stderr)
 
 
+class OnlyChangedFilesWithBaseTest(unittest.TestCase):
+    """--base を付けると、 基準からの差で変わったファイルだけを見る（LEGACY の Pull Request。 development-docs #220）。"""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        g = lambda *a: subprocess.run(["git", "-c", "user.email=t@e", "-c", "user.name=t", *a],
+                                      cwd=self.root, check=True, capture_output=True)
+        self.git = g
+        g("init", "-q", "-b", "base_line")
+        (self.root / "old.env").write_text(f"AWS_ACCESS_KEY_ID={_AWS}\n", encoding="utf-8")   # 前からある古い中身
+        (self.root / "VERSION").write_text("not-a-version\n", encoding="utf-8")
+        (self.root / "gone.txt").write_text("消すファイル\n", encoding="utf-8")
+        g("add", "-A")
+        g("commit", "-q", "-m", "base")
+        g("switch", "-q", "-c", "fix/1-x")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def run_checker(self, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(CHECKER), *extra], capture_output=True, text=True,
+                              env=local_env(self.root))
+
+    def commit(self, files: dict, remove: "tuple[str, ...]" = ()) -> None:
+        for rel, body in files.items():
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text(body, encoding="utf-8")
+        for rel in remove:
+            (self.root / rel).unlink()
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "change")
+
+    def test_old_content_is_not_seen_but_the_whole_tree_fails(self) -> None:
+        self.commit({"fix.py": "x = 1\n"}, remove=("gone.txt",))
+        r = self.run_checker("--base", "base_line")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("変わったファイル 1 件", r.stdout)
+        self.assertNotEqual(self.run_checker().returncode, 0, "基準を付けないときは、 木の全部を見る")
+
+    def test_a_secret_in_a_changed_file_is_found(self) -> None:
+        self.commit({"conf/new_profile": f"token: {_GH}\n"})
+        r = self.run_checker("--base=base_line")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("らしき文字列", r.stdout)
+
+    def test_a_changed_version_is_checked(self) -> None:
+        self.commit({"VERSION": "still-not-a-version\n"})
+        r = self.run_checker("--base", "base_line")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("VERSION", r.stdout)
+
+    def test_a_bad_base_stops_without_naming_it(self) -> None:
+        r = self.run_checker("--base", "no_such_line_name")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertNotIn("no_such_line_name", r.stdout + r.stderr, "基準の名前を出した")
+        self.assertEqual(self.run_checker("--base").returncode, 2, "基準の無い --base を通した")
+
+
 class TheValidatorsFollowCiRootTest(unittest.TestCase):
     """**3 つとも `CI_ROOT` を見ること。**
 

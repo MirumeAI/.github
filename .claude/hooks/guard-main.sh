@@ -19,7 +19,11 @@
 #     `git tag` の作成・削除・付け替えと、 タグの push・削除を止める
 #     （一覧と確かめは通す。 人が自分のターミナルで打つタグは止めない）
 #
-# 保護する Branch は MIRUME_PROTECTED_BRANCH で変えられる (既定 main)。
+# **守るのは、 作業 Branch の形でない Branch すべて**（development-docs #220）。 作業 Branch は
+# `feature/`・`fix/`・`experiment/` で始まる名前（Issue 番号つき。 開発の手順の Branch の名前）。
+# main・LEGACY の長期 Branch・demo などは、 名前を書かずにまとめて守る（長期 Branch の名前には
+# 案件の名前が入るので、 Public の正本には書けない）。 守る Branch を環境変数で変える形は無くした
+# （変えると main が守られなくなっていた。 development-docs #200）。
 
 set -uo pipefail
 
@@ -32,8 +36,8 @@ trap '_rc=$?; if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 2 ]; then
   exit 2
 fi' EXIT
 
-PROTECTED="${MIRUME_PROTECTED_BRANCH:-}"
-[ -n "$PROTECTED" ] || PROTECTED="main"
+# 作業 Branch の形か。 これ以外の Branch は守る
+is_work() { case "$1" in feature/?*|fix/?*|experiment/?*) return 0 ;; *) return 1 ;; esac; }
 
 deny() {
   echo "MirumeAI 開発ルールにより拒否しました: $1" >&2
@@ -229,39 +233,76 @@ while IFS= read -r line; do
   # ---- 対象 Repository を決める ----
   TARGET="${CWD_OVERRIDE:-.}"
   ARGS=()
+  OTHER_REPO=""                              # --git-dir・--work-tree を付けた（対象の Repository を確かに読めない）
   i=1
   while [ $i -lt ${#TOK[@]} ]; do
     t="${TOK[$i]}"
-    case "$t" in
-      -C) TARGET="${TOK[$((i+1))]:-.}"; i=$((i+2)); continue ;;
-      -c)                                    # git -c key=val
-        case "$(printf '%s' "${TOK[$((i+1))]:-}" | tr '[:upper:]' '[:lower:]')" in
-          push.followtags*) deny "タグの push (git -c push.followTags)" "$TAG_HINT_KEEP" ;;
-        esac
-        i=$((i+2)); continue ;;
-      --git-dir=*|--work-tree=*) i=$((i+1)); continue ;;
-      -*) if [ "$prog" = "git" ] && [ ${#ARGS[@]} -eq 0 ]; then i=$((i+1)); continue; fi ;;
-    esac
+    # git 全体の旗（-C・-c・--git-dir・--work-tree など）は、 **子命令の前だけ**。 子命令の後ろの
+    # -C・-c（`git branch -C`・`git commit -C` など）は子命令の旗なので、 ARGS に残す
+    if [ "$prog" = "git" ] && [ ${#ARGS[@]} -eq 0 ]; then
+      case "$t" in
+        -C) TARGET="${TOK[$((i+1))]:-.}"; i=$((i+2)); continue ;;
+        -c)                                  # git -c key=val
+          kv="$(printf '%s' "${TOK[$((i+1))]:-}" | tr '[:upper:]' '[:lower:]')"
+          case "$kv" in
+            push.followtags*) deny "タグの push (git -c push.followTags)" "$TAG_HINT_KEEP" ;;
+            push.default=simple|push.default=current|push.default=upstream) ;;
+            push.default=*) deny "設定で送り先が決まる push (git -c $kv)" "対象: $TARGET" ;;
+            remote.*.push=*) deny "設定で送り先が決まる push (git -c remote.<名前>.push)" "対象: $TARGET" ;;
+          esac
+          i=$((i+2)); continue ;;
+        # 値を取る全体の旗。 値を離した形（--git-dir <道>）も読み、 値を子命令と取り違えない
+        --git-dir|--work-tree) OTHER_REPO="$t"; i=$((i+2)); continue ;;
+        --git-dir=*|--work-tree=*) OTHER_REPO="${t%%=*}"; i=$((i+1)); continue ;;
+        --namespace|--super-prefix|--attr-source) i=$((i+2)); continue ;;
+        --namespace=*|--super-prefix=*|--attr-source=*|--exec-path=*) i=$((i+1)); continue ;;
+        --config-env|--config-env=*)            # --config-env=<名前>=<環境変数>
+          if [ "$t" = "--config-env" ]; then kv="${TOK[$((i+1))]:-}"; i=$((i+2)); else kv="${t#--config-env=}"; i=$((i+1)); fi
+          kn="$(printf '%s' "${kv%%=*}" | tr '[:upper:]' '[:lower:]')"
+          case "$kn" in
+            push.followtags|push.default|remote.*.push|branch.*.merge)
+              deny "設定を外から渡す push の設定 (git --config-env $kn)" "対象: $TARGET" ;;
+          esac
+          continue ;;
+        # 値を取らない全体の旗（git の説明書の一覧）
+        -p|--paginate|-P|--no-pager|--no-replace-objects|--no-lazy-fetch|--no-optional-locks|--no-advice\
+          |--bare|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--exec-path\
+          |--version|-v|--help|-h|--html-path|--man-path|--info-path)
+          i=$((i+1)); continue ;;
+        # **読めない全体の旗は止める**（値を取る旗を読み違えると、 値を子命令と取り違える）
+        -*) deny "読めない git 全体の旗 ($t)" "対象: $TARGET" ;;
+      esac
+    fi
     ARGS+=("$t"); i=$((i+1))
   done
   sub="${ARGS[0]:-}"
   rest=("${ARGS[@]:1}")
+  # --git-dir・--work-tree で別の Repository を指すと、 ガードは今の場所の Branch を見てしまう。 書き込みは止める
+  if [ "$prog" = "git" ] && [ -n "$OTHER_REPO" ]; then
+    case "$sub" in
+      commit|merge|rebase|cherry-pick|revert|am|push|branch|update-ref|tag|reset|switch|checkout|pull|fetch)
+        deny "git $OTHER_REPO を付けた $sub（対象の Repository を確かに読めない）" "-C <道> で Repository を指してください。" ;;
+    esac
+  fi
   joined=" ${rest[*]} "
 
-  cur_branch() { git -C "$TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""; }
+  cur_branch() { git -C "$TARGET" symbolic-ref --quiet --short HEAD 2>/dev/null \
+                   || git -C "$TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""; }
   upstream()   { git -C "$TARGET" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || echo ""; }
 
   if [ "$prog" = "git" ]; then
     case "$sub" in
       commit|merge|rebase|cherry-pick|revert|am)
-        if [ "$(cur_branch)" = "$PROTECTED" ]; then
-          deny "保護Branch '$PROTECTED' 上での $sub" "対象: $TARGET"
+        # 枝の外（HEAD）と Repository の外は、 Branch を動かさないので通す（push の先で見る）
+        b="$(cur_branch)"
+        if [ -n "$b" ] && [ "$b" != "HEAD" ] && ! is_work "$b"; then
+          deny "作業 Branch でない '$b' の上での $sub" "対象: $TARGET"
         fi ;;
       push)
         # force / 全体上書き / 削除 は refspec を問わず拒否
         for a in "${rest[@]}"; do
           case "$a" in
-            --force|--force=*|--force-with-lease|--force-with-lease=*|--force-if-includes|--mirror|--all|--prune)
+            --force|--force=*|--force-with-lease|--force-with-lease=*|--force-if-includes|--mirror|--all|--branches|--prune)
               deny "force push または一括上書き ($a)" "対象: $TARGET" ;;
             -*f*) case "$a" in --*) ;; *) deny "force push ($a)" "対象: $TARGET" ;; esac ;;
             --delete|-d) DEL=1 ;;
@@ -275,6 +316,7 @@ while IFS= read -r line; do
             --*)
               nm="${a%%=*}"
               if prefix_of "$nm" --mirror 3 || prefix_of "$nm" --all 4 || prefix_of "$nm" --prune 5 \
+                 || prefix_of "$nm" --branches 4 \
                  || prefix_of "$nm" --force 5 || prefix_of "$nm" --force-with-lease 9 \
                  || prefix_of "$nm" --force-if-includes 9; then
                 deny "force push または一括上書き ($a)" "対象: $TARGET"
@@ -322,34 +364,68 @@ while IFS= read -r line; do
             esac
           fi
         done
-        # 保護 Branch を名指ししていないか（refs/heads/ や src:dst も見る）
+        # 送り先の Branch が作業 Branch の形か（refs/heads/・src:dst・:dst の削除・HEAD も見る）。
+        # 引数の並びは `git push [<送り先>] [<refspec>...]`。 1 つ目の位置の引数は送り先
+        # （remote の名前か URL）で、 Branch と取り違えない。 --repo を付けたときも git は 1 つ目を
+        # 送り先と読むが、 ここでは念のため全部を refspec として見る（多めに止める側に倒す）。
+        # 値を取る旗（-o・--push-option・--receive-pack・--exec・--repo）の値は飛ばす
+        pos=(); skip=0; repo_given=0
         for a in "${rest[@]}"; do
-          case "$a" in -*) continue ;; esac
-          dst="${a##*:}"; dst="${dst#refs/heads/}"; dst="${dst#+}"
-          src="${a%%:*}"; src="${src#refs/heads/}"; src="${src#+}"
-          if [ "$dst" = "$PROTECTED" ] || { [ "$a" = "$PROTECTED" ]; }; then
-            if [ "${DEL:-0}" = "1" ]; then
-              deny "保護Branch '$PROTECTED' の削除" "対象: $TARGET"
+          if [ "$skip" = "1" ]; then skip=0; continue; fi
+          case "$a" in
+            -o|--push-option|--receive-pack|--exec) skip=1; continue ;;
+            --repo) skip=1; repo_given=1; continue ;;
+            --repo=*) repo_given=1; continue ;;
+            -*) continue ;;
+          esac
+          pos+=("$a")
+        done
+        if [ "$repo_given" = "1" ]; then refspecs=("${pos[@]}"); else refspecs=("${pos[@]:1}"); fi
+        del_flag=0
+        if [ "${DEL:-0}" = "1" ] || [ "$tag_del" = "1" ]; then del_flag=1; fi
+        for a in "${refspecs[@]}"; do
+          r="${a#+}"
+          case "$r" in
+            *:*) src="${r%%:*}"; dst="${r#*:}"
+                 case "$dst" in HEAD|@|refs/heads/HEAD) deny "送り先に HEAD という名前の Branch（$a）" "対象: $TARGET" ;; esac ;;
+            *) src="$r"; dst="$r"
+               case "$dst" in
+                 HEAD|@)
+                   # --delete HEAD は、 相手の refs/heads/HEAD を消す（今の Branch ではない）
+                   if [ "$del_flag" = "1" ]; then deny "HEAD という名前の Branch の削除（$a）" "対象: $TARGET"; fi
+                   dst="$(cur_branch)" ;;
+               esac ;;
+          esac
+          case "$dst" in
+            refs/heads/*) dst="${dst#refs/heads/}" ;;
+            refs/*) deny "Branch でない ref への push ($dst)" "対象: $TARGET / 指定: $a" ;;
+          esac
+          if [ -z "$dst" ] || [ "$dst" = "HEAD" ]; then
+            deny "push の先の Branch が分からない（$a）" "対象: $TARGET"
+          fi
+          if ! is_work "$dst"; then
+            if [ "$del_flag" = "1" ] || [ -z "$src" ]; then
+              deny "作業 Branch でない '$dst' の削除" "対象: $TARGET"
             fi
-            deny "保護Branch '$PROTECTED' への push" "対象: $TARGET / 指定: $a"
-          fi
-          # `:main` 形式の削除
-          if [ -z "$src" ] && [ "$dst" = "$PROTECTED" ]; then
-            deny "保護Branch '$PROTECTED' の削除" "対象: $TARGET"
+            deny "作業 Branch でない '$dst' への push" "対象: $TARGET / 指定: $a"
           fi
         done
-        # refspec を明示していない場合は現在 Branch と upstream を見る
-        has_ref=0
-        for a in "${rest[@]}"; do
-          case "$a" in -*) continue ;; esac
-          # リモート名/URL の次に来るものを refspec とみなす
-          case "$a" in *://*|git@*) continue ;; esac
-          if [ "$a" != "origin" ] && [ -n "$a" ]; then has_ref=1; fi
-        done
-        if [ "$has_ref" = "0" ]; then
-          c="$(cur_branch)"; u="$(upstream)"
-          if [ "$c" = "$PROTECTED" ] || [ "${u##*/}" = "$PROTECTED" ]; then
-            deny "保護Branch '$PROTECTED' への push" "対象: $TARGET / 現在: ${c:-不明} / upstream: ${u:-未設定}"
+        # refspec を明示していない場合は現在の Branch と upstream を見る
+        if [ "${#refspecs[@]}" = "0" ]; then
+          pd="$(git -C "$TARGET" config --get push.default 2>/dev/null || true)"
+          case "$pd" in
+            ""|simple|current|upstream) ;;
+            *) deny "設定で送り先が決まる push（push.default=$pd）" "対象: $TARGET" ;;
+          esac
+          if git -C "$TARGET" config --get-regexp '^remote\..*\.push$' >/dev/null 2>&1; then
+            deny "設定で送り先が決まる push（remote.<名前>.push）" "対象: $TARGET"
+          fi
+          c="$(cur_branch)"; u="$(upstream)"; ub=""
+          # 送り先の Branch は設定（branch.<名前>.merge）から読む。 追跡用の ref が無くても飛ばさない
+          um="$(git -C "$TARGET" config --get "branch.$c.merge" 2>/dev/null || true)"
+          if [ -n "$um" ]; then ub="${um#refs/heads/}"; u="${u:-$um}"; else ub="${u#*/}"; fi
+          if [ -z "$c" ] || [ "$c" = "HEAD" ] || ! is_work "$c" || { [ -n "$u" ] && ! is_work "$ub"; }; then
+            deny "作業 Branch でない Branch への push" "対象: $TARGET / 現在: ${c:-不明} / upstream: ${u:-未設定}"
           fi
         fi ;;
       tag)
@@ -391,18 +467,64 @@ while IFS= read -r line; do
         if [ "$tag_pos" -gt 0 ] && [ "$tag_list" = "0" ]; then
           deny "タグの作成 (git tag <名前>)" "$TAG_HINT_NEW"
         fi ;;
-      update-ref|branch)
-        if [ "$sub" = "update-ref" ]; then
-          case "$joined" in
-            *refs/tags/*) deny "タグの付け替え・削除 (git update-ref)" "$TAG_HINT_KEEP" ;;
-          esac
-        fi
-        case "$joined" in
-          *" -f "*|*" --force "*|*"$PROTECTED"*)
-            case "$joined" in
-              *"$PROTECTED"*) deny "保護Branch '$PROTECTED' の付け替え ($sub)" "対象: $TARGET" ;;
-            esac ;;
+      update-ref)
+        # 大文字と小文字を区別しない機械（Windows・macOS）では refs/HEADS/main も main を指す
+        lj="$(printf '%s' "$joined" | tr '[:upper:]' '[:lower:]')"
+        case "$lj" in
+          *refs/tags/*) deny "タグの付け替え・削除 (git update-ref)" "$TAG_HINT_KEEP" ;;
+        esac
+        for a in "${rest[@]}"; do
+          # git は --s・--st の短い略も --stdin として受け付ける
+          if prefix_of "$a" --stdin 3; then deny "まとめての付け替え (git update-ref $a)" "対象: $TARGET"; fi
+        done
+        # 1 つ目の位置の引数が、 付け替える ref（-m の値は飛ばす）
+        ref=""; skip=0
+        for a in "${rest[@]}"; do
+          if [ "$skip" = "1" ]; then skip=0; continue; fi
+          case "$a" in -m) skip=1; continue ;; -*) continue ;; esac
+          ref="$a"; break
+        done
+        lr="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+        case "$lr" in
+          refs/heads/*) is_work "${ref:11}" || deny "作業 Branch でない '${ref:11}' の付け替え (git update-ref)" "対象: $TARGET" ;;
+          refs/remotes/*) deny "追跡用の ref の付け替え (git update-ref refs/remotes/…)" "対象: $TARGET" ;;
+          ""|refs/*) ;;
+          *) is_work "$ref" || deny "作業 Branch でない '$ref' の付け替え (git update-ref)" "対象: $TARGET" ;;
         esac ;;
+      branch)
+        # 付け替え（-f）・名前の変更と写し（-m・-c）・削除（-d）だけを見る。 一覧などは通す
+        mode=""
+        for a in "${rest[@]}"; do
+          case "$a" in
+            -f|--force) [ -n "$mode" ] || mode=force ;;
+            -d|-D|--delete) mode=del ;;
+            -m|-M|--move|-c|-C|--copy) [ "$mode" = del ] || mode=move ;;
+            --*)
+              # git は紛れの無い長い旗の略を受け付ける（--del・--mov・--cop・--forc など）
+              nm="${a%%=*}"
+              if prefix_of "$nm" --delete 3; then mode=del
+              elif prefix_of "$nm" --move 4 || prefix_of "$nm" --copy 5; then [ "$mode" = del ] || mode=move
+              elif prefix_of "$nm" --force 6; then [ -n "$mode" ] || mode=force
+              fi ;;
+            -*) case "$a" in *[dD]*) mode=del ;; *[mMcC]*) mode=move ;; *f*) [ -n "$mode" ] || mode=force ;; esac ;;
+          esac
+        done
+        if [ -n "$mode" ]; then
+          names=()
+          for a in "${rest[@]}"; do case "$a" in -*) ;; *) names+=("$a") ;; esac; done
+          [ "$mode" = "force" ] && names=("${names[@]:0:1}")   # -f の 2 つ目は始まりの点
+          if [ "$mode" = "move" ] && [ "${#names[@]}" = "1" ]; then
+            # 引数 1 つの -m・-c は、 今の Branch の名前を変える・写す
+            b="$(cur_branch)"
+            if [ -n "$b" ] && [ "$b" != "HEAD" ] && ! is_work "$b"; then
+              deny "作業 Branch でない '$b' の名前の変更 (git branch)" "対象: $TARGET"
+            fi
+          fi
+          for n in "${names[@]}"; do
+            n="${n#refs/heads/}"
+            is_work "$n" || deny "作業 Branch でない '$n' の付け替え・削除 (git branch)" "対象: $TARGET"
+          done
+        fi ;;
     esac
   fi
 

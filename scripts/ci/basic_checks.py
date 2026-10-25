@@ -14,6 +14,15 @@
 
 除外は `.ci-ignore`（1行1パターン、glob）で指定する。
 
+**`--base <基準>` を付けると、 基準との分かれ目から HEAD までの差で、 足した・変えた
+ファイルだけを見る**（消したファイルは見ない。 VERSION の形も、 VERSION が変わったときだけ
+見る）。 今ある長期 Branch（LEGACY）の Pull Request では、 木に workflow が無く Required
+Verification を流せないので、 これで変わったファイルだけの機械チェック（秘密らしい文字列の
+走査を含む）を流す（development-docs #220）。 基準の名前は出さない（長期 Branch の名前には
+案件の名前が入る）。
+
+    CI_ROOT=<作業ツリー> python3 <.github の clone>/scripts/ci/basic_checks.py --base origin/<長期 Branch>
+
 **CI の記録に、 入力の中身と顧客に固有の道を出さない**（#50）。
 顧客案件の Repository では、 設定のファイルの道や中身に、 その案件に
 固有の名前（面・トリガ・機器）や値が入る。 誤りを見つけたときに
@@ -246,6 +255,27 @@ def _git_files(root: Path, *extra: str) -> list[str]:
     return out
 
 
+def changed_files(root: Path, base: str) -> "set[str] | None":
+    """基準（base）と HEAD の分かれ目からの差で、 足した・変えた・名前を変えたファイル。 取れなければ None。
+
+    基準は commit を指すものだけを受け付ける（`-` で始まる値を git の旗として読ませない）。"""
+    if not base or base.startswith("-"):
+        return None
+    try:
+        v = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "--end-of-options",
+                            f"{base}^{{commit}}"], capture_output=True)
+        if v.returncode != 0:
+            return None
+        # --relative: CI_ROOT が Repository の下のフォルダでも、 道を CI_ROOT からの相対にそろえる
+        r = subprocess.run(["git", "-C", str(root), "diff", "--relative", "--name-only", "-z", "--diff-filter=ACMRT",
+                            "--end-of-options", f"{base}...HEAD", "--"], capture_output=True)
+    except OSError:
+        return None
+    if r.returncode != 0:
+        return None
+    return {os.fsdecode(n) for n in r.stdout.split(b"\0") if n}
+
+
 def tracked_files(root: Path, ignores: list[str]) -> list[Path]:
     files = []
     for rel in _git_files(root):
@@ -355,9 +385,44 @@ def main(argv: "list[str] | None" = None) -> int:
         print("ERROR: --show-paths は CI では使えません（CI の記録に道が残るため）")
         return 2
 
+    base = None
+    for i, a in enumerate(args):
+        if a == "--base":
+            base = args[i + 1] if i + 1 < len(args) and not args[i + 1].startswith("-") else ""
+        elif a.startswith("--base="):
+            base = a.split("=", 1)[1]
+    if base == "":
+        print("ERROR: --base には比べる基準（例: origin/<Branch>）を渡してください")
+        return 2
+
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     ignores = load_ignores(root)
     files = tracked_files(root, ignores)
+    changed = None
+    if base is not None:
+        changed = changed_files(root, base)
+        if changed is None:
+            # **基準の名前は出さない**（長期 Branch の名前には案件の名前が入る）
+            print("ERROR: 基準からの差を取れません（基準が手元にあるか、 HEAD と分かれ目があるかを確かめてください）")
+            return 2
+        files = [f for f in files if f.as_posix() in changed]
+        seen = {f.as_posix() for f in files}
+        unseen = [c for c in changed if c not in seen
+                  and not (SKIP_DIRS & set(Path(c).parts))
+                  and not any(fnmatch.fnmatch(c, pat) for pat in ignores)]
+        fork = subprocess.run(["git", "-C", str(root), "merge-base", base, "HEAD"],
+                              capture_output=True, text=True).stdout.strip()[:12] or "不明"
+        # **分かれ目は commit の 12 桁だけを出す**（基準の名前は出さない）
+        print(f"基準からの差だけを見ます（分かれ目 {fork}・変わったファイル {len(changed)} 件・見るファイル {len(files)} 件）")
+        if unseen:
+            print(f"ERROR: 変わったのに見られないファイルが {len(unseen)} 件あります（追跡していない・"
+                  "ファイルでないなど。CI_ROOT と基準を確かめてください）")
+            return 2
+        if not changed:
+            # 差が 0 件で PASS にすると、 基準の取り違え（HEAD そのものなど）に気づけない
+            print("ERROR: 基準からの差に、 足した・変えたファイルがありません（基準を確かめてください。"
+                  "消しただけの変更なら、 その旨を記録に書いてください）")
+            return 2
     # **元の道を出すのは、 手元で --show-paths を付けたときだけ。**
     open_paths = show_paths
     rid_of = FileIds(open_paths)
@@ -382,7 +447,7 @@ def main(argv: "list[str] | None" = None) -> int:
     #    リリースが作れない。** 無い Repository では何もしない。
     #    中身は出さない（長さだけ）。
     vfile = root / "VERSION"
-    if vfile.is_file():
+    if vfile.is_file() and (changed is None or "VERSION" in changed):
         raw = vfile.read_text(encoding="utf-8", errors="replace")
         v = raw.strip()
         if not VERSION_RE.fullmatch(v):

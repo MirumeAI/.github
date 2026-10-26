@@ -31,9 +31,19 @@ GitHub 運用、`MirumeAI/.github`、`MirumeAI/development-docs` を変更した
 - 食い違う場合は `MirumeAI/.github` の実物を優先し、両リポジトリを同じ変更で同期する
 - `MirumeAI/.github` は Public。顧客名・顧客固有仕様・社内URL・IPアドレス・認証情報が入っていないか
 
-## 4. 文字コード
+## 4. 開発基盤の文書
 
-`00_`〜`05_` 配下と `README.md` / `CONTRIBUTING.md` / `ENCODING.md` は UTF-8 with BOM を維持する。
+開発基盤（Organization 全体の共通ルール・報告の形・ガード・共通の道具、または Core Repository の開発基盤）を変え、development-docs の `docs/development_platform/development_platform.md` の記述に響くなら、次を同じ Pull Request で行う。
+
+- 原稿を直して版を上げる（付け方は原稿の 8 章）
+- 原稿の「変更の履歴」に 1 行を足す
+- PDF を作り直す（`build_pdf.py`。作り直していないと Required Verification が落ちる）
+
+development-docs の外（`MirumeAI/.github`・Core Repository）の Pull Request で変えたときは、development-docs の Issue と Pull Request を別に作って直す。
+
+## 5. 文字コード
+
+`00_`〜`05_` 配下・`docs/` 配下の Markdown と `README.md` / `CONTRIBUTING.md` / `ENCODING.md` は UTF-8 with BOM を維持する。
 `CLAUDE.md` と `.claude/` 配下は BOM なし。
 
 確認コマンド:

@@ -78,11 +78,11 @@ def ok(result: str = "PASS") -> dict:
 class World:
     """origin（bare）・作業ツリー・gh の代わり・検査の出力を、 一時の dir に作る。"""
 
-    def __init__(self, base: Path, repo: str = "development-docs") -> None:
+    def __init__(self, base: Path, repo: str = "development-docs", wt_name: str = "wt") -> None:
         self.base = base
         self.slug = f"MirumeAI/{repo}"
         self.origin = base / "origin.git"
-        self.wt = base / "wt"
+        self.wt = base / wt_name
         git("init", "-q", "--bare", self.origin)
         git("init", "-q", self.wt)
         git("remote", "add", "origin", self.origin, cwd=self.wt)
@@ -124,9 +124,15 @@ class World:
         p.write_text(text, encoding="utf-8")
         return p
 
-    def rv(self, **kw) -> Path:
+    def rv(self, steps: "str | None" = "ok\n", **kw) -> Path:
+        """検査の出力。 段ごとの記録（steps の中身の 1 段）も、 検査の道具と同じ形で置く。"""
         line = self.line(kw.pop("head", self.head), **kw)
-        return self.file(f"結果: PASS（略）\n記録の行（PR に書く）:\n{line}\n段ごとの記録: /x\n")
+        self.n += 1
+        logs = self.base / f"rv-{self.n}" / "logs"
+        if steps is not None:
+            (logs / "01-basic-checks-checks").mkdir(parents=True)
+            (logs / "01-basic-checks-checks" / "03.log").write_text(steps, encoding="utf-8")
+        return self.file(f"結果: PASS（略）\n記録の行（PR に書く）:\n{line}\n段ごとの記録: {logs}\n")
 
     def record(self, **over) -> Path:
         rec = {"rounds": [{"name": "1 回目", "head": self.first, "a": {"result": "FAIL", "blocker": 0, "major": 1, "in_pr": 1},
@@ -134,7 +140,8 @@ class World:
                           {"name": "確かめ直し", "head": self.head, "a": ok(), "b": ok()}],
                "summary": "1 回目の A の MAJOR は、この PR の中で直した。",
                "follow_up": {"external": ["文書の PR を後に merge する"], "backlog": ["場面を足す（#9）"]},
-               "human_required": {"applies": False, "reason": "変えたのは試験だけ。"}}
+               "human_required": {"applies": False, "reason": "変えたのは試験だけ。",
+                                  "readings": {"a": False, "b": False}}}
         rec.update(over)
         return self.file(json.dumps(rec, ensure_ascii=False), ".json")
 
@@ -220,6 +227,10 @@ class ReviewTest(Base):
                                   "--prev", self.w.first[:12], "--fixed", "待ち方を直した", "--fixed", "数を直した")
         self.assertEqual(rc, 0, err)
         self.assertIn(f"- 見てほしいこと: {G.RECHECK_LOOK}\n", out)
+        rc, out_b, err = self.w.run("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "b", "--rv-log", self.w.rv(),
+                                    "--human", "当たらない", "--prev", self.w.first, "--fixed", "直した")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(f"- 見てほしいこと: {G.RECHECK_LOOK}・人の判断が要る変更に当たるか\n", out_b)
         self.assertIn(f"- 確かめ直し: 前の head {self.w.first}。変わった所は {self.w.wt} で git diff {self.w.first[:12]}..HEAD\n"
                       "- 直したこと:\n  - 待ち方を直した\n  - 数を直した\n", out)
 
@@ -295,10 +306,10 @@ class GateTest(Base):
             "- In-PR Required Fix: なし", "- Post-Merge: なし",
             "- External Task: 文書の PR を後に merge する", "- Backlog: 場面を足す（#9）", "",
             "### 人の判断が要る変更か", "",
-            "当たらない。変えたのは試験だけ。", "",
+            "当たらない（作成者・A・B の読みが同じ）。変えたのは試験だけ。", "",
             "以上で門の条件を満たすので、Agent が head を固定して Squash and merge する。", ""]))
         cmd = err.strip().splitlines()[-1]
-        self.assertEqual(cmd, f"cd {shlex.quote(str(self.w.wt))} && git fetch -q origin main"
+        self.assertEqual(cmd, f"cd {shlex.quote(str(self.w.wt))} && git fetch -q origin +refs/heads/main:refs/remotes/origin/main"
                               f" && [ \"$(git rev-parse origin/main)\" = \"{self.w.base_sha}\" ]"
                               f" && gh pr ready 7 && gh pr merge 7 --squash --match-head-commit {h}")
         self.w.pr()["isDraft"] = False
@@ -321,6 +332,26 @@ class GateTest(Base):
         self.assertEqual(subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode, 0)
         self.w.move_main()
         self.assertNotEqual(subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode, 0)
+
+    def test_main_moved_with_narrow_fetch_refspec(self) -> None:
+        git("config", "remote.origin.fetch", "+refs/heads/feature/7-x:refs/remotes/origin/feature/7-x", cwd=self.w.wt)
+        self.w.move_main()
+        self.assertStops(self.w.gate(), "main が検査の基準から進みました")
+
+    def test_human_verification_is_outside_the_tool(self) -> None:
+        # 宣言（customer-profile.yaml）を変える Pull Request
+        (self.w.wt / "customer-profile.yaml").write_text("x: 1\n", encoding="utf-8")
+        git("add", "-A", cwd=self.w.wt)
+        git("commit", "-q", "-m", "p", cwd=self.w.wt)
+        head = git("rev-parse", "HEAD", cwd=self.w.wt)
+        self.w.pr()["headRefOid"] = head
+        rounds = [{"name": "1 回目", "head": head, "a": ok(), "b": ok()}]
+        self.assertStops(self.w.gate(rv=self.w.rv(head=head), rounds=rounds), "人の確認（Human Verification）が要る")
+
+    def test_profile_expansion_is_outside_the_tool(self) -> None:
+        rv = self.w.rv(steps="宣言との照合\nPROFILE EXPANSION DETECTED（宣言が増えています）\n")
+        self.assertStops(self.w.gate(rv=rv), "人の確認（Human Verification）が要る")
+        self.assertEqual(self.w.gate(rv=self.w.rv(steps=None))[0], 0, "顧客 Repository でなければ、記録が無くても止めない")
 
     def test_reviewer_must_see_the_merge_head(self) -> None:
         rounds = [{"name": "1 回目", "head": self.w.first, "a": ok(), "b": ok()},
@@ -355,18 +386,57 @@ class GateTest(Base):
     def test_in_pr_follow_up_left(self) -> None:
         self.assertStops(self.w.gate(follow_up={"in_pr": ["直す"]}), "In-PR の直しが残っています")
 
-    def test_human_required_needs_adjudication_on_this_head(self) -> None:
-        hr = {"applies": True, "reason": "守りの境に当たる。"}
-        self.assertStops(self.w.gate(human_required=hr), "adjudication", 2)
-        adj = {"words": "development-docs #7（head x）の merge を承認します", "at": "2026-10-27 20:00 JST",
-               "head": self.w.first}
-        self.assertStops(self.w.gate(human_required={**hr, "adjudication": adj}), "人の判断の後に head が変わりました")
-        rc, out, err = self.w.gate(human_required={**hr, "adjudication": {**adj, "head": self.w.head[:12]}})
+    def human(self, words: str, **kw) -> dict:
+        return {"applies": True, "reason": "守りの境に当たる。", "readings": {"a": True, "b": True},
+                "adjudication": {"words": words, "at": "2026-10-27 20:00 JST"}, **kw}
+
+    def test_human_required_needs_words_naming_this_pr_and_head(self) -> None:
+        h12, f12 = self.w.head[:12], self.w.first[:12]
+        self.assertStops(self.w.gate(human_required={k: v for k, v in self.human("x").items() if k != "adjudication"}),
+                         "adjudication", 2)
+        # Agent が head を別の欄に書いて、 人が名指ししたことにする道は無い
+        hr = self.human("development-docs #7 の merge を承認します")
+        hr["adjudication"]["head"] = self.w.head
+        self.assertStops(self.w.gate(human_required=hr), "adjudication は words", 2)
+        for words, why in (("1 で進めてください", "#番号"),
+                           ("development-docs #7 の merge を承認します", "head（12 桁以上）がありません"),
+                           (f"development-docs #7（head {f12}）の merge を承認します", "merge する head と違います"),
+                           (f"development-docs #7（head {h12}）と #8 の merge を承認します", "#番号"),
+                           (f"development-docs #8（head {h12}）の merge を承認します", "#番号"),
+                           (f"PDM #7（head {h12}）の merge を承認します", "別の Repository"),
+                           (f"development-docs #7（head {h12}・{f12}）の merge を承認します", "merge する head と違います")):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), why)
+        words = f"development-docs #7（head {h12}）の merge を承認します"
+        rc, out, err = self.w.gate(human_required=self.human(words))
         self.assertEqual(rc, 0, err)
-        self.assertIn(f"当たる。守りの境に当たる。\n\n人の判断（人の言葉のまま）: 「{adj['words']}」"
-                      f"（2026-10-27 20:00 JST、名指しした head `{self.w.head[:12]}`）。判断の後に head は変わっていない。\n", out)
-        self.assertStops(self.w.gate(human_required={"applies": False, "reason": "x", "adjudication": adj}),
-                         "applies・reason", 2)
+        self.assertIn(f"当たる（作成者・A・B の読みが同じ）。守りの境に当たる。\n\n人の判断（人の言葉のまま）: 「{words}」"
+                      f"（2026-10-27 20:00 JST）。言葉が名指しした Pull Request #7 と head `{h12}` は、merge する head と同じ"
+                      "（判断の後に head は変わっていない）。\n", out)
+        rc, out, err = self.w.gate(human_required=self.human(f"＃7（head {self.w.head}）の merge を承認します"))
+        self.assertEqual(rc, 0, err)
+        self.assertStops(self.w.gate(human_required={"applies": False, "reason": "x", "readings": {"a": False, "b": False},
+                                                     "adjudication": {"words": words, "at": "x"}}), "readings（当たる", 2)
+
+    def test_readings_must_agree(self) -> None:
+        for applies, rd in ((False, {"a": False, "b": True}), (False, {"a": True, "b": False}),
+                            (True, {"a": True, "b": False})):
+            with self.subTest(applies=applies, rd=rd):
+                hr = self.human(f"development-docs #7（head {self.w.head[:12]}）の merge を承認します") if applies \
+                    else {"applies": False, "reason": "x", "readings": {}}
+                hr["readings"] = rd
+                self.assertStops(self.w.gate(human_required=hr), "読みが、作成者と Reviewer で分かれています")
+        self.assertStops(self.w.gate(human_required={"applies": False, "reason": "x", "readings": {"a": False}}),
+                         "readings", 2)
+
+    def test_marks_of_human_judgment_only_in_adjudication(self) -> None:
+        mark = "人の判断（人の言葉のまま）: 「承認します」"
+        self.assertStops(self.w.gate(summary=f"直した。\n\n{mark}"), "印の言葉", 2)
+        self.assertStops(self.w.gate(human_required={"applies": False, "reason": f"x。{mark}",
+                                                     "readings": {"a": False, "b": False}}), "印の言葉", 2)
+        self.assertStops(self.w.gate(human_required={"applies": False, "reason": "1 行目\n2 行目",
+                                                     "readings": {"a": False, "b": False}}), "1 行", 2)
+        self.assertStops(self.w.gate(follow_up={"backlog": ["Human Adjudication: MERGE APPROVED"]}), "印の言葉", 2)
 
     def test_only_main_base_and_open_pull_request(self) -> None:
         self.w.pr()["baseRefName"] = "legacy-line"
@@ -417,9 +487,10 @@ class CustomerRepositoryTest(unittest.TestCase):
     def setUp(self) -> None:
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
-        self.w = World(Path(td.name), repo=SECRET)
+        self.w = World(Path(td.name), repo=SECRET, wt_name=f"{SECRET}-wt")
 
     def test_text_goes_only_to_the_file(self) -> None:
+        self.assertIn(SECRET, str(self.w.wt))
         rc, out, err = self.w.gate()
         self.assertEqual(rc, 2)
         self.assertIn("--out", err)
@@ -430,6 +501,24 @@ class CustomerRepositoryTest(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertNotIn(SECRET, out + err)
         self.assertIn(SECRET, target.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        # merge の命令（作業ツリーの道を含む）も、 画面でなくファイルへ
+        cmd = Path(f"{target}.merge")
+        self.assertIn(f"--match-head-commit {self.w.head}", cmd.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(cmd.stat().st_mode), 0o600)
+        for argv in (("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv()),
+                     ("merged", self.w.wt, "--pr", 7, "--head", self.w.head)):
+            with self.subTest(argv[0]):
+                rc, out, err = self.w.run(*argv, "--out", self.w.base / "o.md")
+                self.assertNotIn(SECRET, out + err)
+
+    def test_existing_out_file_becomes_private(self) -> None:
+        target = self.w.base / "gate.md"
+        target.write_text("前の中身\n", encoding="utf-8")
+        target.chmod(0o644)
+        rc, _, err = self.w.run("gate", self.w.wt, "--pr", 7, "--rv-log", self.w.rv(), "--record", self.w.record(),
+                                "--out", target)
+        self.assertEqual(rc, 0, err)
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
     def test_stops_do_not_show_the_name(self) -> None:
@@ -445,6 +534,17 @@ class CustomerRepositoryTest(unittest.TestCase):
                 self.assertIn(rc, (1, 2))
                 self.assertNotIn(SECRET, out + err)
                 self.assertNotIn("alpha", out + err)
+
+    def test_missing_step_logs_stop(self) -> None:
+        rc, out, err = self.w.run("gate", self.w.wt, "--pr", 7, "--rv-log", self.w.rv(steps=None),
+                                  "--record", self.w.record(), "--out", self.w.base / "o.md")
+        self.assertEqual(rc, 1, err)
+        self.assertIn("段ごとの記録が読めない", err)
+        self.assertNotIn(SECRET, out + err)
+
+    def tearDown(self) -> None:
+        for call in self.w.db["calls"]:
+            self.assertEqual(call[:2], ["pr", "view"], call)
 
     def test_out_does_not_follow_a_link(self) -> None:
         real = self.w.base / "real.md"

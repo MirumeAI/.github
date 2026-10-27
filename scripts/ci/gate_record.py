@@ -37,12 +37,23 @@ follow-up の分け方）は、 渡されたとおりに書く。
       ],
       "summary": "直したこと（任意）",
       "follow_up": {"in_pr": [], "post_merge": [], "external": ["..."], "backlog": ["..."]},
-      "human_required": {"applies": false, "reason": "当たらない理由"}
+      "human_required": {"applies": false, "reason": "当たらない理由（1 行）",
+                         "readings": {"a": false, "b": false}}
     }
 
-人の判断が要る変更に当たるときは `"applies": true` にし、 人の言葉のまま・日時・
-名指しした head を `"adjudication": {"words": "...", "at": "...", "head": "<commit>"}`
-に書く（人の判断を Agent が作らない。 決まった形の人の判断を引くだけ）。
+`readings` は、 Reviewer A・B がそれぞれ「人の判断が要る変更に当たる」と読んだか。
+作成者の `applies` と 1 つでも分かれたら止まる（人の判断に回す）。
+
+当たるときは `"applies": true` にし、 人の言葉のまま（1 行）と日時を
+`"adjudication": {"words": "...", "at": "..."}` に書く。 **言葉そのものが、 この
+Pull Request（`#<番号>`）と今の head（12 桁以上）だけを名指ししていなければ止まる**
+（番号だけの答え・古い head・別の Pull Request・別の Repository の判断は引かない）。
+Agent が head を別の欄に書いて、 人が名指ししたことにする道は作らない。
+
+人の確認（Human Verification）が要る Pull Request（顧客 Repository の `customer-profile.yaml`
+を変える・検査が `PROFILE EXPANSION DETECTED` を出した）は、 この道具の外として `gate` が
+止まる（人の確認の記録は、 人が自分で Pull Request に書く）。 そのため `gate` は、 検査の
+出力にある段ごとの記録の場所を読む。 顧客 Repository で段ごとの記録が読めなければ止まる。
 
 終了コード: 0 文を作った ／ 1 門の条件を満たさない（止まる）／ 2 流せない
 （引数・ファイル・git・gh）。
@@ -75,6 +86,13 @@ RECORD = re.compile(
 #: 名前を出してよい Repository（顧客の名前ではない）。 **ここに無いものは顧客 Repository として扱う**。
 KNOWN = {"development-docs", ".github", ".github-private", "PDM", "Image-Acquisition-PDM"}
 
+#: 検査の道具が出す、 段ごとの記録の場所
+STEP_LOGS = re.compile(r"^段ごとの記録: (?P<dir>/.+)$", re.M)
+PROFILE = "customer-profile.yaml"
+EXPANSION = "PROFILE EXPANSION DETECTED"
+#: main を追う ref を、 clone の refspec によらず更新する
+FETCH_MAIN = ("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
+
 RESULTS = ("PASS", "PASS WITH FOLLOW-UP", "FAIL")
 COUNTS = ("blocker", "major", "in_pr")
 
@@ -87,6 +105,11 @@ ROLES = {
 RECHECK_LOOK = "前の所見が直ったか・変わった所に新しい問題が無いか"
 TAIL = ("顧客の名前と値は、報告に写さないでください。GitHub への操作は読むだけにしてください。\n"
         "最後に、見た head、follow-up の 4 つの分類、Result と BLOCKER・MAJOR・IN-PR REQUIRED FIXES の数を出してください。\n")
+
+#: 人の判断の印の言葉。 人の判断の欄（adjudication）のほかに書かせない
+MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication")
+NUMBER = re.compile(r"[#＃]\s*([0-9]+)")
+HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 
 FOLLOW = (("in_pr", "In-PR Required Fix"), ("post_merge", "Post-Merge"),
           ("external", "External Task"), ("backlog", "Backlog"))
@@ -131,7 +154,13 @@ def _commit(wt: Path, ref: str, what: str) -> str:
 def _one_line(text, what: str) -> str:
     if not isinstance(text, str) or not text.strip() or "\n" in text or "\r" in text:
         raise Fatal(f"{what} は空でない 1 行の文で書いてください")
-    return text.strip()
+    return _no_mark(text.strip(), what)
+
+
+def _no_mark(text: str, what: str) -> str:
+    if any(mark in text for mark in MARKS):
+        raise Fatal(f"{what} に人の判断の印の言葉を書かないでください（人の判断は adjudication にだけ書く）")
+    return text
 
 
 class Ctx:
@@ -162,12 +191,16 @@ class Ctx:
 
 
 # ---------------------------------------------------------------- 検査の記録の行
-def read_record(path: str) -> "re.Match":
-    """検査の出力から、 PASS の記録の行を 1 つだけ取り出す。"""
+def _read_log(path: str) -> str:
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         raise Fatal("検査の出力（--rv-log）を読めません") from None
+
+
+def read_record(path: str) -> "re.Match":
+    """検査の出力から、 PASS の記録の行を 1 つだけ取り出す。"""
+    text = _read_log(path)
     if re.search(r"^結果: FAIL", text, re.M):
         raise Stop("検査の出力に FAIL があります（落ちた検査の出力は門に使えません）")
     lines = {ln.strip() for ln in text.splitlines() if ln.strip().startswith(RECORD_PASS)}
@@ -197,6 +230,23 @@ def check_record(ctx: Ctx, m: "re.Match") -> None:
         raise Stop("記録の行の道具が正本と違います（正本の clone を最新にして流し直してください）")
 
 
+def check_human_verification(ctx: Ctx, rv_log: str) -> None:
+    """人の確認が要る Pull Request でないこと（要るものは、 この道具の外）。"""
+    base = _git(ctx.wt, "merge-base", "origin/main", ctx.head)
+    changed = _git(ctx.wt, "diff", "--no-renames", "--name-only", "-z", base, ctx.head).split("\0")
+    if any(Path(c).name == PROFILE for c in changed if c):
+        raise Stop(f"{PROFILE} を変える Pull Request は、人の確認（Human Verification）が要るので、この道具の外です")
+    m = STEP_LOGS.search(_read_log(rv_log))
+    logs = Path(m["dir"]) if m else None
+    if logs is None or not logs.is_dir():
+        if ctx.masked:
+            raise Stop("検査の段ごとの記録が読めないので、PROFILE EXPANSION DETECTED が無いことを確かめられません（検査を流し直してください）")
+        return              # 顧客 Repository でなければ、 混入の検査（宣言との照合）は流れない
+    for f in sorted(logs.rglob("*")):
+        if f.is_file() and not f.is_symlink() and EXPANSION.encode() in f.read_bytes():
+            raise Stop(f"検査が {EXPANSION} を出しています。人の確認（Human Verification）が要るので、この道具の外です")
+
+
 # ---------------------------------------------------------------- review
 def cmd_review(a) -> "tuple[Ctx, str]":
     ctx = Ctx(a.worktree, a.pr, "state,headRefOid,baseRefName", a.out)
@@ -214,7 +264,7 @@ def cmd_review(a) -> "tuple[Ctx, str]":
             raise Fatal("確かめ直しには、直したこと（--fixed）を 1 つ以上渡してください")
         lines += [f"- 確かめ直し: 前の head {prev}。変わった所は {ctx.wt} で git diff {prev[:12]}..HEAD",
                   "- 直したこと:", *(f"  - {_one_line(x, '--fixed')}" for x in a.fixed)]
-        look = RECHECK_LOOK
+        look = RECHECK_LOOK + ("・人の判断が要る変更に当たるか" if a.role == "b" else "")
     elif a.fixed:
         raise Fatal("--fixed は確かめ直し（--prev）のときだけ使えます")
     if a.look is not None:
@@ -272,6 +322,7 @@ def load_record(path: str, wt: Path) -> dict:
     summary = rec.get("summary", "")
     if not isinstance(summary, str):
         raise Fatal("summary は文で書いてください")
+    _no_mark(summary, "summary")
     follow = rec.get("follow_up", {})
     if not isinstance(follow, dict) or not set(follow) <= {k for k, _ in FOLLOW}:
         raise Fatal("follow_up は in_pr・post_merge・external・backlog で書いてください")
@@ -282,18 +333,35 @@ def load_record(path: str, wt: Path) -> dict:
     hr = rec["human_required"]
     if not isinstance(hr, dict) or type(hr.get("applies")) is not bool:
         raise Fatal("human_required.applies は true か false で書いてください")
-    if set(hr) != ({"applies", "reason", "adjudication"} if hr["applies"] else {"applies", "reason"}):
-        raise Fatal("human_required は applies・reason（当たるときは adjudication も）で書いてください")
-    if not isinstance(hr["reason"], str) or not hr["reason"].strip():
-        raise Fatal("human_required.reason に読みの理由を書いてください")
+    if set(hr) != {"applies", "reason", "readings", *(("adjudication",) if hr["applies"] else ())}:
+        raise Fatal("human_required は applies・reason・readings（当たるときは adjudication も）で書いてください")
+    hr["reason"] = _one_line(hr["reason"], "human_required.reason")
+    rd = hr["readings"]
+    if not isinstance(rd, dict) or set(rd) != {"a", "b"} or any(type(v) is not bool for v in rd.values()):
+        raise Fatal("human_required.readings は a・b（Reviewer の読み。true か false）で書いてください")
     if hr["applies"]:
         adj = hr["adjudication"]
-        if not isinstance(adj, dict) or set(adj) != {"words", "at", "head"}:
-            raise Fatal("adjudication は words（人の言葉のまま）・at（日時）・head（名指しした head）で書いてください")
-        _one_line(adj["words"], "adjudication.words")
-        _one_line(adj["at"], "adjudication.at")
-        adj["head"] = _commit(wt, adj["head"], "adjudication.head")
+        if not isinstance(adj, dict) or set(adj) != {"words", "at"}:
+            raise Fatal("adjudication は words（人の言葉のまま。1 行）と at（日時）で書いてください")
+        for k in ("words", "at"):
+            if not isinstance(adj[k], str) or not adj[k].strip() or "\n" in adj[k] or "\r" in adj[k]:
+                raise Fatal(f"adjudication.{k} は空でない 1 行の文で書いてください")
     return rec
+
+
+def named_head(ctx: Ctx, words: str) -> str:
+    """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。"""
+    if {int(n) for n in NUMBER.findall(words)} != {ctx.number}:
+        raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない）")
+    repo = ctx.slug.split("/", 1)[1]
+    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words) for n in KNOWN - {repo}):
+        raise Stop("人の判断の言葉が、別の Repository を名指ししています")
+    heads = HEX_TOKEN.findall(words)
+    if not heads:
+        raise Stop("人の判断の言葉に head（12 桁以上）がありません")
+    if any(not ctx.head.startswith(h) for h in heads):
+        raise Stop("人の判断の言葉が名指しした head が、merge する head と違います（判断の後に head が変わったら、人の判断を取り直してください）")
+    return max(heads, key=len)
 
 
 def _cell(x: "dict | None") -> str:
@@ -311,13 +379,14 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
     rec = load_record(a.record, ctx.wt)
 
     # main が検査の基準から進んでいないか（進んでいたら、 取り込み・流し直し・確かめ直し）
-    if _run(["git", "fetch", "-q", "origin", "main"], ctx.wt).returncode != 0:
+    if _run(["git", *FETCH_MAIN], ctx.wt).returncode != 0:
         raise Fatal("origin の main を fetch できません")
     main = _git(ctx.wt, "rev-parse", "origin/main")
     if not main.startswith(m["base"]):
         raise Stop("main が検査の基準から進みました（main を取り込み、検査を流し直し、Reviewer に確かめ直してもらってください）")
     if _run(["git", "merge-base", "--is-ancestor", main, ctx.head], ctx.wt).returncode != 0:
         raise Stop("head が main を含みません")
+    check_human_verification(ctx, a.rv_log)
 
     # Reviewer ごとの最後の結果が、 merge する head を見て 0・0・0 であること
     last = {}
@@ -338,8 +407,9 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
     if follow.get("in_pr"):
         raise Stop("In-PR の直しが残っています")
     hr = rec["human_required"]
-    if hr["applies"] and hr["adjudication"]["head"] != ctx.head:
-        raise Stop("人の判断の後に head が変わりました（変わった head で人の判断を取り直してください）")
+    if any(v != hr["applies"] for v in hr["readings"].values()):
+        raise Stop("人の判断が要る変更かの読みが、作成者と Reviewer で分かれています（人の判断に回してください）")
+    named = named_head(ctx, hr["adjudication"]["words"]) if hr["applies"] else ""
 
     out = ["## Merge の門の記録（AUTO MERGE Gate）", "",
            f"- merge する head: `{ctx.head}`（基準 origin/main `{m['base']}` を含む）",
@@ -355,15 +425,16 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
     out += ["", "### 人の判断が要る変更か", ""]
     if hr["applies"]:
         adj = hr["adjudication"]
-        out += [f"当たる。{hr['reason'].strip()}", "",
-                f"人の判断（人の言葉のまま）: 「{adj['words'].strip()}」（{adj['at'].strip()}、"
-                f"名指しした head `{adj['head'][:12]}`）。判断の後に head は変わっていない。"]
+        out += [f"当たる（作成者・A・B の読みが同じ）。{hr['reason']}", "",
+                f"人の判断（人の言葉のまま）: 「{adj['words'].strip()}」（{adj['at'].strip()}）。"
+                f"言葉が名指しした Pull Request #{ctx.number} と head `{named}` は、merge する head と同じ"
+                "（判断の後に head は変わっていない）。"]
     else:
-        out += [f"当たらない。{hr['reason'].strip()}"]
+        out += [f"当たらない（作成者・A・B の読みが同じ）。{hr['reason']}"]
     out += ["", "以上で門の条件を満たすので、Agent が head を固定して Squash and merge する。"]
 
     ready = f"gh pr ready {ctx.number} && " if ctx.pr.get("isDraft") else ""
-    cmd = (f"cd {shlex.quote(str(ctx.wt))} && git fetch -q origin main"
+    cmd = (f"cd {shlex.quote(str(ctx.wt))} && git {' '.join(FETCH_MAIN)}"
            f" && [ \"$(git rev-parse origin/main)\" = \"{main}\" ]"
            f" && {ready}gh pr merge {ctx.number} --squash --match-head-commit {ctx.head}")
     return ctx, "\n".join(out) + "\n", cmd
@@ -399,16 +470,22 @@ def cmd_body(a) -> "tuple[Ctx, str]":
 
 
 # ---------------------------------------------------------------- 出力
+def _write(path: str, text: str) -> None:
+    """本人だけが読める形（0600）で書く。 link は辿らない。 既にあるファイルも 0600 にする。"""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(text)
+    except OSError:
+        raise Fatal("--out のファイルに書けません") from None
+
+
 def emit(ctx: Ctx, text: str, out: "str | None") -> None:
     if not out:
         sys.stdout.write(text)
         return
-    try:
-        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-    except OSError:
-        raise Fatal("--out のファイルに書けません") from None
+    _write(out, text)
     print(f"書きました: {out}")
 
 
@@ -448,8 +525,14 @@ def main(argv: "list | None" = None) -> int:
         if a.cmd == "gate":
             ctx, text, cmd = cmd_gate(a)
             emit(ctx, text, a.out)
-            print("merge の命令（門の記録を投稿してから流す。main が進んでいたら止まる）:", file=sys.stderr)
-            print(cmd, file=sys.stderr)
+            if ctx.masked:
+                # 顧客 Repository では、 作業ツリーの道も画面に出さない
+                _write(a.out + ".merge", cmd + "\n")
+                print(f"merge の命令は {a.out}.merge に書きました（門の記録を投稿してから流す。main が進んでいたら止まる）",
+                      file=sys.stderr)
+            else:
+                print("merge の命令（門の記録を投稿してから流す。main が進んでいたら止まる）:", file=sys.stderr)
+                print(cmd, file=sys.stderr)
         else:
             ctx, text = {"review": cmd_review, "merged": cmd_merged, "body": cmd_body}[a.cmd](a)
             emit(ctx, text, a.out)

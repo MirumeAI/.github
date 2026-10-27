@@ -308,7 +308,9 @@ class GateTest(Base):
             "### 人の判断が要る変更か", "",
             "当たらない（作成者・A・B の読みが同じ）。変えたのは試験だけ。", "",
             "道具が確かめた条件（head の一致・検査の記録・main の進み・Reviewer A・B の最後の結果・In-PR の残り・"
-            "人の判断が要る変更の読み）は満たす。道具が見ない条件（follow-up の判断の中身など）と、人の確認が要る場面"
+            "人の判断が要る変更の読み）は満たす。道具が見ない条件（development-docs の "
+            "`02_github_workflow/pull_request_review.md` の「Merge の門」の一覧。follow-up の判断の中身・"
+            "Product Release の手順の間でないか・人の言葉が人自身のものか・渡した記録が報告と人の言葉に合うかなど）と、人の確認が要る場面"
             "（development-docs の `03_customer_development/customer_isolation_check.md` の「要る場面」）に当たらないことを"
             "Agent が確かめてから、head を固定して Squash and merge する（人の確認が要る Pull Request は、この道具の外。"
             "人の確認そのものは人が書く）。", ""]))
@@ -446,6 +448,85 @@ class GateTest(Base):
             with self.subTest(words=words):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
+
+    def test_short_head_boundaries(self) -> None:
+        # 道具が見分けるのは a〜f を含む 7〜11 桁。 11 桁の別の head は止め、 6 桁以下は見分けない（#109）
+        h, h12 = self.w.head, self.w.head[:12]
+        other11 = next(x for x in ("abcdef01234", "fedcba98765") if not h.startswith(x))
+        self.assertStops(self.w.gate(human_required=self.human(f"#7（head {h12}、前の {other11}）を承認します")), "短い head")
+        rc, _, err = self.w.gate(human_required=self.human(f"#7（head {h12}、印 abcdef）を承認します"))
+        self.assertEqual(rc, 0, err)
+        # 今の head の先頭（a〜f を含む 7〜11 桁）は通る
+        k = next((k for k in range(7, 12) if any(c in "abcdef" for c in h[:k])), None)
+        if k is not None:
+            rc, _, err = self.w.gate(human_required=self.human(f"#7（head {h12}、短く {h[:k]}）を承認します"))
+            self.assertEqual(rc, 0, err)
+
+    def test_case_width_and_number_forms(self) -> None:
+        # 大文字・全角の 16 進と名前、 全角の数字、 # の無い番号も照らす（#109）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef0", "fedcba1") if not h.startswith(x))
+        full = "".join(chr(ord(c) + 0xFEE0) for c in h12)              # 全角の英数字
+        for words, why in ((f"#7（head {h12}・{other.upper()}）を承認します", "短い head"),
+                           (f"#7（head {h12}・{('0' * 12).upper() if h12 != '0' * 12 else 'f' * 12}）を承認します",
+                            "merge する head と違います"),
+                           (f"#7（head {h12}）と ＃８ を承認します", "#番号"),
+                           (f"#7（head {h12}）と PR 8 を承認します", "#番号"),
+                           (f"#7（head {h12}）と Pull Request #8 を承認します", "#番号"),
+                           (f"pdm の #7（head {h12}）を承認します", "別の Repository"),
+                           (f"ＰＤＭ の #7（head {h12}）を承認します", "別の Repository")):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), why)
+        for words in (f"＃７（head {full}）を承認します", f"PR 7（head {h12.upper()}）を承認します",
+                      f"Development-Docs #7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_human_verification_is_a_mark_too(self) -> None:
+        for text in ("直した。\n\nHuman Verification: PASS", "直した。 HUMAN  VERIFICATION: PASS",
+                     "直した。 Ｈｕｍａｎ Ｖｅｒｉｆｉｃａｔｉｏｎ"):
+            with self.subTest(text=text):
+                self.assertStops(self.w.gate(summary=text), "人の確認（Human Verification）", 2)
+        self.assertStops(self.w.gate(summary="直した。 human adjudication: x"), "人の判断の印", 2)
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Verification: PASS #7 head {h12}")),
+                         "人の確認（Human Verification）")
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Adjudication: MERGE APPROVED #7 head {h12}")),
+                         "コメントの形")
+
+    def test_number_forms_without_hash(self) -> None:
+        # # の無い番号の形（Pull Request・小文字・プルリクエスト）と、 並べた番号も数える（#109）
+        h12 = self.w.head[:12]
+        for words in (f"#7（head {h12}）と Pull Request 8 を承認します", f"#7（head {h12}）と pr 8 を承認します",
+                      f"#7（head {h12}）とプルリクエスト 8 を承認します", f"#7・8（head {h12}）を承認します",
+                      f"PR 7, 8（head {h12}）を承認します", f"#7 と 8（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"Pull Request 7（head {h12}）を承認します", f"プルリクエスト #7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_head_or_date_after_a_separator_is_not_a_number(self) -> None:
+        # 区切りの後ろに head や日付を書いた正しい言葉は止めない。 3 つ並べた番号は止める（#112 の Reviewer A）
+        h12 = self.w.head[:12]
+        for words in (f"#7、{h12} の merge を承認します", f"#7・{h12} を承認します", f"#7, {h12} approved",
+                      f"#7 と {h12} を承認します", f"#7/{h12} を承認します", f"#7、2026-10-28 に head {h12} を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+        self.assertStops(self.w.gate(human_required=self.human(f"#7・8・9（head {h12}）を承認します")), "#番号")
+        self.assertStops(self.w.gate(human_required=self.human(f"#9・8・7（head {h12}）を承認します")), "#番号")
+
+    def test_both_the_original_and_the_normalized_words_are_checked(self) -> None:
+        # 全角の字が隣にあって、 そろえた文だけでは見えなくなる並びも止める（#109）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef012345", "fedcba987654") if not h.startswith(x))
+        for words in (f"#7（head {h12}・{other}ｇ）を承認します", f"PDM１ の #7（head {h12}）を承認します",
+                      f"#7（head {h12}・{other.upper()}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "")
 
     def test_comment_form_adjudication_is_outside_the_tool(self) -> None:
         h = self.w.head

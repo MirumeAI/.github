@@ -903,6 +903,44 @@ class TheIsolationStartsOffTest(unittest.TestCase):
             N.make_plan(NAME, None, N.PROPERTIES,
                         _source_with({".github/workflows/second.yml": second}))
         self.assertIn("second.yml", str(cm.exception))
+        # .yaml の 2 つ目と、 拡張子が大文字の workflow も確かめる（#111）
+        for rel in (".github/workflows/second.yaml", ".github/workflows/second.YML",
+                    ".github/workflows/second.Yaml"):
+            with self.subTest(rel=rel):
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({rel: second}))
+                self.assertIn(rel.rsplit("/", 1)[1], str(cm.exception))
+
+    def test_a_lookalike_key_is_refused(self) -> None:
+        """見た目の似た非 ASCII の字で isolation を書いた鍵も、 照合を有効にしうるとみなす（#111）。"""
+        wf = PLAN.tree[self.WORKFLOW][1].decode("utf-8")
+        for name, key in (("キリルの і", "run-\u0456solation-check"),
+                          ("全角の字", "ｒｕｎ-isolation-check"),
+                          ("キリルの о", "run-is\u043elation-check")):
+            with self.subTest(key=name):
+                bad = wf.replace("run-isolation-check: false", f"{key}: true")
+                self.assertNotEqual(bad, wf)
+                with self.assertRaises(N.SourceError):
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: bad}))
+        # 引用符の複数行・決まった false の行の注釈の引用符・非 ASCII の空白の後の # で、
+        # true にした鍵を隠す書き方も断る（#113 の Reviewer B）
+        off = "    with:\n      run-isolation-check: false\n"
+        self.assertEqual(wf.count(off), 1)
+        for name, new in (
+                ("引用符の複数行", '    with:\n      note: "a\n      # x", run-isolation-check: true\n'),
+                ("false の行の注釈で引用符を閉じる",
+                 '    with: {note: "a\n      run-isolation-check: false  # "  , run-isolation-check: true}\n'),
+                ("非 ASCII の空白の後の #", "    with:\n      \u00a0# x: run-isolation-check: true\n"),
+                ("流れの形の鍵", "    with: {run-isolation-check: true}\n")):
+            with self.subTest(form=name):
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(off, new)}))
+                self.assertIn("有効にしうる形", str(cm.exception))
+        # 頭の BOM は外して読む（今の雛形の中身のまま作れる）
+        N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: "\ufeff" + wf}))
+        # 決まった false の行の後ろの、 和文の注釈はそのまま作れる（前と同じ）
+        N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(
+            "run-isolation-check: false", "run-isolation-check: false  # 人の確認の後に true")}))
 
     def test_the_plan_and_the_first_pull_request_say_so(self) -> None:
         code, out = _main([NAME], FakeGh(_fresh()))

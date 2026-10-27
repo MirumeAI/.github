@@ -47,12 +47,12 @@ follow-up の分け方）は、 渡されたとおりに書く。
 
 当たるときは `"applies": true` にし、 人の言葉のまま（1 行）と日時を
 `"adjudication": {"words": "...", "at": "..."}` に書く。 **言葉そのものが、 この
-Pull Request（`#<番号>`）と今の head（12 桁以上）だけを名指ししていなければ止まる**
+Pull Request（`#<番号>`・`PR <番号>` など）と今の head（12 桁以上）だけを名指ししていなければ止まる**
 （番号だけの答え・古い head・別の Pull Request・別の Repository の判断は引かない）。
 Agent が head を別の欄に書いて、 人が名指ししたことにする道は作らない。
 
 人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）の
-ときも、 この道具の外（決まりの形で手で書く）。 言葉が `#<番号>` を含まないので `gate` が止まる。
+ときも、 この道具の外（決まりの形で手で書く）。 言葉が番号（`#<番号>` など）を含まないので `gate` が止まる。
 
 検査の記録の行の飛ばした試験が 0 でなければ、 理由を確かめて `skipped_reason` に書くまで止まる
 （正本の「0 でなければ理由を確かめる」）。
@@ -119,11 +119,18 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 
 #: 人の判断の印の言葉と人の確認の言葉。 人の判断の欄（adjudication）のほかに書かせない（人の確認の言葉は、 人の判断の欄にも書かせない）
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
-#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`Pull Request 7`。 元の文と NFKC にそろえた文の両方で照らす）
-NUMBER = re.compile(r"(?:#|(?<![A-Za-z])(?:PR|Pull Request|プルリクエスト)\s*#?)\s*([0-9]+)", re.I)
-#: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`）
-#: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英数字や - が続くもの（head の先頭・日付）は番号に数えない
-MORE_NUMBER = re.compile(r"\s*(?:[・、,/]|と|および|及び)\s*#?\s*([0-9]{1,6})(?![0-9A-Za-z-])")
+#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`Pull Request 7`・`プルリク 7`・`№7`・URL の
+#: `/pull/7`。 元の文と NFKC にそろえた文の両方で照らす）
+NUMBER = re.compile(r"(?:#|№|/pull/|(?<![A-Za-z])(?:PR|Pull\s*Request|プルリク(?:エスト)?)\s*[-#]?)\s*([0-9]+)",
+                    re.I)
+#: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`・`#7 and 8`・`#7〜9`・`#7-8`・`#7 や 8`・`#7 & 8`）。
+#: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英字が続くもの（head の先頭）は番号に数えない
+MORE_NUMBER = re.compile(r"\s*(?:[・、,/&~〜-]|と|および|及び|や|から|and(?![A-Za-z]))\s*#?\s*([0-9]{1,6})(?![0-9A-Za-z])",
+                         re.I)
+#: 番号を探す前に外す、 日付と時刻（`10/28`・`2026-10-28`・`10:30`・`10月28日` など）。 `#` や数字のすぐ後のもの
+#: （`#7/8` の並べた番号）は外さない
+DATE_TIME = re.compile(r"(?<![#0-9])(?:(?:[0-9]{4}[-/.][0-9]{1,2}[-/.][0-9]{1,2}|[0-9]{1,2}/[0-9]{1,2}"
+                       r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)(?![0-9])|[0-9]{4}年|[0-9]{1,2}[月日時分])")
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 #: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
 SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")
@@ -170,9 +177,16 @@ def _commit(wt: Path, ref: str, what: str) -> str:
     return r.stdout.strip()
 
 
-def _one_line(text, what: str) -> str:
+def _one_line(text, what: str, mention_ok: bool = False) -> str:
+    """空でない 1 行。 印の言葉を断る（`mention_ok` なら、 記録の形〔`Human Verification:` など〕だけを断る）。"""
     if not isinstance(text, str) or not text.strip() or "\n" in text or "\r" in text:
         raise Fatal(f"{what} は空でない 1 行の文で書いてください")
+    if mention_ok:
+        # 頼む文は GitHub に載せないので、 印の言葉に触れるのはよい。 記録の形（印の言葉の後に `:`）だけを断る
+        if re.search("(?:" + "|".join(re.escape(_norm(m)) for m in MARKS) + r")\s*:", _norm(text)):
+            raise Fatal(f"{what} に、人の判断・人の確認の記録の形（`Human Adjudication:`・`Human Verification:` など）を"
+                        "書かないでください（言葉に触れるだけなら書けます）")
+        return text.strip()
     return _no_mark(text.strip(), what)
 
 
@@ -291,12 +305,12 @@ def cmd_review(a) -> "tuple[Ctx, str]":
         if not a.fixed:
             raise Fatal("確かめ直しには、直したこと（--fixed）を 1 つ以上渡してください")
         lines += [f"- 確かめ直し: 前の head {prev}。変わった所は {ctx.wt} で git diff {prev[:12]}..HEAD",
-                  "- 直したこと:", *(f"  - {_one_line(x, '--fixed')}" for x in a.fixed)]
+                  "- 直したこと:", *(f"  - {_one_line(x, '--fixed', True)}" for x in a.fixed)]
         look = RECHECK_LOOK + ("・人の判断が要る変更に当たるか" if a.role == "b" else "")
     elif a.fixed:
         raise Fatal("--fixed は確かめ直し（--prev）のときだけ使えます")
     if a.look is not None:
-        look += "。" + _one_line(a.look, "--look")
+        look += "。" + _one_line(a.look, "--look", True)
     head = [f"Reviewer {letter}（{title}）として、{ctx.slug} #{ctx.number}（Issue #{a.issue}）を"
             "読み取りだけでレビューしてください。",
             f"- head: {ctx.head}",
@@ -304,7 +318,7 @@ def cmd_review(a) -> "tuple[Ctx, str]":
             f"- Required Verification: {m.group(0)}",
             f"- 見てほしいこと: {look}"]
     if a.role == "b":
-        head.append(f"- 作成者の「人の判断が要る変更」の判定: {_one_line(a.human, '--human')}")
+        head.append(f"- 作成者の「人の判断が要る変更」の判定: {_one_line(a.human, '--human', True)}")
     return ctx, "\n".join(head + lines) + "\n" + TAIL
 
 
@@ -390,9 +404,11 @@ def named_head(ctx: Ctx, words: str) -> str:
         raise Stop("人の判断の言葉に、人の確認（Human Verification）の言葉があります（人の確認は、人が自分で Pull Request に書く記録で、この道具の外）")
     if any(_norm(m) in _norm(words) for m in MARKS):
         raise Stop("人の判断の言葉が Pull Request のコメントの形（Human Adjudication の印）です。この道具の外なので、決まりの形で手で書く")
-    texts = (words, unicodedata.normalize("NFKC", words))
+    # ゼロ幅の空白などの書式の字（Cf）は外してから照らす（番号や head を割って隠せないように）
+    bare = "".join(c for c in words if unicodedata.category(c) != "Cf")
+    texts = (bare, unicodedata.normalize("NFKC", bare))
     nums = set()
-    for t in texts:
+    for t in (DATE_TIME.sub(" ", x) for x in texts):
         for m in NUMBER.finditer(t):
             nums.add(int(m[1]))
             pos = m.end()

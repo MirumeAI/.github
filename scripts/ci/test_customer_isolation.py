@@ -426,6 +426,14 @@ def scenarios() -> "list[Scenario]":
         a_with(**{"customer-profile.yaml": initial}), a_files()], 0,
         args=("--base-ref", "{base}"),
         texts=("今の決まりでは読めません", "PROFILE EXPANSION DETECTED"), absent=("比べていません",))
+    add("13k. 基準の宣言が大きすぎても、 空の宣言と比べて増えたと言う（#54 の Reviewer B）", [
+        a_with(**{"customer-profile.yaml": "# " + "x" * (256 * 1024) + "\n"}), a_files()], 0,
+        args=("--base-ref", "{base}"),
+        texts=("今の決まりでは読めません", "PROFILE EXPANSION DETECTED"), absent=("比べていません",))
+    add("13l. 基準の宣言の道がフォルダでも、 空の宣言と比べて増えたと言う（#54 の Reviewer B）", [
+        a_with(**{"customer-profile.yaml": None, "customer-profile.yaml__x.txt": "x\n"}), a_files()], 0,
+        args=("--base-ref", "{base}"),
+        texts=("今の決まりでは読めません", "PROFILE EXPANSION DETECTED"), absent=("比べていません",))
 
     # ---- 宛先の決まり（ちょうどの値が原則。 網は理由つきで、 狭いものだけ）
     p = a_profile()
@@ -872,7 +880,9 @@ MUTATIONS = [
     ("宣言の増え方: 増えても言わない",
      "    if grew:\n", "    if False:\n"),
     ("宣言の増え方: 基準の宣言が今の決まりで読めないと比べない（#54 の前）",
-     "                unreadable = True   # 空の宣言と比べる", "                return []   # 空の宣言と比べる"),
+     "                    unreadable = True   # 空の宣言と比べる", "                    return []   # 空の宣言と比べる"),
+    ("宣言の増え方: 大きすぎる・ファイルでない基準の宣言と比べない",
+     "                unreadable = True   # 大きすぎる", "                return []   # 大きすぎる"),
     ("宣言: 別名（*）を通す",
      "if self.check_event(yaml.AliasEvent):", "if False:"),
     ("宣言: 同じ鍵の重複を通す",

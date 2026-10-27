@@ -508,6 +508,17 @@ class GateTest(Base):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
 
+    def test_head_or_date_after_a_separator_is_not_a_number(self) -> None:
+        # 区切りの後ろに head や日付を書いた正しい言葉は止めない。 3 つ並べた番号は止める（#112 の Reviewer A）
+        h12 = self.w.head[:12]
+        for words in (f"#7、{h12} の merge を承認します", f"#7・{h12} を承認します", f"#7, {h12} approved",
+                      f"#7 と {h12} を承認します", f"#7/{h12} を承認します", f"#7、2026-10-28 に head {h12} を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+        self.assertStops(self.w.gate(human_required=self.human(f"#7・8・9（head {h12}）を承認します")), "#番号")
+        self.assertStops(self.w.gate(human_required=self.human(f"#9・8・7（head {h12}）を承認します")), "#番号")
+
     def test_both_the_original_and_the_normalized_words_are_checked(self) -> None:
         # 全角の字が隣にあって、 そろえた文だけでは見えなくなる並びも止める（#109）
         h, h12 = self.w.head, self.w.head[:12]

@@ -117,12 +117,13 @@ RECHECK_LOOK = "前の所見が直ったか・変わった所に新しい問題�
 TAIL = ("顧客の名前と値は、報告に写さないでください。GitHub への操作は読むだけにしてください。\n"
         "最後に、見た head、follow-up の 4 つの分類、Result と BLOCKER・MAJOR・IN-PR REQUIRED FIXES の数を出してください。\n")
 
-#: 人の判断の印の言葉。 人の判断の欄（adjudication）のほかに書かせない
+#: 人の判断の印の言葉と人の確認の言葉。 人の判断の欄（adjudication）のほかに書かせない（人の確認の言葉は、 人の判断の欄にも書かせない）
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
 #: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`Pull Request 7`。 元の文と NFKC にそろえた文の両方で照らす）
 NUMBER = re.compile(r"(?:#|(?<![A-Za-z])(?:PR|Pull Request|プルリクエスト)\s*#?)\s*([0-9]+)", re.I)
 #: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`）
-MORE_NUMBER = re.compile(r"\s*(?:[・、,/]|と|および|及び)\s*#?\s*([0-9]+)")
+#: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英数字や - が続くもの（head の先頭・日付）は番号に数えない
+MORE_NUMBER = re.compile(r"\s*(?:[・、,/]|と|および|及び)\s*#?\s*([0-9]{1,6})(?![0-9A-Za-z-])")
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 #: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
 SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")

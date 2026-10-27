@@ -113,10 +113,10 @@ class World:
         return git("rev-parse", "HEAD", cwd=self.wt)
 
     def line(self, head: str, base: "str | None" = None, has: str = "はい", same: str = "正本と同じ",
-             slug: "str | None" = None) -> str:
+             slug: "str | None" = None, skipped: int = 0) -> str:
         return (f"{G.RECORD_PASS}（{slug or self.slug} head {head[:12]}・基準 origin/main {(base or self.base_sha)[:12]}"
                 f" を含む: {has}・正本の道具 MirumeAI/.github origin/main {'a' * 12}・道具 {'b' * 12}（{same}）"
-                "・workflow 1・job 2・段 13・試験 320 件・飛ばした試験 0 件・19 秒）")
+                f"・workflow 1・job 2・段 13・試験 320 件・飛ばした試験 {skipped} 件・19 秒）")
 
     def file(self, text: str, suffix: str = ".txt") -> Path:
         self.n += 1
@@ -307,7 +307,11 @@ class GateTest(Base):
             "- External Task: 文書の PR を後に merge する", "- Backlog: 場面を足す（#9）", "",
             "### 人の判断が要る変更か", "",
             "当たらない（作成者・A・B の読みが同じ）。変えたのは試験だけ。", "",
-            "以上で門の条件を満たすので、Agent が head を固定して Squash and merge する。", ""]))
+            "道具が確かめた条件（head の一致・検査の記録・main の進み・Reviewer A・B の最後の結果・In-PR の残り・"
+            "人の判断が要る変更の読み）は満たす。道具が見ない条件（follow-up の判断の中身など）と、人の確認が要る場面"
+            "（development-docs の `03_customer_development/customer_isolation_check.md` の「要る場面」）に当たらないことを"
+            "Agent が確かめてから、head を固定して Squash and merge する（人の確認が要る Pull Request は、この道具の外。"
+            "人の確認そのものは人が書く）。", ""]))
         cmd = err.strip().splitlines()[-1]
         self.assertEqual(cmd, f"cd {shlex.quote(str(self.w.wt))} && git fetch -q origin +refs/heads/main:refs/remotes/origin/main"
                               f" && [ \"$(git rev-parse origin/main)\" = \"{self.w.base_sha}\" ]"
@@ -417,6 +421,50 @@ class GateTest(Base):
         self.assertEqual(rc, 0, err)
         self.assertStops(self.w.gate(human_required={"applies": False, "reason": "x", "readings": {"a": False, "b": False},
                                                      "adjudication": {"words": words, "at": "x"}}), "readings（当たる", 2)
+
+    def test_other_repository_name_next_to_japanese(self) -> None:
+        # 名前のすぐ後に和文が続いても、 別の Repository の名指しを見逃さない（#107）
+        h12 = self.w.head[:12]
+        for words in (f"PDMの #7（head {h12}）の merge を承認します",
+                      f"Image-Acquisition-PDMは #7（head {h12}）で承認します",
+                      f"#7（head {h12}）は.githubで承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
+        rc, _, err = self.w.gate(human_required=self.human(f"development-docsの #7（head {h12}）の merge を承認します"))
+        self.assertEqual(rc, 0, err)
+
+    def test_short_heads_must_be_the_merge_head(self) -> None:
+        # 12 桁より短い別の head を並べた言葉は引かない。 数字だけの並び（日付など）は head として見ない（#107）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef0", "fedcba1", "0a0a0a0") if not h.startswith(x))
+        self.assertStops(self.w.gate(human_required=self.human(f"#7（head {h12}、前の {other}）の merge を承認します")),
+                         "短い head")
+        self.assertStops(self.w.gate(human_required=self.human(f"#7（head {h12}・{other}aa）の merge を承認します")),
+                         "短い head")
+        for words in (f"#7（head {h12}）の merge を 20261028 に承認します",
+                      f"#7（head {h12}、短く {h[:8]}a）の merge を承認します" if h[8] == "a" else f"#7（head {h12}、短く {h[:9]}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_comment_form_adjudication_is_outside_the_tool(self) -> None:
+        h = self.w.head
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Adjudication: MERGE APPROVED\n\n対象: {h}")), "1 行", 2)
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Adjudication: MERGE APPROVED 対象: {h}")),
+                         "決まりの形で手で書く")
+
+    def test_skipped_tests_need_a_checked_reason(self) -> None:
+        rv = self.w.rv(skipped=3)
+        self.assertStops(self.w.gate(rv=rv), "飛ばした試験が 3 件")
+        rc, out, err = self.w.gate(rv=self.w.rv(skipped=3), skipped_reason="PyYAML の無い段の 3 件。試験の中身は別の段で流れた")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(f"- Required Verification: {self.w.line(self.w.head, skipped=3)}\n"
+                      "- 飛ばした試験 3 件の理由（Agent が確かめた）: PyYAML の無い段の 3 件。試験の中身は別の段で流れた\n", out)
+        self.assertStops(self.w.gate(skipped_reason="理由"), "0 件なのに", 2)
+        self.assertStops(self.w.gate(rv=self.w.rv(skipped=1), skipped_reason="1 行目\n2 行目"), "1 行", 2)
+        self.assertStops(self.w.gate(rv=self.w.rv(skipped=1), skipped_reason="Human Adjudication: x"), "印の言葉", 2)
+        bare = self.w.line(self.w.head).replace("・飛ばした試験 0 件", "")
+        self.assertStops(self.w.gate(rv=self.w.file(f"結果: PASS（略）\n{bare}\n")), "飛ばした試験の件数がありません")
 
     def test_readings_must_agree(self) -> None:
         for applies, rd in ((False, {"a": False, "b": True}), (False, {"a": True, "b": False}),

@@ -36,6 +36,7 @@ follow-up の分け方）は、 渡されたとおりに書く。
         {"name": "確かめ直し", "head": "<commit>", "a": {...}, "b": {...}}
       ],
       "summary": "直したこと（任意）",
+      "skipped_reason": "飛ばした試験の理由（検査の記録の行の飛ばした試験が 0 でないときだけ。1 行）",
       "follow_up": {"in_pr": [], "post_merge": [], "external": ["..."], "backlog": ["..."]},
       "human_required": {"applies": false, "reason": "当たらない理由（1 行）",
                          "readings": {"a": false, "b": false}}
@@ -50,10 +51,19 @@ Pull Request（`#<番号>`）と今の head（12 桁以上）だけを名指し�
 （番号だけの答え・古い head・別の Pull Request・別の Repository の判断は引かない）。
 Agent が head を別の欄に書いて、 人が名指ししたことにする道は作らない。
 
-人の確認（Human Verification）が要る Pull Request（顧客 Repository の `customer-profile.yaml`
-を変える・検査が `PROFILE EXPANSION DETECTED` を出した）は、 この道具の外として `gate` が
-止まる（人の確認の記録は、 人が自分で Pull Request に書く）。 そのため `gate` は、 検査の
-出力にある段ごとの記録の場所を読む。 顧客 Repository で段ごとの記録が読めなければ止まる。
+人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）の
+ときも、 この道具の外（決まりの形で手で書く）。 言葉が `#<番号>` を含まないので `gate` が止まる。
+
+検査の記録の行の飛ばした試験が 0 でなければ、 理由を確かめて `skipped_reason` に書くまで止まる
+（正本の「0 でなければ理由を確かめる」）。
+
+人の確認（Human Verification）が要る Pull Request は、 この道具の外（人の確認の記録は、 人が
+自分で Pull Request に書く）。 どれが要るかの正本は development-docs の
+`03_customer_development/customer_isolation_check.md` の「要る場面」。 `gate` が機械で見分けて
+止まるのは、 そのうち 2 つ（顧客 Repository の `customer-profile.yaml` を変える・検査が
+`PROFILE EXPANSION DETECTED` を出した）だけで、 **止まらないことは、 人の確認が要らない
+ことの根拠にならない**（ほかの場面に当たるかは Agent が確かめる）。 そのため `gate` は、
+検査の出力にある段ごとの記録の場所を読む。 顧客 Repository で段ごとの記録が読めなければ止まる。
 
 終了コード: 0 文を作った ／ 1 門の条件を満たさない（止まる）／ 2 流せない
 （引数・ファイル・git・gh）。
@@ -110,6 +120,10 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication")
 NUMBER = re.compile(r"[#＃]\s*([0-9]+)")
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
+#: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
+SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")
+#: 記録の行の、 飛ばした試験の件数
+SKIPPED = re.compile(r"・飛ばした試験 ([0-9]+) 件・")
 
 FOLLOW = (("in_pr", "In-PR Required Fix"), ("post_merge", "Post-Merge"),
           ("external", "External Task"), ("backlog", "Backlog"))
@@ -302,9 +316,10 @@ def load_record(path: str, wt: Path) -> dict:
         rec = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
         raise Fatal("--record の JSON を読めません") from None
-    if not isinstance(rec, dict) or not set(rec) <= {"rounds", "summary", "follow_up", "human_required"} \
+    if not isinstance(rec, dict) or not set(rec) <= {"rounds", "summary", "skipped_reason", "follow_up",
+                                                     "human_required"} \
             or not {"rounds", "human_required"} <= set(rec):
-        raise Fatal("--record は rounds・human_required（と任意の summary・follow_up）で書いてください")
+        raise Fatal("--record は rounds・human_required（と任意の summary・skipped_reason・follow_up）で書いてください")
     rounds = rec["rounds"]
     if not isinstance(rounds, list) or not rounds:
         raise Fatal("rounds に Reviewer の結果を 1 回以上書いてください")
@@ -323,6 +338,8 @@ def load_record(path: str, wt: Path) -> dict:
     if not isinstance(summary, str):
         raise Fatal("summary は文で書いてください")
     _no_mark(summary, "summary")
+    if "skipped_reason" in rec:
+        rec["skipped_reason"] = _one_line(rec["skipped_reason"], "skipped_reason")
     follow = rec.get("follow_up", {})
     if not isinstance(follow, dict) or not set(follow) <= {k for k, _ in FOLLOW}:
         raise Fatal("follow_up は in_pr・post_merge・external・backlog で書いてください")
@@ -352,15 +369,19 @@ def load_record(path: str, wt: Path) -> dict:
 def named_head(ctx: Ctx, words: str) -> str:
     """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。"""
     if {int(n) for n in NUMBER.findall(words)} != {ctx.number}:
-        raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない）")
+        raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない。"
+                   "Pull Request のコメントの形の人の判断は、この道具の外なので決まりの形で手で書く）")
     repo = ctx.slug.split("/", 1)[1]
-    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words) for n in KNOWN - {repo}):
+    # 区切りは ASCII で見る（Unicode の \w だと、 名前のすぐ後に和文が続くと見逃す）
+    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words, re.ASCII) for n in KNOWN - {repo}):
         raise Stop("人の判断の言葉が、別の Repository を名指ししています")
     heads = HEX_TOKEN.findall(words)
     if not heads:
         raise Stop("人の判断の言葉に head（12 桁以上）がありません")
     if any(not ctx.head.startswith(h) for h in heads):
         raise Stop("人の判断の言葉が名指しした head が、merge する head と違います（判断の後に head が変わったら、人の判断を取り直してください）")
+    if any(re.search("[a-f]", s) and not ctx.head.startswith(s) for s in SHORT_HEX.findall(words)):
+        raise Stop("人の判断の言葉に、merge する head の先頭と違う短い head（7〜11 桁）があります（別の head を並べた言葉は引かない）")
     return max(heads, key=len)
 
 
@@ -377,6 +398,15 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
         raise Stop("base が main でない Pull Request（LEGACY の長期 Branch など）は、この道具の外です（決まりの形で手で書く）")
     check_record(ctx, m := read_record(a.rv_log))
     rec = load_record(a.record, ctx.wt)
+    sk = SKIPPED.search(m.group(0))
+    if sk is None:
+        raise Stop("記録の行に飛ばした試験の件数がありません（正本の検査の道具の記録の行を渡してください）")
+    skipped = int(sk[1])
+    if skipped and "skipped_reason" not in rec:
+        raise Stop(f"検査で飛ばした試験が {skipped} 件あります。理由を確かめて、--record の skipped_reason に書いてください"
+                   "（正本は「0 でなければ理由を確かめる」）")
+    if not skipped and "skipped_reason" in rec:
+        raise Fatal("飛ばした試験が 0 件なのに、skipped_reason があります")
 
     # main が検査の基準から進んでいないか（進んでいたら、 取り込み・流し直し・確かめ直し）
     if _run(["git", *FETCH_MAIN], ctx.wt).returncode != 0:
@@ -413,7 +443,8 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
 
     out = ["## Merge の門の記録（AUTO MERGE Gate）", "",
            f"- merge する head: `{ctx.head}`（基準 origin/main `{m['base']}` を含む）",
-           f"- Required Verification: {m.group(0)}", "",
+           f"- Required Verification: {m.group(0)}",
+           *([f"- 飛ばした試験 {skipped} 件の理由（Agent が確かめた）: {rec['skipped_reason']}"] if skipped else []), "",
            "### Reviewer", "",
            "| 回 | 見た head | Reviewer A（Correctness） | Reviewer B（Security / Safety） |",
            "|---|---|---|---|"]
@@ -431,7 +462,11 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
                 "（判断の後に head は変わっていない）。"]
     else:
         out += [f"当たらない（作成者・A・B の読みが同じ）。{hr['reason']}"]
-    out += ["", "以上で門の条件を満たすので、Agent が head を固定して Squash and merge する。"]
+    out += ["", "道具が確かめた条件（head の一致・検査の記録・main の進み・Reviewer A・B の最後の結果・In-PR の残り・"
+            "人の判断が要る変更の読み）は満たす。道具が見ない条件（follow-up の判断の中身など）と、人の確認が要る場面"
+            "（development-docs の `03_customer_development/customer_isolation_check.md` の「要る場面」）に当たらないことを"
+            "Agent が確かめてから、head を固定して Squash and merge する（人の確認が要る Pull Request は、この道具の外。"
+            "人の確認そのものは人が書く）。"]
 
     ready = f"gh pr ready {ctx.number} && " if ctx.pr.get("isDraft") else ""
     cmd = (f"cd {shlex.quote(str(ctx.wt))} && git {' '.join(FETCH_MAIN)}"

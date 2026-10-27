@@ -119,8 +119,10 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 
 #: 人の判断の印の言葉。 人の判断の欄（adjudication）のほかに書かせない
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
-#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`Pull Request 7`。 NFKC にそろえた後に照らす）
+#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`Pull Request 7`。 元の文と NFKC にそろえた文の両方で照らす）
 NUMBER = re.compile(r"(?:#|(?<![A-Za-z])(?:PR|Pull Request|プルリクエスト)\s*#?)\s*([0-9]+)", re.I)
+#: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`）
+MORE_NUMBER = re.compile(r"\s*(?:[・、,/]|と|および|及び)\s*#?\s*([0-9]+)")
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 #: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
 SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")
@@ -173,8 +175,17 @@ def _one_line(text, what: str) -> str:
     return _no_mark(text.strip(), what)
 
 
+def _norm(text: str) -> str:
+    """印の言葉を照らす形（NFKC・大文字と小文字を区別しない・空白を 1 つに）。"""
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).casefold()
+
+
 def _no_mark(text: str, what: str) -> str:
-    if any(mark in text for mark in MARKS):
+    t = _norm(text)
+    if _norm("Human Verification") in t:
+        raise Fatal(f"{what} に人の確認（Human Verification）の言葉を書かないでください"
+                    "（人の確認は、人が自分で Pull Request に書く記録で、門の記録に写さない）")
+    if any(_norm(mark) in t for mark in MARKS):
         raise Fatal(f"{what} に人の判断の印の言葉を書かないでください（人の判断は adjudication にだけ書く）")
     return text
 
@@ -371,22 +382,35 @@ def load_record(path: str, wt: Path) -> dict:
 def named_head(ctx: Ctx, words: str) -> str:
     """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。
 
-    全角の文字は NFKC で半角にそろえ、 16 進と Repository の名前は大文字と小文字を区別せずに照らす。"""
-    words = unicodedata.normalize("NFKC", words)
-    low = words.lower()
-    if {int(n) for n in NUMBER.findall(words)} != {ctx.number}:
+    元の文と、 全角を NFKC で半角にそろえた文の **両方** で、 番号・head・Repository の名前を探して
+    合わせる（そろえた文だけで探すと、 全角の字が隣に来て見えなくなる並びがある）。 16 進と
+    Repository の名前は大文字と小文字を区別しない。"""
+    if _norm("Human Verification") in _norm(words):
+        raise Stop("人の判断の言葉に、人の確認（Human Verification）の言葉があります（人の確認は、人が自分で Pull Request に書く記録で、この道具の外）")
+    if any(_norm(m) in _norm(words) for m in MARKS):
+        raise Stop("人の判断の言葉が Pull Request のコメントの形（Human Adjudication の印）です。この道具の外なので、決まりの形で手で書く")
+    texts = (words, unicodedata.normalize("NFKC", words))
+    nums = set()
+    for t in texts:
+        for m in NUMBER.finditer(t):
+            nums.add(int(m[1]))
+            pos = m.end()
+            while (more := MORE_NUMBER.match(t, pos)):
+                nums.add(int(more[1]))
+                pos = more.end()
+    if nums != {ctx.number}:
         raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない。"
                    "Pull Request のコメントの形の人の判断は、この道具の外なので決まりの形で手で書く）")
     repo = ctx.slug.split("/", 1)[1]
     # 区切りは ASCII で見る（Unicode の \w だと、 名前のすぐ後に和文が続くと見逃す）
-    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words, re.ASCII | re.I) for n in KNOWN - {repo}):
+    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", t, re.ASCII | re.I) for n in KNOWN - {repo} for t in texts):
         raise Stop("人の判断の言葉が、別の Repository を名指ししています")
-    heads = HEX_TOKEN.findall(low)
+    heads = sorted({h for t in texts for h in HEX_TOKEN.findall(t.lower())})
     if not heads:
         raise Stop("人の判断の言葉に head（12 桁以上）がありません")
     if any(not ctx.head.startswith(h) for h in heads):
         raise Stop("人の判断の言葉が名指しした head が、merge する head と違います（判断の後に head が変わったら、人の判断を取り直してください）")
-    if any(re.search("[a-f]", s) and not ctx.head.startswith(s) for s in SHORT_HEX.findall(low)):
+    if any(re.search("[a-f]", s) and not ctx.head.startswith(s) for t in texts for s in SHORT_HEX.findall(t.lower())):
         raise Stop("人の判断の言葉に、merge する head の先頭と違う短い head（7〜11 桁）があります（別の head を並べた言葉は引かない）")
     return max(heads, key=len)
 

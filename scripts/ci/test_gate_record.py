@@ -484,7 +484,38 @@ class GateTest(Base):
                 self.assertEqual(rc, 0, err)
 
     def test_human_verification_is_a_mark_too(self) -> None:
-        self.assertStops(self.w.gate(summary="直した。\n\nHuman Verification: PASS"), "印の言葉", 2)
+        for text in ("直した。\n\nHuman Verification: PASS", "直した。 HUMAN  VERIFICATION: PASS",
+                     "直した。 Ｈｕｍａｎ Ｖｅｒｉｆｉｃａｔｉｏｎ"):
+            with self.subTest(text=text):
+                self.assertStops(self.w.gate(summary=text), "人の確認（Human Verification）", 2)
+        self.assertStops(self.w.gate(summary="直した。 human adjudication: x"), "人の判断の印", 2)
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Verification: PASS #7 head {h12}")),
+                         "人の確認（Human Verification）")
+        self.assertStops(self.w.gate(human_required=self.human(f"Human Adjudication: MERGE APPROVED #7 head {h12}")),
+                         "コメントの形")
+
+    def test_number_forms_without_hash(self) -> None:
+        # # の無い番号の形（Pull Request・小文字・プルリクエスト）と、 並べた番号も数える（#109）
+        h12 = self.w.head[:12]
+        for words in (f"#7（head {h12}）と Pull Request 8 を承認します", f"#7（head {h12}）と pr 8 を承認します",
+                      f"#7（head {h12}）とプルリクエスト 8 を承認します", f"#7・8（head {h12}）を承認します",
+                      f"PR 7, 8（head {h12}）を承認します", f"#7 と 8（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"Pull Request 7（head {h12}）を承認します", f"プルリクエスト #7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_both_the_original_and_the_normalized_words_are_checked(self) -> None:
+        # 全角の字が隣にあって、 そろえた文だけでは見えなくなる並びも止める（#109）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef012345", "fedcba987654") if not h.startswith(x))
+        for words in (f"#7（head {h12}・{other}ｇ）を承認します", f"PDM１ の #7（head {h12}）を承認します",
+                      f"#7（head {h12}・{other.upper()}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "")
 
     def test_comment_form_adjudication_is_outside_the_tool(self) -> None:
         h = self.w.head

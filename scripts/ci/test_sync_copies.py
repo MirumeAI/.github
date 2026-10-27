@@ -870,6 +870,69 @@ class SyncTest(unittest.TestCase):
         self.assertNotIn("rv_work", st["targets"]["pdm"])
         self.assertEqual(len(made), 2)
 
+    def test_rv_work_name_is_saved_before_the_check_runs(self) -> None:
+        # 検査を途中で止めても片付けられるよう、 置き場の名前は検査の前に状態に残す（#123 の Reviewer A）
+        seen = []
+
+        def on_rv(wt):
+            st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+            seen.append(st["targets"]["pdm"].get("rv_work", []))
+        self.w.on_rv = on_rv
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(seen[0]), 1, "検査の前に、 その検査の置き場の名前が状態にある")
+        self.assertTrue((self.w.state / "w" / seen[0][0]).is_dir())
+
+    def test_cleanup_does_not_follow_links_in_rv_work(self) -> None:
+        # 置き場の中のリンクと、 置き場の根のリンクはたどらない（#123 の Reviewer A・B）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        outside = self.w.base / "outside"
+        (outside / "x").mkdir(parents=True)
+        (self.w.state / "w" / "link").symlink_to(outside / "x")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["rv_work"] += ["link", 7, None]
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertTrue((outside / "x").is_dir(), "リンクの先は消さない")
+
+    def test_cleanup_does_not_follow_a_linked_rv_work_root(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        name = st["targets"]["pdm"]["rv_work"][0]
+        real = self.w.base / "real-w"
+        (self.w.state / "w").rename(real)
+        (self.w.state / "w").symlink_to(real)
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertTrue((real / name).is_dir(), "置き場の根がリンクなら、 たどって消さない")
+
+    def test_cleanup_stops_cleanly_when_rv_work_cannot_be_removed(self) -> None:
+        # 消せないときは、 traceback でなく伏せた文で止まり、 流し直すと続きから片付ける（#123 の Reviewer A・B）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        with mock.patch.object(S.shutil, "rmtree", side_effect=PermissionError("x")):
+            code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1, out)
+        self.assertIn("検査の作業の置き場を消せません（PermissionError", out)
+        self.assertNotIn("Traceback", out)
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p for p in (self.w.state / "w").iterdir()], [])
+
+    def test_main_notes_a_long_state_dir(self) -> None:
+        with mock.patch.object(S, "STATE_DIR_MAX", 1):
+            code, out = self.w.main("plan")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Unix ソケットの道の上限", out)
+        code, out = self.w.main("plan")
+        self.assertNotIn("Unix ソケットの道の上限", out)
+
     def test_cleanup_does_not_follow_odd_rv_work_names(self) -> None:
         # 状態に書かれた名前が 1 段の名前でなければ（../ など）、 消さない（#118）
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)

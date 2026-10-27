@@ -762,7 +762,7 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
 
 
 def cleanup_one(ctx: Ctx, t: Target) -> str:
-    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch を片付ける。"""
+    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch と、 検査の作業の置き場を片付ける。"""
     run = ctx.run
     st = ctx.state.get("targets", {}).get(t.alias, {})
     if "pr" not in st:
@@ -788,13 +788,21 @@ def cleanup_one(ctx: Ctx, t: Target) -> str:
             raise Stop(f"ローカルの {br} の先頭が、 merge された head と違います（片付けません）")
         run(["git", "-C", t.clone, "worktree", "prune"])      # 手で消された作業ツリーの登録を外す
         run(["git", "-C", t.clone, "branch", "-D", br], what="作業 Branch の片付け")
-    # 検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す
+    # 検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す。
+    # 置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）
     work_root = ctx.run_dir.parents[1] / "w"
-    for name in st.pop("rv_work", []):
+    for name in st.get("rv_work", []):
+        if not (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")):
+            continue
         d = work_root / name
-        if (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")
-                and d.is_dir() and not d.is_symlink()):
+        if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
+            continue
+        try:
             shutil.rmtree(d)
+        except OSError as e:
+            raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。 作業ツリーと作業 Branch は片付け済み。"
+                       " 原因を直して同じ命令で続けてください）") from None
+    st.pop("rv_work", None)
     st["cleaned"] = head
     ctx.save()
     return f"片付けた（Pull Request #{st['pr']}・merge された head {head[:12]}）"
@@ -806,7 +814,8 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("plan", "計画を表示する（clone と fetch のほかは変えない）"),
                        ("apply", "Issue・Branch・commit・Required Verification・Draft の Pull Request まで進める"),
-                       ("cleanup", "merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を片付ける")):
+                       ("cleanup", "merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・"
+                        "検査の作業の置き場を片付ける")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")

@@ -440,6 +440,12 @@ def scenarios() -> "list[Scenario]":
             _json({"if": A_IP + "/24", "url": "rtsp://" + A_IP + "/1/stream"})}), 0)
     add("広すぎる網は断る", a_files(profile=dict(p, endpoints=[
         {"network": "192.0.0.0/16", "reason": "広すぎる"}])), 2, error="profile-schema")
+    # 境: /24 は許し、 /23 は断る（#115）
+    add("/24 の網は許す（境）", a_files(profile=dict(p, endpoints=[
+        {"network": _ip(0, 0) + "/24", "reason": "架空の案件の、 カメラの網（境）"}])), 0)
+    add("/23 の網は断る（境）", a_files(profile=dict(p, endpoints=[
+        {"network": _ip(0, 0) + "/23", "reason": "広すぎる（境）"}])), 2, error="profile-schema",
+        texts=("/24 か、それより狭く",))
     add("網に理由が無い", a_files(profile=dict(p, endpoints=[{"network": net["network"]}])), 2,
         error="profile-schema")
     add("網を文字で書く", a_files(profile=dict(p, endpoints=[net["network"]])), 2,

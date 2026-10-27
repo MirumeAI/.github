@@ -533,7 +533,7 @@ def parse_profile(text: str, yaml) -> Profile:
             except ValueError:
                 bad(at + ("network",), "IPv4 の網（例: 192.0.2.0/28。 端の数は 0）にしてください")
             if net.prefixlen < MIN_PREFIX:
-                bad(at + ("network",), f"網が広すぎます（/{MIN_PREFIX} より狭くしてください）")
+                bad(at + ("network",), f"網が広すぎます（/{MIN_PREFIX} か、それより狭くしてください）")
             if len(p.networks) >= MAX_NETWORKS:
                 bad(at, f"網は {MAX_NETWORKS} 個までにしてください（ちょうどの値で書く）")
             add("endpoints.network", at + ("network",), str(net))

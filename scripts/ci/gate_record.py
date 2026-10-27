@@ -82,6 +82,7 @@ import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
@@ -117,8 +118,9 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
         "最後に、見た head、follow-up の 4 つの分類、Result と BLOCKER・MAJOR・IN-PR REQUIRED FIXES の数を出してください。\n")
 
 #: 人の判断の印の言葉。 人の判断の欄（adjudication）のほかに書かせない
-MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication")
-NUMBER = re.compile(r"[#＃]\s*([0-9]+)")
+MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
+#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`Pull Request 7`。 NFKC にそろえた後に照らす）
+NUMBER = re.compile(r"(?:#|(?<![A-Za-z])(?:PR|Pull Request|プルリクエスト)\s*#?)\s*([0-9]+)", re.I)
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 #: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
 SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")
@@ -367,20 +369,24 @@ def load_record(path: str, wt: Path) -> dict:
 
 
 def named_head(ctx: Ctx, words: str) -> str:
-    """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。"""
+    """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。
+
+    全角の文字は NFKC で半角にそろえ、 16 進と Repository の名前は大文字と小文字を区別せずに照らす。"""
+    words = unicodedata.normalize("NFKC", words)
+    low = words.lower()
     if {int(n) for n in NUMBER.findall(words)} != {ctx.number}:
         raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない。"
                    "Pull Request のコメントの形の人の判断は、この道具の外なので決まりの形で手で書く）")
     repo = ctx.slug.split("/", 1)[1]
     # 区切りは ASCII で見る（Unicode の \w だと、 名前のすぐ後に和文が続くと見逃す）
-    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words, re.ASCII) for n in KNOWN - {repo}):
+    if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", words, re.ASCII | re.I) for n in KNOWN - {repo}):
         raise Stop("人の判断の言葉が、別の Repository を名指ししています")
-    heads = HEX_TOKEN.findall(words)
+    heads = HEX_TOKEN.findall(low)
     if not heads:
         raise Stop("人の判断の言葉に head（12 桁以上）がありません")
     if any(not ctx.head.startswith(h) for h in heads):
         raise Stop("人の判断の言葉が名指しした head が、merge する head と違います（判断の後に head が変わったら、人の判断を取り直してください）")
-    if any(re.search("[a-f]", s) and not ctx.head.startswith(s) for s in SHORT_HEX.findall(words)):
+    if any(re.search("[a-f]", s) and not ctx.head.startswith(s) for s in SHORT_HEX.findall(low)):
         raise Stop("人の判断の言葉に、merge する head の先頭と違う短い head（7〜11 桁）があります（別の head を並べた言葉は引かない）")
     return max(heads, key=len)
 
@@ -463,7 +469,9 @@ def cmd_gate(a) -> "tuple[Ctx, str, str]":
     else:
         out += [f"当たらない（作成者・A・B の読みが同じ）。{hr['reason']}"]
     out += ["", "道具が確かめた条件（head の一致・検査の記録・main の進み・Reviewer A・B の最後の結果・In-PR の残り・"
-            "人の判断が要る変更の読み）は満たす。道具が見ない条件（follow-up の判断の中身など）と、人の確認が要る場面"
+            "人の判断が要る変更の読み）は満たす。道具が見ない条件（development-docs の "
+            "`02_github_workflow/pull_request_review.md` の「Merge の門」の一覧。follow-up の判断の中身・"
+            "Product Release の手順の間でないか・人の言葉が人自身のものか・渡した記録が報告と人の言葉に合うかなど）と、人の確認が要る場面"
             "（development-docs の `03_customer_development/customer_isolation_check.md` の「要る場面」）に当たらないことを"
             "Agent が確かめてから、head を固定して Squash and merge する（人の確認が要る Pull Request は、この道具の外。"
             "人の確認そのものは人が書く）。"]

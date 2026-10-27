@@ -565,7 +565,9 @@ class GateTest(Base):
                       f"#7-10-28（head {h12}）を承認します", f"#7〜10/28（head {h12}）を承認します",
                       f"#7・10/28・9（head {h12}）を承認します", f"#7・10:30 と 8（head {h12}）を承認します",
                       f"#7・2026-10-28・8（head {h12}）を承認します", f"#7・8/9/10（head {h12}）を承認します",
-                      f"#7・8日 と 9（head {h12}）を承認します", f"#7、8-9（head {h12}）を承認します"):
+                      f"#7・8日 と 9（head {h12}）を承認します", f"#7、8-9（head {h12}）を承認します",
+                      f"#7・2026年10月28日 と 8（head {h12}）を承認します", f"#7・10時30分・8（head {h12}）を承認します",
+                      f"#7・123日（head {h12}）を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
 

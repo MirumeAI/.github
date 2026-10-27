@@ -865,8 +865,6 @@ MUTATIONS = [
      "    elif _secret_value(node.value):\n", "    elif False:\n"),
     ("宣言: 広すぎる網を通す",
      "if net.prefixlen < MIN_PREFIX:", "if False:"),
-    ("宣言: /24 の網も断る（境。 #115）",
-     "if net.prefixlen < MIN_PREFIX:", "if net.prefixlen <= MIN_PREFIX:"),
     ("S3: 構成の名前を照らさない",
      'if isinstance(v, str) and v in prof["project.profiles"]:', "if True:"),
     ("S4: 参照を照らさない",
@@ -990,6 +988,8 @@ MUTATIONS = [
      ' and rel not in ("deployment", "validation"):', ":"),
     ("S5: 検証の記録の案件の記号を照らさない",
      "        self.record_codes()\n", ""),
+    ("宣言: /24 の網も断る（境。 #115）",
+     "if net.prefixlen < MIN_PREFIX:", "if net.prefixlen <= MIN_PREFIX:"),
 ]
 
 

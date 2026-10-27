@@ -110,12 +110,12 @@ python3 $G merged <作業ツリー> --pr 42 --head <固定した head> --out mer
   - Reviewer A・B の最後の結果が、merge する head を見て BLOCKER・MAJOR・IN-PR が 0
   - In-PR の残りが無い
   - 作成者と Reviewer A・B の「人の判断が要る変更」の読みが同じ
-  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head〔a〜f を含む 7〜11 桁〕を並べた言葉も引かない。Agent が head を別に書いて、人が名指ししたことにはしない）
+  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head を並べた言葉も引かない。道具が見分けるのは a〜f を含む 7〜11 桁の並びだけで、数字だけ・6 桁以下の並びは Agent が言葉を読んで確かめる。全角と大文字も照らし（元の文と、全角を半角にそろえた文の両方で探す）、`PR 7` のような `#` の無い番号と、`#7・8` のように並べた番号も数える。人の言葉に人の判断の印（`Human Adjudication`）や人の確認（`Human Verification`）の言葉があれば止まる。Agent が head を別に書いて、人が名指ししたことにはしない）
   - 検査の記録の行の飛ばした試験が 0 でなければ、理由を確かめて `--record` の `skipped_reason` に書いてある（門の記録に件数と理由を出す）
 - `gate` が出す merge の命令は、head を固定し、main が進んでいたら merge まで進みません
 - base が main でない Pull Request（LEGACY の長期 Branch）と、人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）のときは扱いません（決まりの形で手で書きます）
 - 人の確認（Human Verification）が要る Pull Request も扱いません。人の確認は、人が自分で Pull Request に書きます。どれが要るかの正本は、development-docs の `03_customer_development/customer_isolation_check.md` の「要る場面」です。`gate` が機械で見分けて止まるのは、そのうち 2 つ（顧客 Repository の `customer-profile.yaml` を変える・検査が `PROFILE EXPANSION DETECTED` を出した）だけです。**`gate` が止まらないことは、人の確認が要らないことの根拠になりません**（ほかの場面に当たるかは Agent が確かめます）。2 つ目を見分けるため、`gate` は検査の出力にある段ごとの記録の場所を読みます。顧客 Repository で段ごとの記録が読めなければ止まります
-- 門の記録の最後の文は、道具が確かめた条件だけを言います。道具が見ない条件（follow-up の判断の中身など）と、人の確認が要る場面に当たらないことは、Agent が確かめてから merge します
+- 門の記録の最後の文は、道具が確かめた条件だけを言います。道具が見ない条件（development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の一覧）と、人の確認が要る場面に当たらないことは、Agent が確かめてから merge します
 - 顧客 Repository の文と merge の命令は画面に出さず、`--out` のファイルと、その名前に `.merge` を足したファイル（どちらも本人だけが読める形）に書きます
 
 ## 顧客の間の混入の検査（`customer-profile.yaml`）

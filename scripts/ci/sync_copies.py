@@ -6,6 +6,7 @@ Pull Request を、 まとめて作る。
 
     python3 scripts/ci/sync_copies.py plan
     python3 scripts/ci/sync_copies.py apply --source <正本の Pull Request の番号>
+    python3 scripts/ci/sync_copies.py cleanup --source <正本の Pull Request の番号>
 
 なぜ 1 本にするのか。 正本のガード・検査の道具・共通の command を変えるたびに、
 写しを持つ 6 つの Repository へ、 Issue・Branch・写しの置き換え・`CLAUDE.md` の
@@ -27,13 +28,21 @@ Pull Request を、 まとめて作る。
 
 **merge はしない。** Reviewer A・B と Merge の門は、 Pull Request ごとに通す。
 
+`cleanup` は、 merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を
+片付ける（merge されていない・作業ツリーに commit していない変更がある・ローカルの
+Branch の先頭が merge された head と違う、 のどれかなら触らない。 リモートの Branch は
+GitHub が消すので触らない）。
+
 守ること:
 
   ・顧客 Repository の名前を出力に出さない（「顧客 Repository 1」と呼ぶ）。
     git・gh・検査の出力はそのまま出さず、 状態の置き場の `runs/<…>/logs/` に、
-    名前を伏せて書く。 **記録には伏せきれない値が残りうるし、 本文のファイル
-    （`bodies/`）には名前が残るので、 どちらもそのまま表示しない**。 状態の置き場は
-    本人だけが読める形（0700）にする
+    名前を伏せて書く。 検査の出力は、 終わってから伏せて書く（途中で止めても、 伏せる
+    前の記録を残さない）。 **状態の置き場の中身は、 どれもそのまま表示・一覧しない**
+    （記録〔`logs/`〕には伏せきれない値が残りうる。 本文のファイル〔`bodies/`〕・
+    `state.json`〔検査の記録の行〕・`aliases.json`・clone と作業ツリーには名前が残る）。
+    状態の置き場は、 道具が作るときは本人だけが読める形（0700）にし、 既にある置き場が
+    そうでなければ、 権限を変えずに止まる
   ・作業 Branch（`feature/<数>-…`）にだけ push する。 main へは push しない。
     force push しない。 push の直前に push 先を確かめ直す。 正本の clone の
     origin も確かめる（違う中身を正本として写さない）
@@ -104,6 +113,15 @@ PR_HEADINGS = ("関連Issue", "変更目的", "変更内容", "確認結果", "�
                "顧客差分・Coreへの影響（該当する場合）", "Reviewerに確認してほしい点")
 
 WORK_BRANCH = re.compile(r"^feature/[0-9]+-[a-z0-9][a-z0-9-]*$")
+
+#: 写しの種類（Pull Request の本文の「影響範囲」に書く）。 上から順に、 道の先頭で決める
+KINDS = (
+    ("ガード", ".claude/hooks/"),
+    ("ガードの回帰テスト", "scripts/ci/test_guard_main.sh"),
+    ("検査の道具", "scripts/ci/"),
+    ("Issue Form の道具", ".claude/scripts/"),
+    ("共通の command", ".claude/commands/"),
+)
 RECORD = "GitHub Actions unavailable — canonical verification PASS"
 
 
@@ -140,8 +158,9 @@ class Result:
     err: str
 
 
-#: 記録のファイルを示すときに添える注意（名前は伏せて書くが、 伏せきれない値が残りうる）
-LOG_NOTE = "名前は伏せて書いたが、 値が残りうるので、 そのまま表示しない"
+#: 記録のファイルを示すときに添える注意（名前は伏せて書くが、 伏せきれない値が残りうる。
+#: 記録のほかの状態の置き場の中身にも名前が残る）
+LOG_NOTE = "名前は伏せて書いたが、 値が残りうるので、 そのまま表示しない。 状態の置き場の中身は、 どれもそのまま表示・一覧しない"
 
 
 class Runner:
@@ -413,6 +432,18 @@ def issue_body(a: Analysis, canon: Canonical, source: int, cases: int) -> str:
     ])
 
 
+def scope(a: Analysis) -> str:
+    """変えた写しの種類と件数の行から、 影響範囲の文を作る。"""
+    kinds = []
+    for rel in a.changes():
+        kind = next((k for k, prefix in KINDS if rel.startswith(prefix)), "共通のファイル")
+        if kind not in kinds:
+            kinds.append(kind)
+    if a.count_changes():
+        kinds.append("回帰テストの件数の行")
+    return f"この Repository の写し（{'・'.join(kinds)}）。"
+
+
 def pr_title(subject: str, source: int) -> str:
     return f"{subject}（{ORG}/{CANONICAL}#{source}）"
 
@@ -444,7 +475,7 @@ def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
         "- [x] 必要なテストが通っている",
         "- [x] Required Verification（正本の検査）が PASS した（記録の行を書く）", "",
         rv_line, "",
-        "## 影響範囲", "", "この Repository の写し（ガード・検査の道具・共通の command）。", "",
+        "## 影響範囲", "", scope(a), "",
         "## 顧客差分・Coreへの影響（該当する場合）", "",
         "- 対象Component: 対象外（共通の道具の写し）",
         "- 分類: 対象外",
@@ -453,8 +484,8 @@ def pr_body(issue: int, a: Analysis, canon: Canonical, source: int, cases: int,
         f"- 関連Issue・PR・Release: {related}",
         "- Architecture Review: なし", "",
         "## Reviewerに確認してほしい点", "",
-        "- 正本の中身をそのまま写す同期の Pull Request か（差が写しと件数の行だけ・中身が正本と同じ・"
-        f"写しの道が `{ALLOW_FILE}` に無い・正本の Pull Request の門の記録がある）", "",
+        "- 正本の中身をそのまま写す同期の Pull Request か（差が写しと決まった行〔回帰テストの件数の行。数だけ〕だけ・"
+        f"中身が正本の main と同じ・写しの道が `{ALLOW_FILE}` に無い・正本の Pull Request の門の記録がある）", "",
     ]
     if footer:
         body += [footer, ""]
@@ -583,8 +614,9 @@ def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
 def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    rc, text = ctx.rv(wt, head, log)
-    log.write_text(ctx.run.mask(text), encoding="utf-8")   # 記録にも名前は伏せて残す
+    rc, text = ctx.rv(wt, head)
+    # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）
+    log.write_text(ctx.run.mask(text), encoding="utf-8")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(RECORD)]
     if rc != 0 or not lines:
         raise Stop(f"Required Verification が PASS しませんでした（記録: {log}。{LOG_NOTE}）")
@@ -602,11 +634,11 @@ def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
 def default_rv(canon_root: Path):
     tool = canon_root / "scripts" / "ci" / "run_required_verification.py"
 
-    def rv(wt: Path, head: str, log: Path) -> "tuple[int, str]":
-        with log.open("wb") as f:
-            r = subprocess.run([sys.executable, str(tool), str(wt), "--head", head], stdout=f,
-                               stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
-        return r.returncode, log.read_text(encoding="utf-8", errors="replace")
+    def rv(wt: Path, head: str) -> "tuple[int, str]":
+        # 出力はファイルに書かずに受け取る（伏せる前の記録をディスクに残さない）
+        r = subprocess.run([sys.executable, str(tool), str(wt), "--head", head], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+        return r.returncode, r.stdout.decode("utf-8", "replace")
     return rv
 
 
@@ -618,7 +650,8 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
     unknown = [rel for rel, s in a.files if s == "unknown"]
     if unknown and not ctx.overwrite_unknown:
         raise Stop(f"正本の履歴に無い中身の写しがあります（{_list(unknown)}）。 手で直した理由を確かめ、"
-                   f" 意図したものなら {ALLOW_FILE} に書くか、 --overwrite-unknown で置き換えてください")
+                   f" 意図したものなら {ALLOW_FILE} に書くか（守りの境の変更なので、 人の判断が要る）、"
+                   " --overwrite-unknown で置き換えてください")
     if "issue" not in st:
         st["issue"] = ensure_issue(ctx, t, a)
         st["branch"] = f"feature/{st['issue']}-sync-copies"
@@ -689,18 +722,50 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
             f"Required Verification PASS（{st['rv_summary']}）")
 
 
+def cleanup_one(ctx: Ctx, t: Target) -> str:
+    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch を片付ける。"""
+    run = ctx.run
+    st = ctx.state.get("targets", {}).get(t.alias, {})
+    if "pr" not in st:
+        return "同期の Pull Request が無い（片付けるものは無い）"
+    br = st["branch"]
+    check_work_branch(br)
+    r = ctx.gh(["pr", "view", st["pr"], "-R", f"{ORG}/{t.name}", "--json", "state,headRefOid"],
+               retries=3, what="Pull Request の状態")
+    pr = json.loads(r.out or "{}")
+    if pr.get("state") != "MERGED":
+        return f"Pull Request #{st['pr']} はまだ merge されていない（触らない）"
+    head = pr.get("headRefOid") or ""
+    wt = ctx.run_dir / "wt" / t.alias
+    if wt.exists():
+        if run(["git", "-C", wt, "status", "--porcelain"]).out.strip():
+            raise Stop(f"作業ツリー（{wt}）に commit していない変更があります（片付けません）")
+        if run(["git", "-C", wt, "rev-parse", "HEAD"]).out.strip() != head:
+            raise Stop(f"作業ツリー（{wt}）の先頭が、 merge された head と違います（片付けません）")
+        run(["git", "-C", t.clone, "worktree", "remove", wt], what="作業ツリーの片付け")
+    local = run(["git", "-C", t.clone, "rev-parse", "--verify", "-q", f"refs/heads/{br}"], check=False).out.strip()
+    if local:
+        if local != head:
+            raise Stop(f"ローカルの {br} の先頭が、 merge された head と違います（片付けません）")
+        run(["git", "-C", t.clone, "branch", "-D", br], what="作業 Branch の片付け")
+    st["cleaned"] = head
+    ctx.save()
+    return f"片付けた（Pull Request #{st['pr']}・merge された head {head[:12]}）"
+
+
 # ---------------------------------------------------------------- 入口
 def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep) -> int:
     ap = argparse.ArgumentParser(description="写しを持つ Repository へ、 正本の共通のファイルを合わせる Pull Request を作る")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("plan", "計画を表示する（clone と fetch のほかは変えない）"),
-                       ("apply", "Issue・Branch・commit・Required Verification・Draft の Pull Request まで進める")):
+                       ("apply", "Issue・Branch・commit・Required Verification・Draft の Pull Request まで進める"),
+                       ("cleanup", "merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を片付ける")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")
         p.add_argument("--canonical", type=Path, default=ROOT, help="正本（MirumeAI/.github）の clone")
         p.add_argument("--guard-cases", type=int, help="ガードの回帰テストの件数（省くと正本で流して数える）")
-        p.add_argument("--source", type=int, required=(name == "apply"),
+        p.add_argument("--source", type=int, required=(name in ("apply", "cleanup")),
                        help="同期のもとになった正本の Pull Request の番号（merge 済み）")
     ap_apply = sub.choices["apply"]
     ap_apply.add_argument("--subject", default=DEFAULT_SUBJECT, help="Issue と Pull Request の題")
@@ -717,9 +782,16 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
 
     state_dir = args.state_dir.expanduser().resolve()
     run_dir = state_dir / "runs" / (f"github-{args.source}" if args.source else "plan")
-    # 顧客 Repository の clone を置くので、 本人だけが読める置き場にする
-    state_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(state_dir, 0o700)
+    # 顧客 Repository の clone を置くので、 本人だけが読める置き場にする。 既にある置き場の
+    # 権限は変えない（ほかの用途の dir を渡されても、 その権限を書き換えない）
+    if state_dir.exists():
+        if not state_dir.is_dir() or state_dir.stat().st_mode & 0o077:
+            say("止まりました: 状態の置き場（--state-dir）が、 本人だけが読める dir（700）ではありません。"
+                " 権限は変えません。 別の置き場を渡すか、 中身を確かめてから権限を直してください", err=True)
+            return 2
+    else:
+        state_dir.mkdir(parents=True, mode=0o700)
+        os.chmod(state_dir, 0o700)                         # umask によらず 700
     run = Runner(run_dir / "logs" / "commands.log", sleep, mask)
     gh = lambda a, **k: run(["gh", *a], **k)                # noqa: E731
     try:
@@ -742,6 +814,9 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
 
     state_file = run_dir / "state.json"
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
+    if args.cmd == "cleanup" and not state:
+        say("止まりました: この --source の状態がありません（片付けるものが分かりません）", err=True)
+        return 2
     if args.cmd == "apply":
         before = state.get("canonical")
         if before and before != canon.commit:
@@ -764,6 +839,11 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     failed = 0
     for t in targets:
         try:
+            if args.cmd == "cleanup":
+                if (t.clone / ".git").exists():
+                    check_origin(run, t.clone, f"{remote_base}/{t.name}.git")
+                    say(f"{t.alias:<8} {t.label}: {cleanup_one(ctx, t)}")
+                continue
             ensure_clone(t, run, remote_base)
             a = analyze(t, canon, cases, run)
             msg = describe(a) if args.cmd == "plan" else apply_one(ctx, t, a)

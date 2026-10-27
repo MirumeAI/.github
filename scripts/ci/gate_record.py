@@ -121,16 +121,34 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
 #: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`Pull Request 7`・`プルリク 7`・`№7`・URL の
 #: `/pull/7`。 元の文と NFKC にそろえた文の両方で照らす）
-NUMBER = re.compile(r"(?:#|№|/pull/|(?<![A-Za-z])(?:PR|Pull\s*Request|プルリク(?:エスト)?)\s*[-#]?)\s*([0-9]+)",
+NUMBER = re.compile(r"(?:#|№|/pull/|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requests?|プルリク(?:エスト)?|No\.)\s*[-#]?)\s*([0-9]+)",
                     re.I)
 #: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`・`#7 and 8`・`#7〜9`・`#7-8`・`#7 や 8`・`#7 & 8`）。
 #: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英字が続くもの（head の先頭）は番号に数えない
-MORE_NUMBER = re.compile(r"\s*(?:[・、,/&~〜-]|と|および|及び|や|から|and(?![A-Za-z]))\s*#?\s*([0-9]{1,6})(?![0-9A-Za-z])",
-                         re.I)
-#: 番号を探す前に外す、 日付と時刻（`10/28`・`2026-10-28`・`10:30`・`10月28日` など）。 `#` や数字のすぐ後のもの
-#: （`#7/8` の並べた番号）は外さない
-DATE_TIME = re.compile(r"(?<![#0-9])(?:(?:[0-9]{4}[-/.][0-9]{1,2}[-/.][0-9]{1,2}|[0-9]{1,2}/[0-9]{1,2}"
-                       r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)(?![0-9])|[0-9]{4}年|[0-9]{1,2}[月日時分])")
+MORE_NUMBER = re.compile(r"\s*(?P<sep>[・、,/&~〜\-–—−]|と|および|及び|や|から|または|(?:and|or)(?![A-Za-z]))\s*#?\s*([0-9]{1,6})"
+                         r"(?![0-9A-Za-z])", re.I)
+#: 区切りの後ろで、 並べた番号に数えない日付と時刻（`10/28`・`2026-10-28`・`10:30`・`10月28日` など）。
+#: 月は 1〜12・日は 1〜31・時は 0〜23・分は 0〜59 のときだけ日付と時刻とみなす（`13/14` は番号に数える）。
+#: 番号の前置き（`#`・`PR` など）の直後と、 `/` で続く番号（`#7/8/9`）は、 日付として扱わない
+DATE_TIME = re.compile(r"(?:(?:19|20)[0-9]{2}[-/.](?P<ym>[0-9]{1,2})(?:[-/.](?P<yd>[0-9]{1,2}))?"
+                       r"|(?P<m>[0-9]{1,2})[-/](?P<d>[0-9]{1,2})|(?P<h>[0-9]{1,2}):(?P<mi>[0-9]{2})(?::[0-9]{2})?)(?![0-9])"
+                       r"|[0-9]{4}年|[0-9]{1,2}[月日時分]")
+#: 番号を範囲や続きとしてつなぐ区切り。 この後ろの数字は、 日付の形でも番号に数える（`#7/8/9`・`#7-8-9`）
+CHAIN_SEPS = set("/~〜-–—−")
+
+
+def _is_date_time(text: str, pos: int) -> bool:
+    """`pos` から始まる数字が、 本当の日付・時刻の形か（区切りの後ろの数字を番号に数えないため）。"""
+    m = DATE_TIME.match(text, pos)
+    if not m:
+        return False
+    g = {k: int(v) for k, v in m.groupdict().items() if v is not None}
+    month, day = g.get("ym", g.get("m")), g.get("yd", g.get("d", 1))
+    if month is not None and not (1 <= month <= 12 and 1 <= day <= 31):
+        return False
+    if "h" in g and not (g["h"] <= 23 and g["mi"] <= 59):
+        return False
+    return True
 HEX_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{12,40}(?![0-9A-Za-z])")
 #: 12 桁より短い 16 進の並び。 a〜f を含むものだけを head として照らす（数字だけの日付・時刻は除く）
 SHORT_HEX = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,11}(?![0-9A-Za-z])")
@@ -183,7 +201,7 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
         raise Fatal(f"{what} は空でない 1 行の文で書いてください")
     if mention_ok:
         # 頼む文は GitHub に載せないので、 印の言葉に触れるのはよい。 記録の形（印の言葉の後に `:`）だけを断る
-        if re.search("(?:" + "|".join(re.escape(_norm(m)) for m in MARKS) + r")\s*:", _norm(text)):
+        if re.search("(?:" + "|".join(re.escape(_squash(m)) for m in MARKS) + r")[*_~`]*[:\-–—]", _squash(text)):
             raise Fatal(f"{what} に、人の判断・人の確認の記録の形（`Human Adjudication:`・`Human Verification:` など）を"
                         "書かないでください（言葉に触れるだけなら書けます）")
         return text.strip()
@@ -192,15 +210,21 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
 
 def _norm(text: str) -> str:
     """印の言葉を照らす形（NFKC・大文字と小文字を区別しない・空白を 1 つに）。"""
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).casefold()
+    bare = "".join(c for c in text if unicodedata.category(c) != "Cf")      # ゼロ幅の空白などで印の言葉を割れないように
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", bare)).casefold()
+
+
+def _squash(text: str) -> str:
+    """印の言葉を照らす形（`_norm` から空白も除く。 書式の字や空白で印の言葉を割れないように）。"""
+    return re.sub(r"\s+", "", _norm(text))
 
 
 def _no_mark(text: str, what: str) -> str:
-    t = _norm(text)
-    if _norm("Human Verification") in t:
+    t = _squash(text)
+    if _squash("Human Verification") in t:
         raise Fatal(f"{what} に人の確認（Human Verification）の言葉を書かないでください"
                     "（人の確認は、人が自分で Pull Request に書く記録で、門の記録に写さない）")
-    if any(_norm(mark) in t for mark in MARKS):
+    if any(_squash(mark) in t for mark in MARKS):
         raise Fatal(f"{what} に人の判断の印の言葉を書かないでください（人の判断は adjudication にだけ書く）")
     return text
 
@@ -400,21 +424,29 @@ def named_head(ctx: Ctx, words: str) -> str:
     元の文と、 全角を NFKC で半角にそろえた文の **両方** で、 番号・head・Repository の名前を探して
     合わせる（そろえた文だけで探すと、 全角の字が隣に来て見えなくなる並びがある）。 16 進と
     Repository の名前は大文字と小文字を区別しない。"""
-    if _norm("Human Verification") in _norm(words):
+    if _squash("Human Verification") in _squash(words):
         raise Stop("人の判断の言葉に、人の確認（Human Verification）の言葉があります（人の確認は、人が自分で Pull Request に書く記録で、この道具の外）")
-    if any(_norm(m) in _norm(words) for m in MARKS):
+    if any(_squash(m) in _squash(words) for m in MARKS):
         raise Stop("人の判断の言葉が Pull Request のコメントの形（Human Adjudication の印）です。この道具の外なので、決まりの形で手で書く")
     # ゼロ幅の空白などの書式の字（Cf）は外してから照らす（番号や head を割って隠せないように）
     bare = "".join(c for c in words if unicodedata.category(c) != "Cf")
     texts = (bare, unicodedata.normalize("NFKC", bare))
     nums = set()
-    for t in (DATE_TIME.sub(" ", x) for x in texts):
+    for t in texts:
         for m in NUMBER.finditer(t):
             nums.add(int(m[1]))
             pos = m.end()
             while (more := MORE_NUMBER.match(t, pos)):
-                nums.add(int(more[1]))
+                # 区切りの後ろの日付・時刻（`#7・10/28`）は番号に数えない。 `/` で続く番号（`#7/8/9`）は日付にしない
+                if more["sep"] not in CHAIN_SEPS and _is_date_time(t, more.start(2)):
+                    break
+                nums.add(int(more[2]))
                 pos = more.end()
+    # URL の番号は、 URL の Repository がこの Pull Request の Repository と同じときだけ（別の Repository の判断は引かない）
+    for t in texts:
+        for owner_repo in re.findall(r"github\.com/([^/\s]+/[^/\s]+)/pull/[0-9]+", t, re.I):
+            if owner_repo.casefold() != ctx.slug.casefold():
+                raise Stop("人の判断の言葉が、別の Repository を名指ししています（URL の Repository が違います）")
     if nums != {ctx.number}:
         raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない。"
                    "Pull Request のコメントの形の人の判断は、この道具の外なので決まりの形で手で書く）")

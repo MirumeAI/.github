@@ -555,12 +555,54 @@ class GateTest(Base):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
 
+    def test_numbers_after_a_prefix_or_a_slash_are_not_dates(self) -> None:
+        # 番号の前置きの直後と / で続く番号は、 日付の形でも番号に数える（#124 の Reviewer B の MAJOR-1）
+        h12 = self.w.head[:12]
+        for words in (f"#7 と PR 8/9（head {h12}）を承認します", f"PR 8/9 と #7（head {h12}）の merge を承認します",
+                      f"Pull Request 8/9 と #7（head {h12}）を承認します", f"#7/8/9（head {h12}）を承認します",
+                      f"#7（head {h12}）と プルリク 10:30 を承認します", f"#7・13/14（head {h12}）を承認します",
+                      f"#7、25:61（head {h12}）を承認します", f"#7 と №8/9（head {h12}）を承認します",
+                      f"#7-10-28（head {h12}）を承認します", f"#7〜10/28（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
+    def test_more_range_and_prefix_forms(self) -> None:
+        # 範囲の字（– — −）・or・または・PRs・Pull Requests・pull-request・No. も数える（#124 の Reviewer A）
+        h12 = self.w.head[:12]
+        for words in (f"#7–9（head {h12}）を承認します", f"#7—9（head {h12}）を承認します", f"#7−9（head {h12}）を承認します",
+                      f"#7 or 8（head {h12}）を承認します", f"#7 または 8（head {h12}）を承認します",
+                      f"#7（head {h12}）と PRs 8 and 9 を承認します", f"#7（head {h12}）と Pull Requests 8 を承認します",
+                      f"#7（head {h12}）と pull-request 8 を承認します", f"#7（head {h12}）と No. 8 を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
+    def test_url_numbers_must_be_this_repository(self) -> None:
+        # URL の /pull/N は、 URL の Repository がこの Pull Request の Repository のときだけ（#124 の Reviewer B）
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(
+            f"https://github.com/MirumeAI/customer-synthetic-example/pull/7（head {h12}）を承認します")), "別の Repository")
+        rc, _, err = self.w.gate(human_required=self.human(
+            f"https://GitHub.com/mirumeai/Development-Docs/pull/7（head {h12}）を承認します"))
+        self.assertEqual(rc, 0, err)
+
+    def test_marks_split_by_format_characters_are_seen(self) -> None:
+        # ゼロ幅の空白で割った印の言葉も、 印の言葉として止める（#124 の Reviewer B）
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(f"Human\u200bAdjudication: MERGE APPROVED #7 {h12}")),
+                         "コメントの形")
+        self.assertStops(self.w.gate(summary="直した。 Human\u200b Verification: PASS"), "人の確認（Human Verification）", 2)
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        for look in ("**Human Adjudication**: MERGE APPROVED", "Human\u200b Adjudication: x", "Human Verification - PASS"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+
     def test_dates_and_times_after_a_separator_are_not_numbers(self) -> None:
         # 区切りの後ろの日付と時刻で止めすぎない（#116）
         h12 = self.w.head[:12]
         for words in (f"#7・10/28（head {h12}）を承認します", f"#7、10:30 に head {h12} を承認します",
                       f"#7・10月28日に head {h12} を承認します", f"#7（head {h12}）2026/10/28 承認",
-                      f"#7、2026.10.28 に head {h12} を承認します", f"#7 と 2026年10月28日 に head {h12} を承認します"):
+                      f"#7、2026.10.28 に head {h12} を承認します", f"#7 と 2026年10月28日 に head {h12} を承認します",
+                      f"#7・10-28（head {h12}）を承認します", f"#7・2026-10 に head {h12} を承認します"):
             with self.subTest(words=words):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)

@@ -562,7 +562,10 @@ class GateTest(Base):
                       f"Pull Request 8/9 と #7（head {h12}）を承認します", f"#7/8/9（head {h12}）を承認します",
                       f"#7（head {h12}）と プルリク 10:30 を承認します", f"#7・13/14（head {h12}）を承認します",
                       f"#7、25:61（head {h12}）を承認します", f"#7 と №8/9（head {h12}）を承認します",
-                      f"#7-10-28（head {h12}）を承認します", f"#7〜10/28（head {h12}）を承認します"):
+                      f"#7-10-28（head {h12}）を承認します", f"#7〜10/28（head {h12}）を承認します",
+                      f"#7・10/28・9（head {h12}）を承認します", f"#7・10:30 と 8（head {h12}）を承認します",
+                      f"#7・2026-10-28・8（head {h12}）を承認します", f"#7・8/9/10（head {h12}）を承認します",
+                      f"#7・8日 と 9（head {h12}）を承認します", f"#7、8-9（head {h12}）を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
 
@@ -581,6 +584,8 @@ class GateTest(Base):
         h12 = self.w.head[:12]
         self.assertStops(self.w.gate(human_required=self.human(
             f"https://github.com/MirumeAI/customer-synthetic-example/pull/7（head {h12}）を承認します")), "別の Repository")
+        self.assertStops(self.w.gate(human_required=self.human(
+            f"MirumeAI/customer-synthetic-example/pull/7（head {h12}）を承認します")), "別の Repository")
         rc, _, err = self.w.gate(human_required=self.human(
             f"https://GitHub.com/mirumeai/Development-Docs/pull/7（head {h12}）を承認します"))
         self.assertEqual(rc, 0, err)
@@ -591,8 +596,12 @@ class GateTest(Base):
         self.assertStops(self.w.gate(human_required=self.human(f"Human\u200bAdjudication: MERGE APPROVED #7 {h12}")),
                          "コメントの形")
         self.assertStops(self.w.gate(summary="直した。 Human\u200b Verification: PASS"), "人の確認（Human Verification）", 2)
+        self.assertStops(self.w.gate(human_required=self.human(f"Human-Adjudication: MERGE APPROVED #7 {h12}")),
+                         "コメントの形")
+        self.assertStops(self.w.gate(summary="直した。 Human_Verification: PASS"), "人の確認（Human Verification）", 2)
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
-        for look in ("**Human Adjudication**: MERGE APPROVED", "Human\u200b Adjudication: x", "Human Verification - PASS"):
+        for look in ("**Human Adjudication**: MERGE APPROVED", "Human\u200b Adjudication: x", "Human Verification - PASS",
+                     "Human-Verification: PASS"):
             with self.subTest(look=look):
                 self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
 
@@ -602,7 +611,7 @@ class GateTest(Base):
         for words in (f"#7・10/28（head {h12}）を承認します", f"#7、10:30 に head {h12} を承認します",
                       f"#7・10月28日に head {h12} を承認します", f"#7（head {h12}）2026/10/28 承認",
                       f"#7、2026.10.28 に head {h12} を承認します", f"#7 と 2026年10月28日 に head {h12} を承認します",
-                      f"#7・10-28（head {h12}）を承認します", f"#7・2026-10 に head {h12} を承認します"):
+                      f"#7・2026-10 に head {h12} を承認します"):
             with self.subTest(words=words):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)

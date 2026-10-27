@@ -24,7 +24,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
 | `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
 
-- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を片付ける。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
+- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・検査の作業の置き場（伏せていない段ごとの記録）を片付ける。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
 - 守りの境に当たる変更（ガード `.claude/hooks/` とその回帰テスト、`.claude/settings.json` のフックと禁止、CI の守りの検査〔秘密の走査・顧客の値の混入・顧客の間の混入・写しの照合と `.ci-copy-allow`・Release の識別〕とそれを走らせる workflow など）を変える Pull Request は、merge の前に人の判断が要ります（一覧の正本は、development-docs の `02_github_workflow/pull_request_review.md` の「人の判断が要る変更」）
 - 開発の手順と判断の決まり（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です
 
@@ -110,7 +110,7 @@ python3 $G merged <作業ツリー> --pr 42 --head <固定した head> --out mer
   - Reviewer A・B の最後の結果が、merge する head を見て BLOCKER・MAJOR・IN-PR が 0
   - In-PR の残りが無い
   - 作成者と Reviewer A・B の「人の判断が要る変更」の読みが同じ
-  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head を並べた言葉も引かない。道具が見分けるのは a〜f を含む 7〜11 桁の並びだけで、数字だけ・6 桁以下の並びは Agent が言葉を読んで確かめる。全角と大文字も照らし（元の文と、全角を半角にそろえた文の両方で探す）、`PR 7` のような `#` の無い番号と、`#7・8` のように並べた番号も数える。人の言葉に人の判断の印（`Human Adjudication`）や人の確認（`Human Verification`）の言葉があれば止まる。Agent が head を別に書いて、人が名指ししたことにはしない）
+  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head を並べた言葉も引かない。道具が見分けるのは a〜f を含む 7〜11 桁の並びだけで、数字だけ・6 桁以下の並びは Agent が言葉を読んで確かめる。全角と大文字も照らし（元の文と、全角を半角にそろえた文の両方で探す。ゼロ幅の空白などの書式の字は外す）、`PR 7`・`PR-7`・`Pull Request 7`・`プルリク 7`・URL の `/pull/7` のような番号と、`#7・8`・`#7 と 8`・`#7〜9`・`#7–9`・`#7 & 8`・`#7 or 8` のように並べた番号も数える（区切りの後ろの `10/28`・`10:30` のような日付と時刻は数えずに飛ばし、その後ろの番号は数える。年の無い `8-9` は日付と読まない。番号の前置きの直後と、`/`・`-`・`〜` などでつないで続く番号は、日付の形でも数える。URL の番号は、URL の Repository がこの Pull Request の Repository でなければ止まる）。人の言葉に人の判断の印（`Human Adjudication`）や人の確認（`Human Verification`）の言葉があれば止まる。Agent が head を別に書いて、人が名指ししたことにはしない）
   - 検査の記録の行の飛ばした試験が 0 でなければ、理由を確かめて `--record` の `skipped_reason` に書いてある（門の記録に件数と理由を出す）
 - `gate` が出す merge の命令は、head を固定し、main が進んでいたら merge まで進みません
 - base が main でない Pull Request（LEGACY の長期 Branch）と、人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）のときは扱いません（決まりの形で手で書きます）

@@ -323,14 +323,18 @@ def _isolation_may_be_on(text: str) -> bool:
     の 1 行の形でなければならない。 true・yes・式・空・流れの形（`{…}`）・引用符の鍵・
     明示の鍵（`?`）・大文字の鍵などは、 すべて有効とみなす。 注釈の行のほかの行に
     `\\` があれば、 それも有効とみなす（エスケープや行の継ぎで語を隠して書けるため。
-    雛形の workflow に `\\` は無い）。
+    雛形の workflow に `\\` は無い）。 決まった false の 1 行のほかで非 ASCII の字を
+    含む行も、 有効とみなす（見た目の似た字で `isolation` を書いた鍵を見逃さないため。
+    雛形の workflow の注釈でない行に非 ASCII の字は無い。 #111）。
     """
     for ln in text.splitlines():
         if ln.lstrip().startswith("#"):
             continue
         if "\\" in ln:
             return True
-        if "isolation" in ln.casefold() and not _ISOLATION_OFF.fullmatch(ln):
+        if _ISOLATION_OFF.fullmatch(ln):
+            continue
+        if not ln.isascii() or "isolation" in ln.casefold():
             return True
     return False
 
@@ -351,8 +355,9 @@ def check_isolation_defaults(tree: dict) -> None:
                           "で始めます（人の確認の前に VERIFIED で作らない）")
     if WORKFLOW not in tree:
         raise SourceError(f"雛形に {WORKFLOW} がありません")
+    # 拡張子の大文字と小文字は区別しない（`.YML` も確かめる。 #111）
     flows = sorted(rel for rel in tree
-                   if rel.startswith(".github/workflows/") and rel.endswith((".yml", ".yaml")))
+                   if rel.startswith(".github/workflows/") and rel.lower().endswith((".yml", ".yaml")))
     for rel in flows:
         if _isolation_may_be_on(tree[rel][1].decode("utf-8", "replace")):
             raise SourceError(f"雛形の {rel} は、 混入の照合を有効にして始めません"

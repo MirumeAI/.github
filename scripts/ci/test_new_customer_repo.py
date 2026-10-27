@@ -990,13 +990,16 @@ class TheIsolationPathTest(unittest.TestCase):
             _git(tgt, "add", "-A")
             _git(tgt, "commit", "-q", "-m", "draft")
 
-            # 3. 報告だけの形。 基準（初期形）は読めないので、 増減は比べない（README のとおり）
+            # 3. 報告だけの形。 基準（初期形）は今の決まりでは読めないので、 空の宣言と比べて
+            #    すべてを増えたものとして数え、 知らせを出す（README のとおり。 #54）
             code, out = _isolation(tgt, "--report-only", "--base-ref", base)
             outs.append(out)
             self.assertEqual(code, 0, out)
             self.assertIn("結果: PASS", out)
             self.assertNotIn("NG [", out)
-            self.assertIn("比べていません", out)
+            self.assertIn("今の決まりでは読めません", out)
+            self.assertIn("PROFILE EXPANSION DETECTED", out)
+            self.assertNotIn("比べていません", out)
 
             # 4・5. 人が確かめた後に、 状態の行だけを VERIFIED に直す（値は変えない）
             text = prof.read_text(encoding="utf-8")

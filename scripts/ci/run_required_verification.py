@@ -51,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 try:
@@ -63,6 +64,15 @@ TOOL_REL = "scripts/ci/run_required_verification.py"
 CANONICAL_SLUG = "MirumeAI/.github"
 EVENT = "pull_request"
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
+
+#: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
+#: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
+BREAKING = ("Cc", "Cf", "Zl", "Zp")
+
+
+def _show(name) -> str:
+    """出力に出す名前（workflow のファイル名・job・段・対象外の理由）。 行を崩しうる字は \\uXXXX にする。"""
+    return "".join(f"\\u{ord(c):04x}" if unicodedata.category(c) in BREAKING else c for c in str(name))
 
 #: 再利用 workflow は正本の main だけ。 ほかの Repository や枝を指すものは、
 #: 手元で同じものを取れる保証が無いので止める。
@@ -946,11 +956,11 @@ def main(argv: list | None = None) -> int:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")
     for wf, why in plan.skipped:
-        print(f"対象外: {wf}（{why}）")
+        print(f"対象外: {_show(wf)}（{_show(why)}）")
     if a.list:
         for j in jobs:
-            print(f"  {j['workflow']} の job {j['name']}: 段 {len(j['spec']['steps'])}"
-                  + (f"・needs {j['needs']}" if j["needs"] else ""))
+            print(f"  {_show(j['workflow'])} の job {_show(j['name'])}: 段 {len(j['spec']['steps'])}"
+                  + (f"・needs {[_show(n) for n in j['needs']]}" if j["needs"] else ""))
         return 0
 
     if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
@@ -969,7 +979,7 @@ def main(argv: list | None = None) -> int:
             status = "failure" if "failure" in got else ("skipped" if "skipped" in got else "success")
             ex = Expr({**probe, "inputs": j["inputs"], "env": {}}, status)
             run_it = _cond(j.get("caller_if"), ex) and _cond(j["spec"].get("if"), ex)
-            label = f"{j['workflow']} の job {j['name']}"
+            label = f"{_show(j['workflow'])} の job {_show(j['name'])}"
             if not run_it:
                 outcome[key] = "skipped"
                 why = {"success": "条件で流さない", "skipped": "前の job が流れなかったので流さない",
@@ -986,7 +996,7 @@ def main(argv: list | None = None) -> int:
             for r in res["steps"]:
                 tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "")
                          if r["ran"] else "")
-                print(f"  {r['n']:02d} {r['result']:<8} {r['name']}（{r['secs']} 秒{tests}）")
+                print(f"  {r['n']:02d} {r['result']:<8} {_show(r['name'])}（{r['secs']} 秒{tests}）")
             if not a.keep:
                 _rmtree(work / f"job-{idx:02d}")
     except KeyboardInterrupt:

@@ -475,6 +475,46 @@ class FiltersTest(E2E):
         self.assertRefused(p, "制御文字")
 
 
+class NamesInTheOutputTest(E2E):
+    """名前（workflow のファイル名・job・段）に行を崩しうる字があっても、 出力の 1 行に収まり、
+    記録の行に似た行が独立しない（#77）。"""
+
+    def test_names_are_escaped(self):
+        fake = R.RECORD_PASS + "（偽の記録）"
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              "job\\n{fake}":
+                runs-on: ubuntu-latest
+                steps:
+                  - name: "段\\u2028{fake}"
+                    run: echo ran
+                  - name: "向き\\u202e\\u0085{fake}"
+                    run: echo ran
+            """, name="b\u2029c.yml") | self.wf("on: push\njobs: {}\n", name="d\u2028e.yml"),
+            {"a.txt": "x"}, name="t13")
+        for extra in ((), ("--list",)):
+            with self.subTest(extra=extra):
+                p = self.run_it(t, *extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                lines = p.stdout.splitlines()                  # 復帰・U+0085・U+2028・U+2029 でも分ける
+                forged = [ln for ln in lines if ln.lstrip().startswith(R.RECORD_PASS) and "偽の記録" in ln]
+                self.assertEqual(forged, [], "記録の行に似た行が独立した")
+                self.assertTrue(all(R.unicodedata.category(c) not in R.BREAKING for c in p.stdout
+                                    if c not in "\n"), "行を崩しうる字が出力に残った")
+                self.assertIn("b\\u2029c.yml", p.stdout)
+                self.assertIn("対象外: d\\u2028e.yml", p.stdout)
+                self.assertIn("job\\u000a" + R.RECORD_PASS, p.stdout)
+                if not extra:
+                    self.assertIn("段\\u2028" + R.RECORD_PASS, p.stdout)
+                    self.assertIn("向き\\u202e\\u0085" + R.RECORD_PASS, p.stdout)
+                    self.assertEqual(sum(ln.startswith(R.RECORD_PASS) for ln in lines), 1)
+
+    def test_show_keeps_ordinary_names(self):
+        self.assertEqual(R._show("検査 の job unit（3.10）"), "検査 の job unit（3.10）")
+        self.assertEqual(R._show("a\tb\x7fc\ufeffd"), "a\\u0009b\\u007fc\\ufeffd")
+
+
 class EnvironmentTest(E2E):
 
     def test_home_is_isolated_and_only_listed_variables_are_passed(self):

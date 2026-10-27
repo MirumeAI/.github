@@ -69,6 +69,11 @@ def body():
 db["calls"].append(a[:2])
 if a[:2] == ["repo", "list"]:
     print(json.dumps(db["repos"]))
+elif a[:2] == ["pr", "view"] and any(p["number"] == int(a[2]) for p in db["prs"].get(opt("-R") or "", [])):
+    want = opt("--json").split(",")
+    for p in db["prs"].get(opt("-R"), []):
+        if p["number"] == int(a[2]):
+            print(json.dumps({k: p.get(k) for k in want}))
 elif a[:2] == ["pr", "view"]:
     print(json.dumps(db["source_pr"].get(a[2], {})))
 elif a[0] == "api":
@@ -149,6 +154,7 @@ class World:
         self.rv_fail_rc_only: set = set()       # 記録の行らしい文は出たが、 終了コードが失敗
         self.rv_line: dict = {}                 # 名前 → 記録の行の差し替え（基準を含まない・道具が正本と違う）
         self.rv_calls: list = []
+        self.on_rv = None                       # 検査の間に起きること（push 先が変わるなど）
         self._canonical()
         self.db_path = base / "gh.json"
         self.db = {"repos": [], "source_pr": {"97": {"state": "MERGED", "mergeCommit": {"oid": self.canon_head}}},
@@ -229,10 +235,15 @@ class World:
         return self.db
 
     # ---- 検査の代わり
-    def rv(self, wt: Path, head: str, log: Path):
+    def rv(self, wt: Path, head: str, work: Path):
+        assert work.is_dir() and not any(work.iterdir()), "検査の道具には空の作業の置き場を渡す"
+        assert self.state in work.parents, "検査の道具の作業の置き場は、 状態の置き場の中"
+        assert len(str(work)) <= len(str(self.state)) + 12, "検査の道具の作業の置き場の道は短く（ソケットの道の上限）"
         url = git("-C", wt, "remote", "get-url", "origin")
         name = Path(url).name[:-len(".git")]
         self.rv_calls.append((name, head))
+        if self.on_rv:
+            self.on_rv(wt)
         if name in self.rv_fail:
             return 1, f"結果: FAIL（{S.ORG}/{name} head {head[:12]}）\n"
         contains, tools = self.rv_line.get(name, ("はい", "正本と同じ"))
@@ -343,6 +354,7 @@ class SyncTest(unittest.TestCase):
             self.assertIn(f"Closes #{issue}", pr["body"])
             self.assertIn(f"{S.RECORD}（{S.ORG}/{name} head {heads['refs/heads/' + br][:12]}", pr["body"])
             self.assertTrue(pr["body"].rstrip().endswith("🤖 generated"))
+            self.assertIn("差が写しと決まった行〔回帰テストの件数の行。数だけ〕だけ", pr["body"])
             # 本文の見出しは雛形どおり
             self.assertEqual(tuple(ln[3:] for ln in pr["body"].splitlines() if ln.startswith("## ")), S.PR_HEADINGS)
             msg = git("--git-dir", self.w.remotes / f"{name}.git", "log", "-1", "--format=%B", br)
@@ -604,6 +616,210 @@ class SyncTest(unittest.TestCase):
         for f in logs:
             self.assertNoSecret(f.read_text(encoding="utf-8"))
         self.assertEqual(self.w.state.stat().st_mode & 0o777, 0o700)
+
+    # ------------------------------------------------------------ #102 で足した守り
+    def test_symlink_in_worktree_is_refused(self) -> None:
+        # 作業ツリーの写しが symlink なら、 リンクの先（作業ツリーの外）へ書かずに止まる
+        self.w.rv_fail = {"PDM"}
+        self.w.main("apply", "--source", "97", "--only", "pdm")          # 作業ツリーと commit まで
+        wt, rel = self.w.wt("pdm"), ".claude/hooks/guard-main.sh"
+        outside = self.w.base / "outside.txt"
+        outside.write_bytes(b"outside\n")
+        (wt / rel).unlink()
+        os.symlink(outside, wt / rel)
+        git("-C", wt, "add", "-A")
+        git("-C", wt, "commit", "-q", "-m", "symlink")
+        self.w.canon_commit(rel, v(rel, 3))                              # 写しを書き直す形にする
+        self.w.rv_fail = set()
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("symlink です", out)
+        self.assertEqual(outside.read_bytes(), b"outside\n")
+
+    def test_push_target_is_checked_again_just_before_push(self) -> None:
+        # 検査の間に push 先が変わっても、 その先へ push しない
+        dd_before = self.w.remote_heads("development-docs")
+
+        def swap(wt: Path) -> None:
+            git("-C", wt, "remote", "set-url", "--push", "origin", self.w.remotes / "development-docs.git")
+        self.w.on_rv = swap
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("clone の origin が違います", out)
+        self.assertEqual(self.w.remote_heads("development-docs"), dd_before)
+        self.assertEqual(set(self.w.remote_heads("PDM")), {"refs/heads/main"})
+
+    def test_known_is_limited_to_canonical_main(self) -> None:
+        # 正本の main の履歴に無い中身（別の Branch にだけある）は、 前の正本として置き換えない
+        rel = ".claude/hooks/guard-main.sh"
+        git("-C", self.w.canon, "switch", "-q", "-c", "side")
+        (self.w.canon / rel).write_bytes(v(rel, 9))
+        git("-C", self.w.canon, "commit", "-q", "-am", "main に入っていない案")
+        git("-C", self.w.canon, "switch", "-q", "main")
+        self.w.push_main("PDM", rel, v(rel, 9))
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("正本の履歴に無い中身", out)
+        self.assertIn("人の判断が要る", out)
+
+    def test_rv_log_is_written_masked_after_the_check(self) -> None:
+        # 検査の出力は、 終わってから名前を伏せて書く（顧客 Repository の記録の行には名前が入る）
+        code, out = self.w.main("apply", "--source", "97", "--only", "c2")
+        self.assertEqual(code, 0, out)
+        (log,) = (self.w.state / "runs" / "github-97" / "logs").glob("c2-rv-*.log")
+        text = log.read_text(encoding="utf-8")
+        self.assertIn(S.RECORD, text)
+        self.assertIn("顧客 Repository 2", text)
+        self.assertNoSecret(text)
+
+    def test_default_rv_does_not_write_the_raw_output(self) -> None:
+        # 正本の検査の道具の出力は、 ファイルに書かずに受け取る（途中で止めても、 伏せる前の記録が残らない）
+        root = self.w.base / "fake-canon"
+        (root / "scripts" / "ci").mkdir(parents=True)
+        (root / "scripts" / "ci" / "run_required_verification.py").write_text(
+            f"import sys\nprint('{S.ORG}/{SECRET[0]}', sys.argv[1:])\n", encoding="utf-8")
+        before = sorted(self.w.base.rglob("*"))
+        work = self.w.base / "rv-work-x"
+        work.mkdir()
+        before = sorted(self.w.base.rglob("*"))
+        rc, text = S.default_rv(root)(self.w.base, "0" * 40, work)
+        self.assertEqual(rc, 0)
+        self.assertIn(SECRET[0], text)
+        self.assertIn(f"'--work', '{work}'", text, "検査の道具に作業の置き場を渡す")
+        self.assertEqual(sorted(self.w.base.rglob("*")), before)
+
+    def test_existing_state_dir_keeps_its_mode(self) -> None:
+        self.w.state.mkdir(mode=0o755)
+        os.chmod(self.w.state, 0o755)
+        code, out = self.w.main("plan")
+        self.assertEqual(code, 2)
+        self.assertIn("本人だけが読める dir", out)
+        self.assertEqual(self.w.state.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(list(self.w.state.iterdir()), [])
+        os.chmod(self.w.state, 0o700)
+        self.assertEqual(self.w.main("plan")[0], 0)
+        self.assertEqual(self.w.state.stat().st_mode & 0o777, 0o700)
+
+    def test_scope_names_the_kinds_of_copies_changed(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97")[0], 0)
+        bodies = {n: self.w.db["prs"][f"{S.ORG}/{n}"][0]["body"] for n in ("development-docs", "PDM")}
+        self.assertIn("## 影響範囲\n\nこの Repository の写し（ガードの回帰テスト・ガード・回帰テストの件数の行）。",
+                      bodies["PDM"])
+        self.assertIn("## 影響範囲\n\nこの Repository の写し（検査の道具・ガードの回帰テスト・ガード・"
+                      "Issue Form の道具・共通の command・回帰テストの件数の行）。", bodies["development-docs"])
+        a = S.Analysis("x", files=[(".claude/commands/pr.md", "old")])
+        self.assertEqual(S.scope(a), "この Repository の写し（共通の command）。")
+
+    def test_cleanup_removes_only_merged_and_unchanged(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        def pdm_pr() -> dict:                      # main() の後は gh の記録を読み直すので、 その都度引く
+            return self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pdm_br = pdm_pr()["head"]
+        # まだ merge されていない Pull Request には触らない
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("まだ merge されていない", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+        # merge された head と作業ツリーの先頭が違えば、 片付けない
+        pdm_pr().update(state="MERGED", headRefOid="0" * 40)
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("merge された head と違います", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+        # commit していない変更があれば、 片付けない
+        pdm_pr()["headRefOid"] = self.w.remote_heads("PDM")[f"refs/heads/{pdm_br}"]
+        (self.w.wt("pdm") / "scratch.txt").write_text("x\n", encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("commit していない変更", out)
+        (self.w.wt("pdm") / "scratch.txt").unlink()
+        # merge されて、 先頭が同じなら片付ける。 リモートの Branch には触らない
+        code, out = self.w.main("cleanup", "--source", "97")
+        self.assertEqual(code, 0, out)
+        self.assertIn("片付けた", out)
+        self.assertNoSecret(out)
+        self.assertFalse(self.w.wt("pdm").exists())
+        self.assertEqual(git("-C", clone, "branch", "--list", pdm_br), "")
+        self.assertIn(f"refs/heads/{pdm_br}", self.w.remote_heads("PDM"))
+        self.assertTrue(self.w.wt("dd").exists(), "merge されていない development-docs は残す")
+
+    def test_cleanup_sees_untracked_files_whatever_the_git_config(self) -> None:
+        # status.showUntrackedFiles=no でも、 追跡していないファイルのある作業ツリーは片付けない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        git("-C", clone, "config", "status.showUntrackedFiles", "no")
+        (self.w.wt("pdm") / "notes.txt").write_text("x\n", encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("commit していない変更", out)
+        self.assertTrue((self.w.wt("pdm") / "notes.txt").exists())
+
+    def test_cleanup_checks_the_origin_and_the_branch_shape(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        # clone の push 先が違えば、 片付けない
+        git("-C", clone, "remote", "set-url", "--push", "origin", self.w.remotes / "development-docs.git")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("clone の origin が違います", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+        git("-C", clone, "remote", "set-url", "--push", "origin", self.w.remotes / "PDM.git")
+        # 状態の Branch が作業 Branch の形でなければ、 片付けない
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["branch"] = "main"
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("作業 Branch の形", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+
+    def test_apply_does_not_touch_a_closed_or_cleaned_sync(self) -> None:
+        # merge 済み（閉じた）同期の Pull Request に、 流し直しで push・本文の書き換えをしない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        br = pr["head"]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{br}"])
+        body = pr["body"]
+        rel = ".claude/hooks/guard-main.sh"
+        self.w.canon_commit(rel, v(rel, 3))                     # 正本が進み、 新しい commit が要る形
+        heads = self.w.remote_heads("PDM")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("もう開いていません", out)
+        self.assertEqual(self.w.remote_heads("PDM"), heads)
+        self.assertEqual(self.w.db["prs"][f"{S.ORG}/PDM"][0]["body"], body)
+        # 片付けた後も同じ
+        self.assertEqual(self.w.main("cleanup", "--source", "97", "--only", "pdm")[0], 0)
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("片付け済み", out)
+        self.assertEqual(self.w.remote_heads("PDM"), heads)
+
+    def test_cleanup_keeps_a_local_branch_that_moved(self) -> None:
+        # 作業ツリーが無くても、 ローカルの作業 Branch の先頭が merge された head と違えば消さない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        br = pr["head"]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{br}"])
+        git("-C", clone, "worktree", "remove", self.w.wt("pdm"))
+        git("-C", clone, "branch", "-f", br, "origin/main")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn(f"ローカルの {br} の先頭が", out)
+        self.assertNotEqual(git("-C", clone, "branch", "--list", br), "")
+
+    def test_cleanup_without_state_stops(self) -> None:
+        # 正本に入った --source でも、 状態が無ければ何を片付けるか分からないので止まる
+        self.w.db["source_pr"]["98"] = dict(self.w.db["source_pr"]["97"])
+        code, out = self.w.main("cleanup", "--source", "98")
+        self.assertEqual(code, 2)
+        self.assertIn("この --source の状態がありません", out)
 
     def test_unknown_alias_is_rejected(self) -> None:
         code, out = self.w.main("plan", "--only", "zz")

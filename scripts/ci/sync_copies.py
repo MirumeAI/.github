@@ -40,7 +40,8 @@ GitHub が消すので触らない）。
     名前を伏せて書く。 検査の出力は、 終わってから伏せて書く（途中で止めても、 伏せる
     前の記録を残さない）。 **状態の置き場の中身は、 どれもそのまま表示・一覧しない**
     （記録〔`logs/`〕には伏せきれない値が残りうる。 本文のファイル〔`bodies/`〕・
-    `state.json`〔検査の記録の行〕・`aliases.json`・clone と作業ツリーには名前が残る）。
+    `state.json`〔検査の記録の行〕・`aliases.json`・clone と作業ツリー・検査の道具の
+    段ごとの記録〔`rv-work/`。 伏せていない〕には名前が残る）。
     状態の置き場は、 道具が作るときは本人だけが読める形（0700）にし、 既にある置き場が
     そうでなければ、 権限を変えずに止まる
   ・作業 Branch（`feature/<数>-…`）にだけ push する。 main へは push しない。
@@ -571,7 +572,7 @@ def ensure_worktree(ctx: Ctx, t: Target, br: str) -> Path:
     cur = run(["git", "-C", wt, "symbolic-ref", "--short", "HEAD"], check=False).out.strip()
     if cur != br:
         raise Stop(f"作業ツリー（{wt}）の Branch が {br} ではありません")
-    if run(["git", "-C", wt, "status", "--porcelain"]).out.strip():
+    if run(["git", "-C", wt, "status", "--porcelain", "--untracked-files=all"]).out.strip():
         raise Stop(f"作業ツリー（{wt}）に commit していない変更があります")
     return wt
 
@@ -614,8 +615,11 @@ def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
 def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    rc, text = ctx.rv(wt, head)
-    # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）
+    work_root = ctx.run_dir / "rv-work"
+    work_root.mkdir(parents=True, exist_ok=True)
+    rc, text = ctx.rv(wt, head, Path(tempfile.mkdtemp(prefix=f"{t.alias}-{head[:12]}-", dir=work_root)))
+    # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）。
+    # 検査の道具の段ごとの記録は、 状態の置き場の中の新しい dir に置く（システムの一時の場所に残さない）
     log.write_text(ctx.run.mask(text), encoding="utf-8")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(RECORD)]
     if rc != 0 or not lines:
@@ -634,10 +638,12 @@ def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
 def default_rv(canon_root: Path):
     tool = canon_root / "scripts" / "ci" / "run_required_verification.py"
 
-    def rv(wt: Path, head: str) -> "tuple[int, str]":
-        # 出力はファイルに書かずに受け取る（伏せる前の記録をディスクに残さない）
-        r = subprocess.run([sys.executable, str(tool), str(wt), "--head", head], stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+    def rv(wt: Path, head: str, work: Path) -> "tuple[int, str]":
+        # 出力はファイルに書かずに受け取る（伏せる前の出力をディスクに残さない）。 検査の道具の段ごとの
+        # 記録（伏せていない）は、 状態の置き場の中の work に書かせる（システムの一時の場所に残さない）
+        r = subprocess.run([sys.executable, str(tool), str(wt), "--head", head, "--work", str(work)],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=dict(os.environ, PYTHONUNBUFFERED="1"))
         return r.returncode, r.stdout.decode("utf-8", "replace")
     return rv
 
@@ -645,6 +651,15 @@ def default_rv(canon_root: Path):
 def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
     run = ctx.run
     st = ctx.state.setdefault("targets", {}).setdefault(t.alias, {})
+    if st.get("cleaned"):
+        raise Stop(f"この --source の同期の Pull Request #{st.get('pr')} は merge され、 片付け済みです。"
+                   " 正本が進んだなら、 新しい正本の Pull Request の番号で流してください")
+    if "pr" in st:
+        r = ctx.gh(["pr", "view", st["pr"], "-R", f"{ORG}/{t.name}", "--json", "state"],
+                   retries=3, what="Pull Request の状態")
+        if json.loads(r.out or "{}").get("state") != "OPEN":
+            raise Stop(f"記録した同期の Pull Request #{st['pr']} は、 もう開いていません（merge 済みを含む）。"
+                       " push も本文の書き換えもしません。 正本が進んだなら、 新しい正本の Pull Request の番号で流してください")
     if not a.needed() and "issue" not in st:
         return "同期は要らない"
     unknown = [rel for rel, s in a.files if s == "unknown"]
@@ -738,7 +753,7 @@ def cleanup_one(ctx: Ctx, t: Target) -> str:
     head = pr.get("headRefOid") or ""
     wt = ctx.run_dir / "wt" / t.alias
     if wt.exists():
-        if run(["git", "-C", wt, "status", "--porcelain"]).out.strip():
+        if run(["git", "-C", wt, "status", "--porcelain", "--untracked-files=all"]).out.strip():
             raise Stop(f"作業ツリー（{wt}）に commit していない変更があります（片付けません）")
         if run(["git", "-C", wt, "rev-parse", "HEAD"]).out.strip() != head:
             raise Stop(f"作業ツリー（{wt}）の先頭が、 merge された head と違います（片付けません）")
@@ -747,6 +762,7 @@ def cleanup_one(ctx: Ctx, t: Target) -> str:
     if local:
         if local != head:
             raise Stop(f"ローカルの {br} の先頭が、 merge された head と違います（片付けません）")
+        run(["git", "-C", t.clone, "worktree", "prune"])      # 手で消された作業ツリーの登録を外す
         run(["git", "-C", t.clone, "branch", "-D", br], what="作業 Branch の片付け")
     st["cleaned"] = head
     ctx.save()

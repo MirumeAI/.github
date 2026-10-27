@@ -235,7 +235,9 @@ class World:
         return self.db
 
     # ---- 検査の代わり
-    def rv(self, wt: Path, head: str):
+    def rv(self, wt: Path, head: str, work: Path):
+        assert work.is_dir() and not any(work.iterdir()), "検査の道具には空の作業の置き場を渡す"
+        assert self.state in work.parents, "検査の道具の作業の置き場は、 状態の置き場の中"
         url = git("-C", wt, "remote", "get-url", "origin")
         name = Path(url).name[:-len(".git")]
         self.rv_calls.append((name, head))
@@ -676,9 +678,13 @@ class SyncTest(unittest.TestCase):
         (root / "scripts" / "ci" / "run_required_verification.py").write_text(
             f"import sys\nprint('{S.ORG}/{SECRET[0]}', sys.argv[1:])\n", encoding="utf-8")
         before = sorted(self.w.base.rglob("*"))
-        rc, text = S.default_rv(root)(self.w.base, "0" * 40)
+        work = self.w.base / "rv-work-x"
+        work.mkdir()
+        before = sorted(self.w.base.rglob("*"))
+        rc, text = S.default_rv(root)(self.w.base, "0" * 40, work)
         self.assertEqual(rc, 0)
         self.assertIn(SECRET[0], text)
+        self.assertIn(f"'--work', '{work}'", text, "検査の道具に作業の置き場を渡す")
         self.assertEqual(sorted(self.w.base.rglob("*")), before)
 
     def test_existing_state_dir_keeps_its_mode(self) -> None:
@@ -736,6 +742,62 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(git("-C", clone, "branch", "--list", pdm_br), "")
         self.assertIn(f"refs/heads/{pdm_br}", self.w.remote_heads("PDM"))
         self.assertTrue(self.w.wt("dd").exists(), "merge されていない development-docs は残す")
+
+    def test_cleanup_sees_untracked_files_whatever_the_git_config(self) -> None:
+        # status.showUntrackedFiles=no でも、 追跡していないファイルのある作業ツリーは片付けない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        git("-C", clone, "config", "status.showUntrackedFiles", "no")
+        (self.w.wt("pdm") / "notes.txt").write_text("x\n", encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("commit していない変更", out)
+        self.assertTrue((self.w.wt("pdm") / "notes.txt").exists())
+
+    def test_cleanup_checks_the_origin_and_the_branch_shape(self) -> None:
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        # clone の push 先が違えば、 片付けない
+        git("-C", clone, "remote", "set-url", "--push", "origin", self.w.remotes / "development-docs.git")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("clone の origin が違います", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+        git("-C", clone, "remote", "set-url", "--push", "origin", self.w.remotes / "PDM.git")
+        # 状態の Branch が作業 Branch の形でなければ、 片付けない
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["branch"] = "main"
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("作業 Branch の形", out)
+        self.assertTrue(self.w.wt("pdm").exists())
+
+    def test_apply_does_not_touch_a_closed_or_cleaned_sync(self) -> None:
+        # merge 済み（閉じた）同期の Pull Request に、 流し直しで push・本文の書き換えをしない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        br = pr["head"]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{br}"])
+        body = pr["body"]
+        rel = ".claude/hooks/guard-main.sh"
+        self.w.canon_commit(rel, v(rel, 3))                     # 正本が進み、 新しい commit が要る形
+        heads = self.w.remote_heads("PDM")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("もう開いていません", out)
+        self.assertEqual(self.w.remote_heads("PDM"), heads)
+        self.assertEqual(self.w.db["prs"][f"{S.ORG}/PDM"][0]["body"], body)
+        # 片付けた後も同じ
+        self.assertEqual(self.w.main("cleanup", "--source", "97", "--only", "pdm")[0], 0)
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1)
+        self.assertIn("片付け済み", out)
+        self.assertEqual(self.w.remote_heads("PDM"), heads)
 
     def test_cleanup_keeps_a_local_branch_that_moved(self) -> None:
         # 作業ツリーが無くても、 ローカルの作業 Branch の先頭が merge された head と違えば消さない

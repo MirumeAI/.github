@@ -922,6 +922,22 @@ class TheIsolationStartsOffTest(unittest.TestCase):
                 self.assertNotEqual(bad, wf)
                 with self.assertRaises(N.SourceError):
                     N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: bad}))
+        # 引用符の複数行・決まった false の行の注釈の引用符・非 ASCII の空白の後の # で、
+        # true にした鍵を隠す書き方も断る（#113 の Reviewer B）
+        off = "    with:\n      run-isolation-check: false\n"
+        self.assertEqual(wf.count(off), 1)
+        for name, new in (
+                ("引用符の複数行", '    with:\n      note: "a\n      # x", run-isolation-check: true\n'),
+                ("false の行の注釈で引用符を閉じる",
+                 '    with: {note: "a\n      run-isolation-check: false  # "  , run-isolation-check: true}\n'),
+                ("非 ASCII の空白の後の #", "    with:\n      \u00a0# x: run-isolation-check: true\n"),
+                ("流れの形の鍵", "    with: {run-isolation-check: true}\n")):
+            with self.subTest(form=name):
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(off, new)}))
+                self.assertIn("有効にしうる形", str(cm.exception))
+        # 頭の BOM は外して読む（今の雛形の中身のまま作れる）
+        N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: "\ufeff" + wf}))
         # 決まった false の行の後ろの、 和文の注釈はそのまま作れる（前と同じ）
         N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(
             "run-isolation-check: false", "run-isolation-check: false  # 人の確認の後に true")}))

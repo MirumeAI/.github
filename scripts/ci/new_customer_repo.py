@@ -311,12 +311,14 @@ def customer_settings(canonical: bytes) -> bytes:
     return (json.dumps(d, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
-#: workflow の中で、 混入の照合について書いてよい行（false の 1 行。 後ろの注釈は可）。
-_ISOLATION_OFF = re.compile(r"[ \t]*run-isolation-check:[ \t]*false[ \t]*(?:#.*)?")
+#: workflow の中で、 混入の照合について書いてよい行（false の 1 行。 後ろの注釈は可だが、
+#: 注釈に引用符を書かない〔前の行で開いた引用符を注釈の中で閉じて、 続きを書けるため〕）。
+_ISOLATION_OFF = re.compile(r"[ \t]*run-isolation-check:[ \t]*false[ \t]*(?:#[^'\"]*)?")
 
 
-def _isolation_may_be_on(text: str) -> bool:
-    """workflow が混入の照合を有効にしうるか。 **迷ったら有効とみなす**（作らない側に倒す）。
+def _isolation_may_be_on(text: str) -> "str | None":
+    """workflow が混入の照合を有効にしうるか。 有効にしうるなら理由を、 そうでなければ None を返す。
+    **迷ったら有効とみなす**（作らない側に倒す）。
 
     PyYAML に頼らない（Owner の手元に無いことがある）。 注釈の行のほかで
     `isolation` を含む行（大文字と小文字を問わない）は、 `run-isolation-check: false`
@@ -325,18 +327,25 @@ def _isolation_may_be_on(text: str) -> bool:
     `\\` があれば、 それも有効とみなす（エスケープや行の継ぎで語を隠して書けるため。
     雛形の workflow に `\\` は無い）。 決まった false の 1 行のほかで非 ASCII の字を
     含む行も、 有効とみなす（見た目の似た字で `isolation` を書いた鍵を見逃さないため。
-    雛形の workflow の注釈でない行に非 ASCII の字は無い。 #111）。
+    雛形の workflow の注釈でない行に非 ASCII の字は無い。 #111）。 注釈でない行の引用符と
+    括弧（`'`・`"`・`{`・`}`・`[`・`]`）も、 有効とみなす（引用符の文字列を複数行に分けて
+    `#` で始まる行を値の中に隠せる・流れの形で鍵を書けるため。 雛形の注釈でない行には無い）。
+    注釈の行は、 ASCII の空白の後の `#` だけで見分ける（非 ASCII の空白は YAML では空白でない）。
     """
-    for ln in text.splitlines():
-        if ln.lstrip().startswith("#"):
+    for ln in text.lstrip("\ufeff").splitlines():
+        if ln.lstrip(" \t").startswith("#"):
             continue
         if "\\" in ln:
-            return True
+            return "注釈でない行に \\ がある"
         if _ISOLATION_OFF.fullmatch(ln):
             continue
-        if not ln.isascii() or "isolation" in ln.casefold():
-            return True
-    return False
+        if not ln.isascii():
+            return "注釈でない行に非 ASCII の字がある"
+        if any(c in ln for c in "'\"{}[]"):
+            return "注釈でない行に引用符か括弧がある"
+        if "isolation" in ln.casefold():
+            return "run-isolation-check: false の 1 行の形でない isolation の行がある"
+    return None
 
 
 def check_isolation_defaults(tree: dict) -> None:
@@ -359,9 +368,10 @@ def check_isolation_defaults(tree: dict) -> None:
     flows = sorted(rel for rel in tree
                    if rel.startswith(".github/workflows/") and rel.lower().endswith((".yml", ".yaml")))
     for rel in flows:
-        if _isolation_may_be_on(tree[rel][1].decode("utf-8", "replace")):
-            raise SourceError(f"雛形の {rel} は、 混入の照合を有効にして始めません"
-                              "（run-isolation-check は false。 人の確認の後に true にする）")
+        why = _isolation_may_be_on(tree[rel][1].decode("utf-8", "replace"))
+        if why:
+            raise SourceError(f"雛形の {rel} は、 混入の照合を有効にしうる形です（{why}）。 混入の照合を"
+                              "有効にして始めません（run-isolation-check は false。 人の確認の後に true にする）")
 
 
 def build_tree(src: Source, title: str) -> tuple:

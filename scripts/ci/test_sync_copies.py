@@ -930,7 +930,9 @@ class SyncTest(unittest.TestCase):
             code, out = self.w.main("plan")
         self.assertEqual(code, 0, out)
         self.assertIn("Unix ソケットの道の上限", out)
-        code, out = self.w.main("plan")
+        # 試験の置き場の道の長さは、 流す所（検査の一時の場所など）で変わるので、 目安の側を決めて確かめる
+        with mock.patch.object(S, "STATE_DIR_MAX", 10 ** 6):
+            code, out = self.w.main("plan")
         self.assertNotIn("Unix ソケットの道の上限", out)
 
     def test_cleanup_does_not_follow_odd_rv_work_names(self) -> None:

@@ -942,6 +942,32 @@ class TheIsolationStartsOffTest(unittest.TestCase):
         N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(
             "run-isolation-check: false", "run-isolation-check: false  # 人の確認の後に true")}))
 
+    def test_each_refusal_names_its_reason(self) -> None:
+        """断るときは、 場面ごとの理由を言う。 決まった false の行でも、 注釈に引用符があれば
+        断る（前の行で開いた引用符を注釈の中で閉じて、 続きを書けるため。 #117）。"""
+        wf = PLAN.tree[self.WORKFLOW][1].decode("utf-8")
+        off = "    with:\n      run-isolation-check: false\n"
+        self.assertEqual(wf.count(off), 1)
+        for name, new, why in (
+                ("false の行の注釈の二重引用符",
+                 '    with:\n      run-isolation-check: false  # "after review"\n', "注釈でない行に引用符か括弧がある"),
+                ("false の行の注釈の一重引用符",
+                 "    with:\n      run-isolation-check: false  # 'after review'\n", "注釈でない行に引用符か括弧がある"),
+                ("\\ のある行", '    with:\n      "run\\x2disolation\\x2dcheck": true\n', "注釈でない行に \\ がある"),
+                ("非 ASCII の字", "    with:\n      run-іsolation-check: true\n", "注釈でない行に非 ASCII の字がある"),
+                ("流れの形の false", "    with: {run-isolation-check: false}\n", "注釈でない行に引用符か括弧がある"),
+                ("形でない isolation の行", "    with:\n      RUN-ISOLATION-CHECK: false\n",
+                 "run-isolation-check: false の 1 行の形でない isolation の行がある")):
+            with self.subTest(form=name):
+                bad = wf.replace(off, new)
+                self.assertNotEqual(bad, wf)
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: bad}))
+                self.assertIn(f"（{why}）", str(cm.exception))
+        # 引用符の無い ASCII の注釈は、 決まった false の行のまま作れる
+        N.make_plan(NAME, None, N.PROPERTIES, _source_with({self.WORKFLOW: wf.replace(
+            off, "    with:\n      run-isolation-check: false  # after review\n")}))
+
     def test_the_plan_and_the_first_pull_request_say_so(self) -> None:
         code, out = _main([NAME], FakeGh(_fresh()))
         self.assertEqual(code, 0, out)

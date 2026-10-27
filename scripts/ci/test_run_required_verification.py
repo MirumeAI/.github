@@ -516,18 +516,18 @@ class NamesInTheOutputTest(E2E):
             "needs に無い job": self.wf(f"""\
                 on: pull_request
                 jobs:
-                  "j\\n{fake}":
+                  j:
                     runs-on: ubuntu-latest
-                    needs: [nothere]
+                    needs: ["n\\n{fake}"]
                     steps:
                       - run: echo ran
                 """),
             "知らない鍵": self.wf(f"""\
                 on: pull_request
                 jobs:
-                  "j\\n{fake}":
+                  j:
                     runs-on: ubuntu-latest
-                    unknown-key: 1
+                    "k\\n{fake}": 1
                     steps:
                       - run: echo ran
                 """),
@@ -540,6 +540,28 @@ class NamesInTheOutputTest(E2E):
                 self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
                 for out in (p.stdout, p.stderr):
                     self.assertEqual([ln for ln in out.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_jobs_whose_headings_look_the_same_are_not_merged(self):
+        """見出しが同じになる別の job（U+2028 のファイル名と、 文字どおり \\u2028 と書いたファイル名）を、
+        1 つに数えない（結果の鍵は元の名前。 #77）。"""
+        body = "on: pull_request\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo one\n"
+        two = body + "      - run: echo two\n"
+        t = _repo(self.root, self.wf(body, name="a\u2028.yml") | self.wf(two, name="a\\u2028.yml"),
+                  {"a.txt": "x"}, name="t16")
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("workflow 2・job 2・段 3", p.stdout)
+
+    def test_job_ids_that_yaml_reads_as_other_types_are_refused_with_a_reason(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              yes:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """), {"a.txt": "x"}, name="t17")
+        self.assertRefused(self.run_it(t), "文字以外")
 
     def test_job_ids_must_be_the_github_form(self):
         """job の id は GitHub の形に限る。 `/` を含む id で、 再利用 workflow の中の job の鍵と重ねて、

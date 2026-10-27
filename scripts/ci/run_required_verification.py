@@ -591,7 +591,10 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
             continue
         _check_keys(d, WORKFLOW_KEYS, wf)
         for jn, spec in (d.get("jobs") or {}).items():
-            if not (isinstance(jn, str) and JOB_ID.fullmatch(jn)):
+            if not isinstance(jn, str):
+                raise Unsupported(f"{wf} の job の id {jn!r} を、YAML が文字以外（真偽値・数など）に読みました。"
+                                  "引用符で囲んでください")
+            if not JOB_ID.fullmatch(jn):
                 raise Unsupported(f"{wf} の job の id {jn!r} は、GitHub の形（英字か _ で始まり、英数字・_・- だけ）ではありません")
             if not isinstance(spec, dict):
                 raise Unsupported(f"{wf} の job {jn} を読めません")

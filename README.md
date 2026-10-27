@@ -19,7 +19,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `.claude/commands/` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`） | 各 Repository に写す |
 | `.claude/scripts/issue-form.sh` | Issue Form の雛形と、本文の形の確かめ | 各 Repository に写す |
 | `.claude/settings.json` | この Repository のガードのフックと権限の設定 | 新しい顧客案件の Repository の設定の元。各 Repository の設定は、それぞれの Repository が持つ |
-| `scripts/ci/` | 共通の検査の道具（機械チェック・import の確かめ・ガードの回帰テスト・顧客の値の混入・顧客の間の混入・写しの照合・Release の識別と記録・Organization の監査・merge の前の検査など）と、その試験 | 再利用 workflow から呼ぶもの（`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`copy_sync_check.py`・`customer_isolation_check.py`・`release_record_check.py`）、各 Core の workflow が写しを流すもの（`customer_data_check.py`）、各 Core のタグの確かめに使うもの（`release_identity_check.py`。今は Actions を使わないので、タグの後に Agent が手元で流す）、手で流すもの（`run_required_verification.py`・`org_audit.py`・`new_customer_repo.py`・`sync_copies.py`）がある。`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`customer_data_check.py` は各 Repository に写す |
+| `scripts/ci/` | 共通の検査の道具（機械チェック・import の確かめ・ガードの回帰テスト・顧客の値の混入・顧客の間の混入・写しの照合・Release の識別と記録・Organization の監査・merge の前の検査・門の記録の文など）と、その試験 | 再利用 workflow から呼ぶもの（`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`copy_sync_check.py`・`customer_isolation_check.py`・`release_record_check.py`）、各 Core の workflow が写しを流すもの（`customer_data_check.py`）、各 Core のタグの確かめに使うもの（`release_identity_check.py`。今は Actions を使わないので、タグの後に Agent が手元で流す）、手で流すもの（`run_required_verification.py`・`gate_record.py`・`org_audit.py`・`new_customer_repo.py`・`sync_copies.py`）がある。`basic_checks.py`・`import_check.py`・`test_guard_main.sh`・`customer_data_check.py` は各 Repository に写す |
 | `.github/workflows/basic-checks-reusable.yml` | 各 Repository が呼ぶ再利用 workflow（共通の検査の段） | 各 Repository の workflow から呼ぶ |
 | `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
 | `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
@@ -85,6 +85,34 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
 - **PR のコードを手元で動かします。** 中身を読んでから流してください
   - 仮の HOME と環境変数の取り除きは、手元の設定や認証をうっかり使わせないためのもので、悪意のあるコードを閉じ込める箱ではありません
   - PR のコードと pip で入る依存は、あなたの OS のユーザーの権限で動きます。本物の HOME の認証の file や手元のデータを読め、network にも出せます
+
+## 門の記録と頼みの文（`gate_record.py`）
+
+Reviewer への頼み・Merge の門の記録・merge の後の記録・Pull Request の本文の記録の行を、検査の記録と git・Pull Request の状態から作ります。40 桁の head や記録の行を、手で写さないためです。**文を作るだけで、GitHub へ書き込みません**（`gh pr view` で読むだけ）。投稿・本文の差し替え・merge は、中身を確かめてから行います。
+
+```bash
+G=<この Repository の clone>/scripts/ci/gate_record.py
+# 初めの頼み（Reviewer B は --role b と、作成者の「人の判断が要る変更」の判定の --human）
+python3 $G review <作業ツリー> --pr 42 --issue 41 --role a --rv-log <検査の出力>
+# head が変わった後の確かめ直しの頼み
+python3 $G review <作業ツリー> --pr 42 --issue 41 --role a --rv-log <検査の出力> --prev <前の head> --fixed <直したこと>
+# 本文の記録の行を、今の検査の記録の行に差し替えた本文
+python3 $G body <作業ツリー> --pr 42 --rv-log <検査の出力> --out body.md
+# 門の記録と、head を固定した merge の命令
+python3 $G gate <作業ツリー> --pr 42 --rv-log <検査の出力> --record record.json --out gate.md
+# merge の後のコメント
+python3 $G merged <作業ツリー> --pr 42 --head <固定した head> --out merged.md
+```
+
+- `<検査の出力>` は、`run_required_verification.py` の出力を書いたファイルです。PASS の記録の行が 1 つだけあり、その head が作業ツリーと Pull Request の head と同じで、基準を含み、道具が正本と同じでなければ止まります
+- `gate` は、文を作る前に次を確かめ、1 つでも外れたら止まります（終了コード 1）。`--record` の JSON の形は、道具の冒頭にあります
+  - main を fetch して、検査の基準から進んでいない
+  - Reviewer A・B の最後の結果が、merge する head を見て BLOCKER・MAJOR・IN-PR が 0
+  - In-PR の残りが無い
+  - 人の判断が要る変更なら、人の判断が名指しした head が今の head と同じ
+- `gate` が出す merge の命令は、head を固定し、main が進んでいたら merge まで進みません
+- base が main でない Pull Request（LEGACY の長期 Branch）は扱いません（決まりの形で手で書きます）
+- 顧客 Repository の文は画面に出さず、`--out` のファイル（本人だけが読める形）に書きます
 
 ## 顧客の間の混入の検査（`customer-profile.yaml`）
 

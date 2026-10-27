@@ -143,3 +143,12 @@ jobs:
       # 実際に流して確かめる（守りを 1 つずつ壊すと落ちることも確かめた）。
       - name: 手元の検査を流す道具
         run: python scripts/ci/test_run_required_verification.py
+
+      # **Reviewer への頼み・門の記録・merge の後の記録の文を作る道具。** 40 桁の
+      # head と検査の記録の行を手で写していて、 門の記録の前に main が進んだのに
+      # 気づかず merge したことがある（#105）。 head の違い・main の進み・Reviewer の
+      # 数・In-PR の残り・人の判断の後の head の変化で止まること、 gh は読むだけで
+      # あること、 顧客 Repository の名前を画面に出さないことを、 手元の架空の
+      # Repository で確かめる（gh は差し替え。 守りを 1 つずつ壊すと落ちることも確かめた）。
+      - name: 門の記録の文を作る道具
+        run: python scripts/ci/test_gate_record.py

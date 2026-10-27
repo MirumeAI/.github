@@ -234,6 +234,20 @@ class ReviewTest(Base):
         self.assertIn(f"- 確かめ直し: 前の head {self.w.first}。変わった所は {self.w.wt} で git diff {self.w.first[:12]}..HEAD\n"
                       "- 直したこと:\n  - 待ち方を直した\n  - 数を直した\n", out)
 
+    def test_review_inputs_may_mention_the_marks_but_not_write_records(self) -> None:
+        # 頼む文は GitHub に載せないので、 印の言葉に触れるのはよい。 記録の形（`…:`）は断る（#116）
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        rc, out, err = self.w.run(*base, "--look", "Human Verification が要る場面に当たるか")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Human Verification が要る場面に当たるか", out)
+        rc, out, err = self.w.run(*base, "--prev", self.w.first, "--fixed", "人の判断（Human Adjudication）の言葉の扱いを直した")
+        self.assertEqual(rc, 0, err)
+        for look in ("Human Verification: PASS", "human  adjudication： MERGE APPROVED", "人の判断（人の言葉のまま）: 「x」"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+        self.assertStops(self.w.run("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "b", "--rv-log", self.w.rv(),
+                                    "--human", "Human Adjudication: MERGE APPROVED"), "記録の形", 2)
+
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
         self.assertStops(self.w.run(*base, "--prev", self.w.head, "--fixed", "x"), "同じ", 2)
@@ -518,6 +532,97 @@ class GateTest(Base):
                 self.assertEqual(rc, 0, err)
         self.assertStops(self.w.gate(human_required=self.human(f"#7・8・9（head {h12}）を承認します")), "#番号")
         self.assertStops(self.w.gate(human_required=self.human(f"#9・8・7（head {h12}）を承認します")), "#番号")
+
+    def test_more_number_forms_and_separators(self) -> None:
+        # まだ数えなかった番号の形と並べ方も数える（#116）
+        h12 = self.w.head[:12]
+        for words in (f"#7（head {h12}）と PR-8 を承認します", f"#7（head {h12}）と Pull  Request 8 を承認します",
+                      f"#7（head {h12}）と PullRequest 8 を承認します", f"#7（head {h12}）とプルリク 8 を承認します",
+                      f"#7（head {h12}）と №8 を承認します",
+                      f"#7（head {h12}）と https://github.com/MirumeAI/development-docs/pull/8 を承認します",
+                      f"#7 and 8（head {h12}）を承認します", f"#7〜9（head {h12}）を承認します",
+                      f"#7～9（head {h12}）を承認します", f"#7-8（head {h12}）を承認します",
+                      f"#7-8-9（head {h12}）を承認します", f"#7 や 8（head {h12}）を承認します",
+                      f"#7 & 8（head {h12}）を承認します", f"#7から9（head {h12}）を承認します",
+                      f"#7/8（head {h12}）を承認します", f"#7・7・9（head {h12}）を承認します",
+                      f"#7・123456（head {h12}）を承認します", f"#7（head {h12}）と #\u200b8 を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"https://github.com/MirumeAI/development-docs/pull/7（head {h12}）を承認します",
+                      f"PR-7（head {h12}）を承認します", f"#7・1234567（head {h12}）を承認します",
+                      f"#7（head {h12[:6]}\u200b{h12[6:]}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_numbers_after_a_prefix_or_a_slash_are_not_dates(self) -> None:
+        # 番号の前置きの直後と / で続く番号は、 日付の形でも番号に数える（#124 の Reviewer B の MAJOR-1）
+        h12 = self.w.head[:12]
+        for words in (f"#7 と PR 8/9（head {h12}）を承認します", f"PR 8/9 と #7（head {h12}）の merge を承認します",
+                      f"Pull Request 8/9 と #7（head {h12}）を承認します", f"#7/8/9（head {h12}）を承認します",
+                      f"#7（head {h12}）と プルリク 10:30 を承認します", f"#7・13/14（head {h12}）を承認します",
+                      f"#7、25:61（head {h12}）を承認します", f"#7 と №8/9（head {h12}）を承認します",
+                      f"#7-10-28（head {h12}）を承認します", f"#7〜10/28（head {h12}）を承認します",
+                      f"#7・10/28・9（head {h12}）を承認します", f"#7・10:30 と 8（head {h12}）を承認します",
+                      f"#7・2026-10-28・8（head {h12}）を承認します", f"#7・8/9/10（head {h12}）を承認します",
+                      f"#7・8日 と 9（head {h12}）を承認します", f"#7、8-9（head {h12}）を承認します",
+                      f"#7・2026年10月28日 と 8（head {h12}）を承認します", f"#7・10時30分・8（head {h12}）を承認します",
+                      f"#7・123日（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
+    def test_more_range_and_prefix_forms(self) -> None:
+        # 範囲の字（– — −）・or・または・PRs・Pull Requests・pull-request・No. も数える（#124 の Reviewer A）
+        h12 = self.w.head[:12]
+        for words in (f"#7–9（head {h12}）を承認します", f"#7—9（head {h12}）を承認します", f"#7−9（head {h12}）を承認します",
+                      f"#7 or 8（head {h12}）を承認します", f"#7 または 8（head {h12}）を承認します",
+                      f"#7（head {h12}）と PRs 8 and 9 を承認します", f"#7（head {h12}）と Pull Requests 8 を承認します",
+                      f"#7（head {h12}）と pull-request 8 を承認します", f"#7（head {h12}）と No. 8 を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
+    def test_url_numbers_must_be_this_repository(self) -> None:
+        # URL の /pull/N は、 URL の Repository がこの Pull Request の Repository のときだけ（#124 の Reviewer B）
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(
+            f"https://github.com/MirumeAI/customer-synthetic-example/pull/7（head {h12}）を承認します")), "別の Repository")
+        self.assertStops(self.w.gate(human_required=self.human(
+            f"MirumeAI/customer-synthetic-example/pull/7（head {h12}）を承認します")), "別の Repository")
+        rc, _, err = self.w.gate(human_required=self.human(
+            f"https://GitHub.com/mirumeai/Development-Docs/pull/7（head {h12}）を承認します"))
+        self.assertEqual(rc, 0, err)
+
+    def test_marks_split_by_format_characters_are_seen(self) -> None:
+        # ゼロ幅の空白で割った印の言葉も、 印の言葉として止める（#124 の Reviewer B）
+        h12 = self.w.head[:12]
+        self.assertStops(self.w.gate(human_required=self.human(f"Human\u200bAdjudication: MERGE APPROVED #7 {h12}")),
+                         "コメントの形")
+        self.assertStops(self.w.gate(summary="直した。 Human\u200b Verification: PASS"), "人の確認（Human Verification）", 2)
+        self.assertStops(self.w.gate(human_required=self.human(f"Human-Adjudication: MERGE APPROVED #7 {h12}")),
+                         "コメントの形")
+        self.assertStops(self.w.gate(summary="直した。 Human_Verification: PASS"), "人の確認（Human Verification）", 2)
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        for look in ("**Human Adjudication**: MERGE APPROVED", "Human\u200b Adjudication: x", "Human Verification - PASS",
+                     "Human-Verification: PASS"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+
+    def test_dates_and_times_after_a_separator_are_not_numbers(self) -> None:
+        # 区切りの後ろの日付と時刻で止めすぎない（#116）
+        h12 = self.w.head[:12]
+        for words in (f"#7・10/28（head {h12}）を承認します", f"#7、10:30 に head {h12} を承認します",
+                      f"#7・10月28日に head {h12} を承認します", f"#7（head {h12}）2026/10/28 承認",
+                      f"#7、2026.10.28 に head {h12} を承認します", f"#7 と 2026年10月28日 に head {h12} を承認します",
+                      f"#7・2026-10 に head {h12} を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_a_short_head_next_to_a_fullwidth_letter_is_seen(self) -> None:
+        # 全角の字が隣にある短い別の head も、 元の文で見分けて止める（#116）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef0", "fedcba1") if not h.startswith(x))
+        self.assertStops(self.w.gate(human_required=self.human(f"#7（head {h12}・{other}ｇ）を承認します")), "短い head")
 
     def test_both_the_original_and_the_normalized_words_are_checked(self) -> None:
         # 全角の字が隣にあって、 そろえた文だけでは見えなくなる並びも止める（#109）

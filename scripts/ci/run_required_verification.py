@@ -77,6 +77,11 @@ def _show(name) -> str:
     return "".join((f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
                    if unicodedata.category(c) in BREAKING else c for c in str(name))
 
+#: job の id の形（GitHub と同じ）。 **これに合わない id は流さない**。 `/` を含む id は、 再利用
+#: workflow の中の job の鍵（`呼ぶ job/中の job`）と重なり、 落ちた job の結果を後の job の結果で
+#: 上書きして PASS にできた。 改行などの字で出力を崩す道もここで閉じる（#77 の Reviewer B）
+JOB_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+
 #: 再利用 workflow は正本の main だけ。 ほかの Repository や枝を指すものは、
 #: 手元で同じものを取れる保証が無いので止める。
 REUSABLE = re.compile(r"^MirumeAI/\.github/(\.github/workflows/[^@/]+\.ya?ml)@main$")
@@ -586,6 +591,8 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
             continue
         _check_keys(d, WORKFLOW_KEYS, wf)
         for jn, spec in (d.get("jobs") or {}).items():
+            if not (isinstance(jn, str) and JOB_ID.fullmatch(jn)):
+                raise Unsupported(f"{wf} の job の id {jn!r} は、GitHub の形（英字か _ で始まり、英数字・_・- だけ）ではありません")
             if not isinstance(spec, dict):
                 raise Unsupported(f"{wf} の job {jn} を読めません")
             needs = spec.get("needs") or []
@@ -602,6 +609,8 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
                     raise Unsupported(f"{m.group(1)} は workflow_call で動きません")
                 inputs = _inputs(on["workflow_call"] or {}, spec.get("with") or {})
                 for ij, ispec in (rw.get("jobs") or {}).items():
+                    if not (isinstance(ij, str) and JOB_ID.fullmatch(ij)):
+                        raise Unsupported(f"{m.group(1)} の job の id {ij!r} は、GitHub の形ではありません")
                     if not isinstance(ispec, dict):
                         raise Unsupported(f"{m.group(1)} の job {ij} を読めません")
                     ineeds = ispec.get("needs") or []

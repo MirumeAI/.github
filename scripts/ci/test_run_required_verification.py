@@ -484,7 +484,7 @@ class NamesInTheOutputTest(E2E):
         t = _repo(self.root, self.wf(f"""\
             on: pull_request
             jobs:
-              "job\\n{fake}":
+              j:
                 runs-on: ubuntu-latest
                 steps:
                   - name: "段\\u2028{fake}"
@@ -504,7 +504,6 @@ class NamesInTheOutputTest(E2E):
                                     if c not in "\n"), "行を崩しうる字が出力に残った")
                 self.assertIn("b\\u2029c.yml", p.stdout)
                 self.assertIn("対象外: d\\u2028e.yml", p.stdout)
-                self.assertIn("job\\u000a" + R.RECORD_PASS, p.stdout)
                 if not extra:
                     self.assertIn("段\\u2028" + R.RECORD_PASS, p.stdout)
                     self.assertIn("向き\\u202e\\u0085" + R.RECORD_PASS, p.stdout)
@@ -542,24 +541,22 @@ class NamesInTheOutputTest(E2E):
                 for out in (p.stdout, p.stderr):
                     self.assertEqual([ln for ln in out.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
 
-    def test_jobs_with_names_that_look_the_same_are_not_merged(self):
-        """改行の job と、 文字どおり \\u000a と書いた job は、 見出しが同じでも別の job に数える（#77）。"""
-        t = _repo(self.root, self.wf("""\
-            on: pull_request
-            jobs:
-              "a\\nb":
-                runs-on: ubuntu-latest
-                steps:
-                  - run: echo one
-              'a\\u000ab':
-                runs-on: ubuntu-latest
-                steps:
-                  - run: echo two
-                  - run: echo three
-            """), {"a.txt": "x"}, name="t15")
-        p = self.run_it(t)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn("job 2・段 3", p.stdout)
+    def test_job_ids_must_be_the_github_form(self):
+        """job の id は GitHub の形に限る。 `/` を含む id で、 再利用 workflow の中の job の鍵と重ねて、
+        落ちた job の結果を上書きする道を閉じる（#77 の Reviewer B）。"""
+        for i, jid in enumerate(('"a\\nb"', "'a\\u000ab'", '"x/y"', '"1abc"', '"a b"')):
+            with self.subTest(jid=jid):
+                t = _repo(self.root, self.wf(f"""\
+                    on: pull_request
+                    jobs:
+                      {jid}:
+                        runs-on: ubuntu-latest
+                        steps:
+                          - run: echo ran
+                    """), {"a.txt": "x"}, name=f"t15{i}")
+                p = self.run_it(t)
+                self.assertRefused(p, "GitHub の形")
+                self.assertEqual([ln for ln in p.stderr.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
 
     def test_show_keeps_ordinary_names(self):
         self.assertEqual(R._show("検査 の job unit（3.10）"), "検査 の job unit（3.10）")
@@ -652,6 +649,21 @@ class ReusableWorkflowTest(E2E):
             "t1", "with: {flag: \"${{ github.event_name == 'pull_request' }}\"}"), canonical=canon), "式")
         self.assertRefused(self.run_it(self._caller("t2", "with: {flag: yes-please}"), canonical=canon),
                            "true / false")
+
+
+    def test_reusable_inner_job_ids_must_be_the_github_form(self):
+        """再利用 workflow の中の job の id も、 GitHub の形に限る（#77 の Reviewer B）。"""
+        canon = _repo(self.root, {
+            ".github/workflows/basic-checks-reusable.yml": """\
+                on:
+                  workflow_call: {}
+                jobs:
+                  "in/ner":
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ran
+                """}, {}, name="canonical-bad")
+        self.assertRefused(self.run_it(self._caller("t3"), canonical=canon), "GitHub の形")
 
 
 class ExprAndGlobTest(unittest.TestCase):

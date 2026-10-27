@@ -67,12 +67,15 @@ RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
 
 #: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
 #: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
-BREAKING = ("Cc", "Cf", "Zl", "Zp")
+#: 孤立した surrogate（Cs）も、 出力の所で落ちないよう escape する
+BREAKING = ("Cc", "Cf", "Zl", "Zp", "Cs")
 
 
 def _show(name) -> str:
-    """出力に出す名前（workflow のファイル名・job・段・対象外の理由）。 行を崩しうる字は \\uXXXX にする。"""
-    return "".join(f"\\u{ord(c):04x}" if unicodedata.category(c) in BREAKING else c for c in str(name))
+    """出力に出す名前（workflow のファイル名・job・段・対象外の理由・止まるときの文）。 行を崩しうる字は
+    \\uXXXX（U+FFFF を超える字は \\UXXXXXXXX）にする。 表示だけに使い、 結果の鍵には使わない。"""
+    return "".join((f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
+                   if unicodedata.category(c) in BREAKING else c for c in str(name))
 
 #: 再利用 workflow は正本の main だけ。 ほかの Repository や枝を指すものは、
 #: 手元で同じものを取れる保証が無いので止める。
@@ -914,7 +917,7 @@ def main(argv: list | None = None) -> int:
         a.canonical = Path(_git(Path(a.canonical), "rev-parse", "--show-toplevel"))
         a.canonical_sha = _git(a.canonical, "rev-parse", "--verify", f"{a.canonical_ref}^{{commit}}")
     except Unsupported as e:
-        print(f"流せません: {e}（基準の ref が無いときは、 先に git fetch してください）", file=sys.stderr)
+        print(f"流せません: {_show(e)}（基準の ref が無いときは、 先に git fetch してください）", file=sys.stderr)
         return 2
     a.target_slug, a.origin_url = _slug(a.target)
     a.head_ref = _head_ref(a.target, a.head, a.head_sha)
@@ -945,7 +948,8 @@ def main(argv: list | None = None) -> int:
         _precheck(jobs, probe)
         pythons = {} if a.list else _python_map(plan.pythons, a.python)
     except Unsupported as e:
-        print(f"流せません: {e}", file=sys.stderr)
+        # 止まるときの文にも workflow のファイル名・job の名前が入る（行を崩しうる字を escape する。 #77）
+        print(f"流せません: {_show(e)}", file=sys.stderr)
         return 2
 
     print(f"===== Required Verification: {a.target_slug}")
@@ -960,7 +964,7 @@ def main(argv: list | None = None) -> int:
     if a.list:
         for j in jobs:
             print(f"  {_show(j['workflow'])} の job {_show(j['name'])}: 段 {len(j['spec']['steps'])}"
-                  + (f"・needs {[_show(n) for n in j['needs']]}" if j["needs"] else ""))
+                  + (f"・needs {', '.join(_show(n) for n in j['needs'])}" if j["needs"] else ""))
         return 0
 
     if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
@@ -991,7 +995,7 @@ def main(argv: list | None = None) -> int:
             jlog.mkdir(parents=True)
             res = _run_job(j, probe, a, work / f"job-{idx:02d}", jlog, pythons, real_cache)
             outcome[key] = res["status"]
-            results[label] = res
+            results[key] = (label, res)            # 鍵は元の名前（表示の見出しは escape して重なりうる）
             print(f"\n{label}: {'PASS' if res['status'] == 'success' else 'FAIL'}（{time.monotonic() - t0:.0f} 秒）")
             for r in res["steps"]:
                 tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "")
@@ -1006,7 +1010,7 @@ def main(argv: list | None = None) -> int:
         if not a.keep:
             for p in work.glob("job-*"):
                 _rmtree(p)
-    ran = [s for r in results.values() for s in r["steps"] if s["result"] != "skipped"]
+    ran = [s for _, r in results.values() for s in r["steps"] if s["result"] != "skipped"]
     n_tests = sum(s["ran"] for s in ran)
     n_skip = sum(s["skipped_tests"] for s in ran)
     passed = all(v in ("success", "skipped") for v in outcome.values()) and bool(results)
@@ -1014,7 +1018,8 @@ def main(argv: list | None = None) -> int:
                "base": base_sha, "merge_base": merge_base, "head_has_base": has_base,
                "canonical_ref": a.canonical_ref, "canonical": a.canonical_sha,
                "tool_blob": tool_blob, "tool_same_as_canonical": tool_blob == canon_blob,
-               "passed": passed, "jobs": results, "skipped_workflows": plan.skipped}
+               "passed": passed, "jobs": [{"label": label, **res} for label, res in results.values()],
+               "skipped_workflows": plan.skipped}
     (logs / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     wfs = len({j["workflow"] for j in jobs})
     detail = (f"{a.target_slug} head {a.head_sha[:12]}・{base_note}・{canon_note}・{tool_note}・"
@@ -1026,7 +1031,7 @@ def main(argv: list | None = None) -> int:
         print("記録の行（PR に書く）:")
         print(f"{RECORD_PASS}（{detail}）")
     else:
-        failed = [f"{k} の段 {s['n']}" for k, r in results.items() for s in r["steps"]
+        failed = [f"{label} の段 {s['n']}" for label, r in results.values() for s in r["steps"]
                   if s["result"] in ("failed", "timeout")]
         print(f"結果: FAIL（{detail}。 落ちた段: {', '.join(failed) or '前の job が落ちた'}）")
     print(f"段ごとの記録: {logs}")

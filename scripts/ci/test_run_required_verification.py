@@ -510,9 +510,61 @@ class NamesInTheOutputTest(E2E):
                     self.assertIn("向き\\u202e\\u0085" + R.RECORD_PASS, p.stdout)
                     self.assertEqual(sum(ln.startswith(R.RECORD_PASS) for ln in lines), 1)
 
+    def test_refusals_escape_names_too(self):
+        """止まるときの文（stderr・終了コード 2）にも、 記録の行に似た行が独立しない（#77）。"""
+        fake = R.RECORD_PASS + "（偽の記録）"
+        cases = {
+            "needs に無い job": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  "j\\n{fake}":
+                    runs-on: ubuntu-latest
+                    needs: [nothere]
+                    steps:
+                      - run: echo ran
+                """),
+            "知らない鍵": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  "j\\n{fake}":
+                    runs-on: ubuntu-latest
+                    unknown-key: 1
+                    steps:
+                      - run: echo ran
+                """),
+            "流す workflow が無い": self.wf("on: push\njobs: {}\n", name=f"x\u2028{fake}.yml"),
+        }
+        for i, (name, files) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                t = _repo(self.root, files, {"a.txt": "x"}, name=f"t14{i}")
+                p = self.run_it(t)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                for out in (p.stdout, p.stderr):
+                    self.assertEqual([ln for ln in out.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_jobs_with_names_that_look_the_same_are_not_merged(self):
+        """改行の job と、 文字どおり \\u000a と書いた job は、 見出しが同じでも別の job に数える（#77）。"""
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              "a\\nb":
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo one
+              'a\\u000ab':
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo two
+                  - run: echo three
+            """), {"a.txt": "x"}, name="t15")
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("job 2・段 3", p.stdout)
+
     def test_show_keeps_ordinary_names(self):
         self.assertEqual(R._show("検査 の job unit（3.10）"), "検査 の job unit（3.10）")
         self.assertEqual(R._show("a\tb\x7fc\ufeffd"), "a\\u0009b\\u007fc\\ufeffd")
+        self.assertEqual(R._show("x\ud800y\U000e0001z"), "x\\ud800y\\U000e0001z")   # 孤立した surrogate・U+FFFF を超える書式の字
 
 
 class EnvironmentTest(E2E):

@@ -238,6 +238,7 @@ class World:
     def rv(self, wt: Path, head: str, work: Path):
         assert work.is_dir() and not any(work.iterdir()), "検査の道具には空の作業の置き場を渡す"
         assert self.state in work.parents, "検査の道具の作業の置き場は、 状態の置き場の中"
+        assert len(str(work)) <= len(str(self.state)) + 12, "検査の道具の作業の置き場の道は短く（ソケットの道の上限）"
         url = git("-C", wt, "remote", "get-url", "origin")
         name = Path(url).name[:-len(".git")]
         self.rv_calls.append((name, head))

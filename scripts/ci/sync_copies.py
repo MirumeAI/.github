@@ -41,7 +41,7 @@ GitHub が消すので触らない）。
     前の記録を残さない）。 **状態の置き場の中身は、 どれもそのまま表示・一覧しない**
     （記録〔`logs/`〕には伏せきれない値が残りうる。 本文のファイル〔`bodies/`〕・
     `state.json`〔検査の記録の行〕・`aliases.json`・clone と作業ツリー・検査の道具の
-    段ごとの記録〔`rv-work/`。 伏せていない〕には名前が残る）。
+    段ごとの記録〔`w/`。 伏せていない〕には名前が残る）。
     状態の置き場は、 道具が作るときは本人だけが読める形（0700）にし、 既にある置き場が
     そうでなければ、 権限を変えずに止まる
   ・作業 Branch（`feature/<数>-…`）にだけ push する。 main へは push しない。
@@ -615,9 +615,11 @@ def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
 def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    work_root = ctx.run_dir / "rv-work"
+    # 置き場は状態の置き場の直下の短い道にする（検査の道具は job の一時の場所を <work>/job-NN/temp に
+    # 作る。 道が長いと、 その下に Unix ソケットを作る試験が上限〔107 バイト〕を超えて落ちる）
+    work_root = ctx.run_dir.parents[1] / "w"
     work_root.mkdir(parents=True, exist_ok=True)
-    rc, text = ctx.rv(wt, head, Path(tempfile.mkdtemp(prefix=f"{t.alias}-{head[:12]}-", dir=work_root)))
+    rc, text = ctx.rv(wt, head, Path(tempfile.mkdtemp(prefix="", dir=work_root)))
     # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）。
     # 検査の道具の段ごとの記録は、 状態の置き場の中の新しい dir に置く（システムの一時の場所に残さない）
     log.write_text(ctx.run.mask(text), encoding="utf-8")

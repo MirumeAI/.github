@@ -28,10 +28,10 @@ Pull Request を、 まとめて作る。
 
 **merge はしない。** Reviewer A・B と Merge の門は、 Pull Request ごとに通す。
 
-`cleanup` は、 merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を
-片付ける（merge されていない・作業ツリーに commit していない変更がある・ローカルの
-Branch の先頭が merge された head と違う、 のどれかなら触らない。 リモートの Branch は
-GitHub が消すので触らない）。
+`cleanup` は、 merge された同期の Pull Request の作業ツリーとローカルの作業 Branch と、
+その同期の検査の作業の置き場（`w/` の下に道具が作った dir）を片付ける（merge されていない・
+作業ツリーに commit していない変更がある・ローカルの Branch の先頭が merge された head と
+違う、 のどれかなら触らない。 リモートの Branch は GitHub が消すので触らない）。
 
 守ること:
 
@@ -56,7 +56,10 @@ GitHub が消すので触らない）。
   ・`.ci-copy-allow` に書かれた写しは触らない
   ・正本の main に入っていない Pull Request（`--source`）からは同期しない
 
-状態の置き場は `~/.cache/mirumeai/sync-copies/`（`--state-dir` で変える）。
+状態の置き場は `~/.cache/mirumeai/sync-copies/`（`--state-dir` で変える）。 検査の道具の
+試験は、 状態の置き場の下（`w/<8 字>/job-NN/temp/…`）に Unix ソケットを作るので、 置き場の道が
+長いと、 ソケットの道の上限（107 バイト）を超えて落ちる。 置き場の道は 50 バイト以下にする
+（超えると注意を出す）。
 clone は Repository の別名の道（`clones/c1` など）に置く。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
@@ -69,6 +72,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -612,6 +616,20 @@ def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
     return touched
 
 
+#: 状態の置き場の道の長さの目安（バイト）。 これより長いと、 検査の道具の試験のソケットの道が
+#: 上限（107 バイト）に近づくので注意を出す
+STATE_DIR_MAX = 50
+
+
+def long_state_dir_note(state_dir: Path) -> "str | None":
+    n = len(str(state_dir).encode("utf-8"))
+    if n <= STATE_DIR_MAX:
+        return None
+    return (f"注意: 状態の置き場の道が長い（{n} バイト。 目安は {STATE_DIR_MAX} バイト以下）。 検査の道具の"
+            " 試験が、 Unix ソケットの道の上限（107 バイト）を超えて落ちることがあります。"
+            " 落ちたら、 短い道を --state-dir に渡してください")
+
+
 def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -619,7 +637,11 @@ def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     # 作る。 道が長いと、 その下に Unix ソケットを作る試験が上限〔107 バイト〕を超えて落ちる）
     work_root = ctx.run_dir.parents[1] / "w"
     work_root.mkdir(parents=True, exist_ok=True)
-    rc, text = ctx.rv(wt, head, Path(tempfile.mkdtemp(prefix="", dir=work_root)))
+    work = Path(tempfile.mkdtemp(prefix="", dir=work_root))
+    # 片付け（cleanup）で消せるよう、 この同期の検査の作業の置き場の名前を状態に残す
+    ctx.state.setdefault("targets", {}).setdefault(t.alias, {}).setdefault("rv_work", []).append(work.name)
+    ctx.save()
+    rc, text = ctx.rv(wt, head, work)
     # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）。
     # 検査の道具の段ごとの記録は、 状態の置き場の中の新しい dir に置く（システムの一時の場所に残さない）
     log.write_text(ctx.run.mask(text), encoding="utf-8")
@@ -740,7 +762,7 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
 
 
 def cleanup_one(ctx: Ctx, t: Target) -> str:
-    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch を片付ける。"""
+    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch と、 検査の作業の置き場を片付ける。"""
     run = ctx.run
     st = ctx.state.get("targets", {}).get(t.alias, {})
     if "pr" not in st:
@@ -766,6 +788,21 @@ def cleanup_one(ctx: Ctx, t: Target) -> str:
             raise Stop(f"ローカルの {br} の先頭が、 merge された head と違います（片付けません）")
         run(["git", "-C", t.clone, "worktree", "prune"])      # 手で消された作業ツリーの登録を外す
         run(["git", "-C", t.clone, "branch", "-D", br], what="作業 Branch の片付け")
+    # 検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す。
+    # 置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）
+    work_root = ctx.run_dir.parents[1] / "w"
+    for name in st.get("rv_work", []):
+        if not (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")):
+            continue
+        d = work_root / name
+        if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
+            continue
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。 作業ツリーと作業 Branch は片付け済み。"
+                       " 原因を直して同じ命令で続けてください）") from None
+    st.pop("rv_work", None)
     st["cleaned"] = head
     ctx.save()
     return f"片付けた（Pull Request #{st['pr']}・merge された head {head[:12]}）"
@@ -777,7 +814,8 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("plan", "計画を表示する（clone と fetch のほかは変えない）"),
                        ("apply", "Issue・Branch・commit・Required Verification・Draft の Pull Request まで進める"),
-                       ("cleanup", "merge された同期の Pull Request の作業ツリーとローカルの作業 Branch を片付ける")):
+                       ("cleanup", "merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・"
+                        "検査の作業の置き場を片付ける")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")
@@ -810,6 +848,9 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     else:
         state_dir.mkdir(parents=True, mode=0o700)
         os.chmod(state_dir, 0o700)                         # umask によらず 700
+    note = long_state_dir_note(state_dir)
+    if note:
+        say(note, err=True)
     run = Runner(run_dir / "logs" / "commands.log", sleep, mask)
     gh = lambda a, **k: run(["gh", *a], **k)                # noqa: E731
     try:

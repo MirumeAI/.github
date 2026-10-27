@@ -814,6 +814,83 @@ class SyncTest(unittest.TestCase):
         self.assertIn(f"ローカルの {br} の先頭が", out)
         self.assertNotEqual(git("-C", clone, "branch", "--list", br), "")
 
+    def test_apply_sees_untracked_files_in_the_worktree_whatever_the_git_config(self) -> None:
+        # status.showUntrackedFiles=no でも、 追跡していないファイルのある作業ツリーでは続けない（#118）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        git("-C", clone, "config", "status.showUntrackedFiles", "no")
+        (self.w.wt("pdm") / "notes.txt").write_text("x\n", encoding="utf-8")
+        rel = ".claude/hooks/guard-main.sh"
+        self.w.canon_commit(rel, v(rel, 3))                     # 正本が進み、 新しい commit が要る形
+        heads = self.w.remote_heads("PDM")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit していない変更", out)
+        self.assertEqual(self.w.remote_heads("PDM"), heads)
+        self.assertTrue((self.w.wt("pdm") / "notes.txt").exists())
+
+    def test_cleanup_prunes_a_worktree_removed_by_hand(self) -> None:
+        # 作業ツリーの dir を手で消しても（登録は残る）、 登録を外してから作業 Branch を消す（#118）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        br = pr["head"]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{br}"])
+        shutil.rmtree(self.w.wt("pdm"))
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("片付けた", out)
+        self.assertEqual(git("-C", clone, "branch", "--list", br), "")
+
+    def test_cleanup_removes_only_its_own_rv_work(self) -> None:
+        # 検査の作業の置き場（伏せていない段ごとの記録）は、 その同期のものだけを消す（#118）
+        made = []
+
+        def on_rv(wt):
+            made.append(sorted((self.w.state / "w").iterdir())[-1])
+        self.w.on_rv = on_rv
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 0)
+        work_root = self.w.state / "w"
+        other = work_root / "other"
+        other.mkdir()
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        names = {a: st["targets"][a]["rv_work"] for a in ("pdm", "dd")}
+        self.assertEqual(len(names["pdm"]), 1)
+        for a in ("pdm", "dd"):
+            (work_root / names[a][0] / "job-01").mkdir()
+            (work_root / names[a][0] / "job-01" / "step.log").write_text("伏せていない記録\n", encoding="utf-8")
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        code, out = self.w.main("cleanup", "--source", "97")
+        self.assertEqual(code, 0, out)
+        self.assertFalse((work_root / names["pdm"][0]).exists())
+        self.assertTrue((work_root / names["dd"][0]).exists(), "merge されていない同期の記録は残す")
+        self.assertTrue(other.exists(), "道具が作っていない dir には触らない")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        self.assertNotIn("rv_work", st["targets"]["pdm"])
+        self.assertEqual(len(made), 2)
+
+    def test_cleanup_does_not_follow_odd_rv_work_names(self) -> None:
+        # 状態に書かれた名前が 1 段の名前でなければ（../ など）、 消さない（#118）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        keep = self.w.base / "keep"
+        keep.mkdir()
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["rv_work"] += ["../../keep", str(keep), ".."]
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(keep.exists())
+        self.assertTrue(self.w.state.exists())
+
+    def test_a_long_state_dir_is_noted(self) -> None:
+        self.assertIsNone(S.long_state_dir_note(Path("/home/user/.cache/mirumeai/sync-copies")))
+        note = S.long_state_dir_note(Path("/home/user/" + "x" * 60 + "/sync-copies"))
+        self.assertIn("Unix ソケットの道の上限", note)
+        self.assertIn("--state-dir", note)
+
     def test_cleanup_without_state_stops(self) -> None:
         # 正本に入った --source でも、 状態が無ければ何を片付けるか分からないので止まる
         self.w.db["source_pr"]["98"] = dict(self.w.db["source_pr"]["97"])

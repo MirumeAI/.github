@@ -1050,6 +1050,54 @@ class SyncTest(unittest.TestCase):
         self.assertFalse((self.w.state / "w" / names[0]).exists())
         self.assertEqual(self.w.main("cleanup", "--source", "97", "--only", "pdm")[0], 0)
 
+    def _lock_is_held(self) -> bool:
+        """同じ --source の錠を、 待たずに取ろうとする（取れたら放して False）。"""
+        with open(self.w.state / "runs" / "github-97" / "lock", "a", encoding="utf-8") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return False
+
+    def test_the_lock_is_held_while_apply_and_cleanup_work(self) -> None:
+        # 錠は、 apply の検査の間も cleanup の片付けの間も取られたまま（取ってすぐ放す形にしない。 #129 の Reviewer A）
+        held = []
+        self.w.on_rv = lambda wt: held.append(("apply", self._lock_is_held()))
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+        real = shutil.rmtree
+
+        def rmtree(p, *a, **k):
+            held.append(("cleanup", self._lock_is_held()))
+            return real(p, *a, **k)
+        with mock.patch.object(S.shutil, "rmtree", side_effect=rmtree):
+            code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertEqual({k for k, _ in held}, {"apply", "cleanup"}, held)
+        self.assertTrue(all(v for _, v in held), f"作業の途中で錠が放されている: {held}")
+        self.assertFalse(self._lock_is_held(), "返った後は放す")
+
+    def test_the_lock_is_taken_before_the_state_is_read(self) -> None:
+        # 錠は状態を読む前に取る（読んだ後に取ると、 ほかの流れが書き換える前の状態で続けうる。 #129 の Reviewer A）。
+        # 読めば壊れる状態を置き、 錠を持ったまま流して、 読まずに止まることを見る
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        self.w.state_file().write_text("{", encoding="utf-8")
+        with open(self.w.state / "runs" / "github-97" / "lock", "a", encoding="utf-8") as f:
+            try:                                            # 待たない（放されていなければ、 すぐ落ちる）
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.fail("前に流した main が、 返った後も錠を放していない")
+            for cmd in ("cleanup", "apply"):
+                with self.subTest(cmd=cmd):
+                    try:
+                        code, out = self.w.main(cmd, "--source", "97", "--only", "pdm")
+                    except ValueError:
+                        self.fail(f"{cmd} が、 錠を取る前に状態を読んだ")
+                    self.assertEqual(code, 2, out)
+                    self.assertIn("同じ --source の apply か cleanup が流れています", out)
+
     def test_main_notes_a_long_state_dir(self) -> None:
         with mock.patch.object(S, "STATE_DIR_MAX", 1):
             code, out = self.w.main("plan")

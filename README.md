@@ -24,7 +24,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
 | `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
 
-- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・検査の作業の置き場（伏せていない段ごとの記録）を片付ける。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
+- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・検査の作業の置き場（伏せていない段ごとの記録）を片付ける。Pull Request ができる前に止まった同期と、merge されずに閉じた同期は、検査の作業の置き場だけを片付ける。同じ `--source` の `apply` と `cleanup` は同時に流せない。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
 - 守りの境に当たる変更（ガード `.claude/hooks/` とその回帰テスト、`.claude/settings.json` のフックと禁止、CI の守りの検査〔秘密の走査・顧客の値の混入・顧客の間の混入・写しの照合と `.ci-copy-allow`・Release の識別〕とそれを走らせる workflow など）を変える Pull Request は、merge の前に人の判断が要ります（一覧の正本は、development-docs の `02_github_workflow/pull_request_review.md` の「人の判断が要る変更」）
 - 開発の手順と判断の決まり（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です
 

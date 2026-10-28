@@ -20,6 +20,7 @@ GitHub は、 手元の bare repository と、 gh の代わりの小さな道具
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
@@ -924,6 +925,130 @@ class SyncTest(unittest.TestCase):
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
         self.assertEqual([p for p in (self.w.state / "w").iterdir()], [])
+
+    def _rv_work(self, alias: str) -> list:
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        return st["targets"][alias].get("rv_work", [])
+
+    def test_cleanup_removes_rv_work_of_a_sync_that_stopped_before_its_pr(self) -> None:
+        # 検査が FAIL して Pull Request を作る前に止まった同期も、 検査の作業の置き場だけを片付ける（#125）
+        self.w.rv_fail = {"PDM"}
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 1)
+        names = self._rv_work("pdm")
+        self.assertEqual(len(names), 1)
+        work = self.w.state / "w" / names[0]
+        (work / "job-01").mkdir()
+        (work / "job-01" / "step.log").write_text("伏せていない記録\n", encoding="utf-8")
+        clone = self.w.state / "clones" / "pdm"
+        br = json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]["pdm"]["branch"]
+        code, out = self.w.main("cleanup", "--source", "97")
+        self.assertEqual(code, 0, out)
+        self.assertIn("検査の作業の置き場を片付けた", out)
+        self.assertNoSecret(out)
+        self.assertFalse(work.exists())
+        self.assertEqual(self._rv_work("pdm"), [])
+        self.assertTrue(self.w.wt("pdm").exists(), "続きに使う作業ツリーは残す")
+        self.assertNotEqual(git("-C", clone, "branch", "--list", br), "", "作業 Branch は残す")
+        self.assertNotIn("cleaned", json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]["pdm"])
+        self.assertTrue(self._rv_work("dd"), "開いている同期の置き場は残す")
+        # 直して流し直すと、 続きから Pull Request まで進む
+        self.w.rv_fail = set()
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.w.db["prs"][f"{S.ORG}/PDM"]), 1)
+
+    def test_cleanup_removes_rv_work_of_a_closed_sync(self) -> None:
+        # merge されずに閉じた同期も、 検査の作業の置き場だけを片付ける。 作業ツリーと作業 Branch は残す（#125）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        names = self._rv_work("pdm")
+        clone = self.w.state / "clones" / "pdm"
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr["state"] = "CLOSED"
+        outside = self.w.base / "outside"
+        outside.mkdir()
+        (self.w.state / "w" / "link").symlink_to(outside)
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        st["targets"]["pdm"]["rv_work"] += ["link", "../../outside"]
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("merge されずに閉じた（検査の作業の置き場を片付けた", out)
+        self.assertFalse((self.w.state / "w" / names[0]).exists())
+        self.assertTrue(outside.is_dir(), "リンクと 1 段でない名前はたどらない（今と同じ条件）")
+        self.assertTrue(self.w.wt("pdm").exists())
+        self.assertNotEqual(git("-C", clone, "branch", "--list", pr["head"]), "")
+        self.assertNotIn("cleaned", json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]["pdm"])
+        # もう一度流しても、 片付けるものが無いと言うだけ
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("merge されずに閉じた（作業ツリーと作業 Branch は触らない）", out)
+
+    def test_cleanup_keeps_rv_work_of_an_open_sync(self) -> None:
+        # 開いている同期（まだ merge されていない）の置き場は、 今までどおり消さない
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        names = self._rv_work("pdm")
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertIn("まだ merge されていない", out)
+        self.assertTrue((self.w.state / "w" / names[0]).is_dir())
+        self.assertEqual(self._rv_work("pdm"), names)
+
+    def test_one_repository_stopping_keeps_its_rv_work_and_others_go_on(self) -> None:
+        # 複数の Repository の片付けの途中の 1 つが止まっても、 その Repository の置き場の名前は状態に残り、
+        # ほかの Repository は片付き、 流し直すと続きから片付ける（#125）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "dd,pdm,c2")[0], 0)
+        names = {a: self._rv_work(a) for a in ("dd", "pdm", "c2")}
+        for a, repo in (("dd", "development-docs"), ("pdm", "PDM"), ("c2", SECRET[1])):
+            pr = self.w.db["prs"][f"{S.ORG}/{repo}"][0]
+            pr.update(state="MERGED", headRefOid=self.w.remote_heads(repo)[f"refs/heads/{pr['head']}"])
+        real = shutil.rmtree
+        stuck = self.w.state / "w" / names["pdm"][0]
+
+        def rmtree(p, *a, **k):
+            if Path(p) == stuck:
+                raise PermissionError("x")
+            return real(p, *a, **k)
+        with mock.patch.object(S.shutil, "rmtree", side_effect=rmtree):
+            code, out = self.w.main("cleanup", "--source", "97")
+        self.assertEqual(code, 1, out)
+        self.assertNoSecret(out)
+        self.assertRegex(out, r"pdm +PDM: 止まりました — 検査の作業の置き場を消せません")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]
+        self.assertEqual(st["pdm"].get("rv_work"), names["pdm"], "止まった Repository の置き場の名前は残る")
+        self.assertNotIn("cleaned", st["pdm"])
+        self.assertTrue(stuck.is_dir())
+        for a in ("dd", "c2"):
+            self.assertNotIn("rv_work", st[a], a)
+            self.assertIn("cleaned", st[a], a)
+            self.assertFalse((self.w.state / "w" / names[a][0]).exists(), a)
+        code, out = self.w.main("cleanup", "--source", "97")
+        self.assertEqual(code, 0, out)
+        self.assertFalse(stuck.exists())
+        self.assertIn("cleaned", json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]["pdm"])
+
+    def test_apply_and_cleanup_do_not_run_at_the_same_time(self) -> None:
+        # 同じ --source の apply か cleanup が流れている間は、 もう一方は何もせずに止まる（#125）
+        self.w.rv_fail = {"PDM"}
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 1)
+        names = self._rv_work("pdm")
+        run_dir = self.w.state / "runs" / "github-97"
+        with open(run_dir / "lock", "a", encoding="utf-8") as f:
+            try:                                            # 待たない（放されていなければ、 すぐ落ちる）
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.fail("前に流した main が、 返った後も錠を放していない")
+            for cmd in ("cleanup", "apply"):
+                with self.subTest(cmd=cmd):
+                    code, out = self.w.main(cmd, "--source", "97", "--only", "pdm")
+                    self.assertEqual(code, 2, out)
+                    self.assertIn("同じ --source の apply か cleanup が流れています", out)
+            self.assertTrue((self.w.state / "w" / names[0]).is_dir())
+            self.assertEqual(self._rv_work("pdm"), names)
+        # 放した後は流せる（main は返るときに錠を放すので、 続けて流せる）
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertFalse((self.w.state / "w" / names[0]).exists())
+        self.assertEqual(self.w.main("cleanup", "--source", "97", "--only", "pdm")[0], 0)
 
     def test_main_notes_a_long_state_dir(self) -> None:
         with mock.patch.object(S, "STATE_DIR_MAX", 1):

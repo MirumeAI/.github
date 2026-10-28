@@ -607,6 +607,91 @@ class GateTest(Base):
             with self.subTest(look=look):
                 self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
 
+    def test_more_forms_of_marks_numbers_and_repositories(self) -> None:
+        # 字の間に空白・記号を入れた印・結合の字・`PR: 8` などの番号・略した Repository の書き方も照らす（#126）
+        h12 = self.w.head[:12]
+        for text in ("直した。 人の判断 (人の言葉のまま): x", "直した。 人の判断【人の言葉のまま】 x",
+                     "直した。 Human\u2013Adjudication", "直した。 Human **Adjudication**"):
+            with self.subTest(text=text):
+                self.assertStops(self.w.gate(summary=text), "人の判断の印", 2)
+        for text in ("直した。 Human\u2010Verification: PASS", "直した。 Hu\u0301man Verification",
+                     "直した。 Human\u2014Verification"):
+            with self.subTest(text=text):
+                self.assertStops(self.w.gate(summary=text), "人の確認（Human Verification）", 2)
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        for look in ("人の判断 (人の言葉のまま): x", "Human\u2010Verification\u2010 PASS", "Human Adjudication）: x"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+        rc, _, err = self.w.run(*base, "--look", "Human Adjudication（人の判断）の言葉の扱いを見てください")
+        self.assertEqual(rc, 0, err)
+        for words in (f"#7（head {h12}）と PR: 8 を承認します", f"#7（head {h12}）と PR 番号 8 を承認します",
+                      f"#7（head {h12}）と PR の番号は 8 を承認します", f"#7（head {h12}）と プルリク：8 を承認します",
+                      f"#7（head {h12}）と 8 番の PR を承認します", f"#7（head {h12}）と 8番目のプルリク を承認します",
+                      f"#7（head {h12}）と #1\u03018 を承認します", f"#7\u03018（head {h12}）を承認します",
+                      f"8・7 番の PR（head {h12}）を承認します", f"8 と 7 番の PR（head {h12}）を承認します",
+                      f"8、7 番目のプルリク（head {h12}）を承認します", f"7 番の PRESET（head {h12}）を承認します",
+                      f"8 番と 7 番の PR（head {h12}）を承認します", f"8番・7番の PR（head {h12}）を承認します",
+                      f"8 番、7 番目のプルリク（head {h12}）を承認します", f"8 番目と 7 番目の PR（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"MirumeAI/customer-synthetic-example#7（head {h12}）を承認します",
+                      f"MirumeAI/customer-synthetic-example #7（head {h12}）を承認します",
+                      f"mirumeai/customer-synthetic-example の #7（head {h12}）を承認します",
+                      f"other/development-docs#7（head {h12}）を承認します",
+                      f"other/development-docs #7（head {h12}）を承認します",
+                      f"#7（head {h12}）と éPDM の件を承認します",
+                      f"ＭｉｒｕｍｅＡＩ／ｃｕｓｔｏｍｅｒ＃7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
+        for words in (f"MirumeAI/development-docs#7（head {h12}）を承認します",
+                      f"mirumeai/Development-Docs #7（head {h12}）を承認します。",
+                      f"MirumeAI/development-docs. の #7（head {h12}）を承認します",
+                      f"PR: 7（head {h12}）を承認します", f"7 番の PR（head {h12}）を承認します",
+                      f"#7（head {h12}）を 2 番目の案で承認します", f"10/28 #7（head {h12}）を承認します",
+                      f"2026/10/28 #7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
+    def test_a_letter_with_a_mark_keeps_the_boundary(self) -> None:
+        # 結合の字を外すと `ö` が `o` になり、 すぐ後の別の head を見逃す。 外さない文でも照らす（#127 の Reviewer B）
+        h, h12 = self.w.head, self.w.head[:12]
+        other = next(x for x in ("abcdef012345", "fedcba987654") if not h.startswith(x))
+        for words in (f"#7（head {h12}）と ö{other} を承認します", f"#7（head {h12}）と o\u0308{other} を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "merge する head と違います")
+
+    def test_long_spaces_do_not_slow_the_check(self) -> None:
+        # 番号の前置きの後に長い空白が続いても、 照らしは遅くならない（#127 の Reviewer A・B）。
+        # 遅い形は止まらなくなるので、 子の処理で流して時間で切る
+        code = ("import importlib.util, sys, types\n"
+                f"spec = importlib.util.spec_from_file_location('g', {str(HERE / 'gate_record.py')!r})\n"
+                "g = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(g)\n"
+                "ctx = types.SimpleNamespace(slug='MirumeAI/development-docs', number=7, head='a' * 40)\n"
+                "for w in sys.argv[1:]:\n"
+                "    try:\n"
+                "        g.named_head(ctx, w)\n"
+                "    except g.Stop:\n"
+                "        pass\n")
+        sp = " " * 3000
+        words = [f"PR{sp}x", f"No.{sp}x", f"Pull Request{sp}の{sp}番号{sp}x", f"プルリク{sp}#{sp}x",
+                 f"8{sp}番{sp}の{sp}x", f"#7（head {'a' * 12}）PR{sp}"]
+        try:
+            r = subprocess.run([sys.executable, "-c", code, *words], capture_output=True, text=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            self.fail("長い空白で、 番号の照らしが 20 秒で終わらない")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_ambiguous_forms_stay_refused(self) -> None:
+        # 形だけで番号か日付・項目の番号かを決められないものは、 断る側に置く（#126。 人が言い直せば通る）。
+        # つなぐ区切り（`–`・`/`）の後ろは、 `#7–10`・`#7/10` の番号の並びと見分けられない。 `No.` は Pull Request の番号にも使う
+        h12 = self.w.head[:12]
+        for words in (f"#7 – 10/28（head {h12}）を承認します", f"#7 / 10/28（head {h12}）を承認します",
+                      f"#7（head {h12}）を承認します（No.1 の件）"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
     def test_dates_and_times_after_a_separator_are_not_numbers(self) -> None:
         # 区切りの後ろの日付と時刻で止めすぎない（#116）
         h12 = self.w.head[:12]

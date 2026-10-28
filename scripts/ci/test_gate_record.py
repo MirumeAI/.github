@@ -629,7 +629,9 @@ class GateTest(Base):
                       f"#7（head {h12}）と 8 番の PR を承認します", f"#7（head {h12}）と 8番目のプルリク を承認します",
                       f"#7（head {h12}）と #1\u03018 を承認します", f"#7\u03018（head {h12}）を承認します",
                       f"8・7 番の PR（head {h12}）を承認します", f"8 と 7 番の PR（head {h12}）を承認します",
-                      f"8、7 番目のプルリク（head {h12}）を承認します", f"7 番の PRESET（head {h12}）を承認します"):
+                      f"8、7 番目のプルリク（head {h12}）を承認します", f"7 番の PRESET（head {h12}）を承認します",
+                      f"8 番と 7 番の PR（head {h12}）を承認します", f"8番・7番の PR（head {h12}）を承認します",
+                      f"8 番、7 番目のプルリク（head {h12}）を承認します", f"8 番目と 7 番目の PR（head {h12}）を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
         for words in (f"MirumeAI/customer-synthetic-example#7（head {h12}）を承認します",

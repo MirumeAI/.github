@@ -127,8 +127,9 @@ NUMBER = re.compile(r"(?:(?:#|№|/pull/)\s*|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requ
 #: 番号を前に書いた形（`8 番の PR`・`8 番目のプルリク`）
 NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:PRs?|Pull[\s-]*Requests?|プルリク)"
                            r"(?![A-Za-z])", re.I)
-#: 番号を前に書いた形の前に並べた番号（`7・8 番の PR` の 7）。 番号の前から 1 つずつたどる（`$` は番号の前）
-BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:[・、,/&~〜\-–—−]|と|および|及び|や|から|または|"
+#: 番号を前に書いた形の前に並べた番号（`7・8 番の PR`・`7 番と 8 番の PR` の 7）。 番号の前から 1 つずつたどる
+#: （`$` は番号の前）。 前の番号の後の `番`（`番目`）の有無は問わない
+BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:番目?\s*)?(?:[・、,/&~〜\-–—−]|と|および|及び|や|から|または|"
                          r"(?:and|or)(?![A-Za-z]))\s*$", re.I)
 #: GitHub の略した書き方（`MirumeAI/<名前>#7`）。 Repository がこの Pull Request の Repository でなければ止める
 SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#\s*[0-9]", re.ASCII)

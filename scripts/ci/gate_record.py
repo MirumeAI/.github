@@ -119,10 +119,20 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 
 #: 人の判断の印の言葉と人の確認の言葉。 人の判断の欄（adjudication）のほかに書かせない（人の確認の言葉は、 人の判断の欄にも書かせない）
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
-#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`Pull Request 7`・`プルリク 7`・`№7`・URL の
-#: `/pull/7`。 元の文と NFKC にそろえた文の両方で照らす）
-NUMBER = re.compile(r"(?:#|№|/pull/|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requests?|プルリク(?:エスト)?|No\.)\s*[-#]?)\s*([0-9]+)",
-                    re.I)
+#: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`PR: 7`・`PR 番号 7`・`Pull Request 7`・`プルリク 7`・
+#: `№7`・URL の `/pull/7`。 元の文と NFKC にそろえた文の両方で照らす）。 空白の並びは、 字をはさまずに
+#: 2 つ続けない（長い空白で照らしが遅くならないように）
+NUMBER = re.compile(r"(?:(?:#|№|/pull/)\s*|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requests?|プルリク(?:エスト)?|No\.)"
+                    r"\s*(?:の\s*)?(?:番号\s*(?:[はが]\s*)?)?(?:[-#:]\s*)?)([0-9]+)", re.I)
+#: 番号を前に書いた形（`8 番の PR`・`8 番目のプルリク`）
+NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:PRs?|Pull[\s-]*Requests?|プルリク)"
+                           r"(?![A-Za-z])", re.I)
+#: 番号を前に書いた形の前に並べた番号（`7・8 番の PR`・`7 番と 8 番の PR` の 7）。 番号の前から 1 つずつたどる
+#: （`$` は番号の前）。 前の番号の後の `番`（`番目`）の有無は問わない
+BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:番目?\s*)?(?:[・、,/&~〜\-–—−]|と|および|及び|や|から|または|"
+                         r"(?:and|or)(?![A-Za-z]))\s*$", re.I)
+#: GitHub の略した書き方（`MirumeAI/<名前>#7`）。 Repository がこの Pull Request の Repository でなければ止める
+SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#\s*[0-9]", re.ASCII)
 #: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`・`#7 and 8`・`#7〜9`・`#7-8`・`#7 や 8`・`#7 & 8`）。
 #: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英字が続くもの（head の先頭）は番号に数えない
 MORE_NUMBER = re.compile(r"\s*(?P<sep>[・、,/&~〜\-–—−]|と|および|及び|や|から|または|(?:and|or)(?![A-Za-z]))\s*#?\s*([0-9]{1,6})"
@@ -202,22 +212,37 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
         raise Fatal(f"{what} は空でない 1 行の文で書いてください")
     if mention_ok:
         # 頼む文は GitHub に載せないので、 印の言葉に触れるのはよい。 記録の形（印の言葉の後に `:`）だけを断る
-        if re.search(_mark_re() + r"[\s*_~`]*[:\-–—]", _norm(text)):
+        if re.search(_mark_re() + r"[\W_]*?[:\-\u2010-\u2015\u2212]", _norm(text)):
             raise Fatal(f"{what} に、人の判断・人の確認の記録の形（`Human Adjudication:`・`Human Verification:` など）を"
                         "書かないでください（言葉に触れるだけなら書けます）")
         return text.strip()
     return _no_mark(text.strip(), what)
 
 
+#: 外さない結合の字（かなの濁点・半濁点。 `プルリク` などの字を変えないため）
+KEEP_MARKS = {"\u3099", "\u309a"}
+
+
+def _bare(text: str, form: str, strip: bool = True) -> str:
+    """書式の字（Cf。 ゼロ幅の空白など）を外して、 `form` で正規化する（番号・head・印の言葉を、 見えない字で割って
+    隠せないように）。 `strip` なら結合の字（Mn・Me）も外す（上に重なる字で割って隠せないように）。 結合の字は、
+    分けてから外す（`u` と U+0301 が `ú` の 1 字に合わさって残らないように）。"""
+    t = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    if strip:
+        t = "".join(c for c in unicodedata.normalize("NFD", t)
+                    if unicodedata.category(c) not in ("Mn", "Me") or c in KEEP_MARKS)
+    return unicodedata.normalize(form, t)
+
+
 def _norm(text: str) -> str:
     """印の言葉を照らす形（NFKC・大文字と小文字を区別しない・空白を 1 つに）。"""
-    bare = "".join(c for c in text if unicodedata.category(c) != "Cf")      # ゼロ幅の空白などで印の言葉を割れないように
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", bare)).casefold()
+    return re.sub(r"\s+", " ", _bare(text, "NFKC")).casefold()
 
 
 def _mark_re(marks=MARKS) -> str:
-    """印の言葉を探す正規表現（`_norm` した文に当てる。 語の間の空白・`-`・`_` の有無を問わない）。"""
-    return "(?:" + "|".join(r"[\s\-_]*".join(re.escape(w) for w in _norm(m).split()) for m in marks) + ")"
+    """印の言葉を探す正規表現（`_norm` した文に当てる）。 印の言葉の字（文字と数字）だけを並べ、 字の間の空白・記号・
+    括弧の有無を問わない（`人の判断 (人の言葉のまま)`・`Human–Verification`・`Human **Adjudication**` も印）。"""
+    return "(?:" + "|".join(r"[\W_]*".join(re.escape(c) for c in _norm(m) if c.isalnum()) for m in marks) + ")"
 
 
 def _no_mark(text: str, what: str) -> str:
@@ -422,18 +447,24 @@ def load_record(path: str, wt: Path) -> dict:
 def named_head(ctx: Ctx, words: str) -> str:
     """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。
 
-    元の文と、 全角を NFKC で半角にそろえた文の **両方** で、 番号・head・Repository の名前を探して
-    合わせる（そろえた文だけで探すと、 全角の字が隣に来て見えなくなる並びがある）。 16 進と
+    元の文と、 全角を NFKC で半角にそろえた文の **両方** で（それぞれ結合の字を外した文と外さない文で）、
+    番号・head・Repository の名前を探して合わせる（そろえた文だけで探すと、 全角の字が隣に来て見えなくなる並びがある）。 16 進と
     Repository の名前は大文字と小文字を区別しない。"""
     if re.search(_mark_re(("Human Verification",)), _norm(words)):
         raise Stop("人の判断の言葉に、人の確認（Human Verification）の言葉があります（人の確認は、人が自分で Pull Request に書く記録で、この道具の外）")
     if re.search(_mark_re(), _norm(words)):
         raise Stop("人の判断の言葉が Pull Request のコメントの形（Human Adjudication の印）です。この道具の外なので、決まりの形で手で書く")
-    # ゼロ幅の空白などの書式の字（Cf）は外してから照らす（番号や head を割って隠せないように）
-    bare = "".join(c for c in words if unicodedata.category(c) != "Cf")
-    texts = (bare, unicodedata.normalize("NFKC", bare))
+    # 書式の字（Cf）は外してから照らす。 結合の字（Mn・Me）は、 外した文と外さない文の両方で照らす（外すと、 上に
+    # 重ねて番号や head を割る形が見える。 外さないと、 `ö` のような字が head や名前の前の境のまま残る）
+    texts = tuple(dict.fromkeys(_bare(words, form, strip) for form in ("NFC", "NFKC") for strip in (False, True)))
     nums = set()
     for t in texts:
+        for m in NUMBER_BEFORE.finditer(t):
+            nums.add(int(m[1]))
+            end = m.start(1)
+            while (more := BEFORE_MORE.search(t, 0, end)):          # 前に並べた番号（`8・7 番の PR` の 8）
+                nums.add(int(more[1]))
+                end = more.start(1)
         for m in NUMBER.finditer(t):
             nums.add(int(m[1]))
             pos = m.end()
@@ -450,10 +481,18 @@ def named_head(ctx: Ctx, words: str) -> str:
         for owner_repo in re.findall(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+", t, re.I):   # host の無い形も
             if owner_repo.casefold() != ctx.slug.casefold():
                 raise Stop("人の判断の言葉が、別の Repository を名指ししています（URL の Repository が違います）")
+    # 略した書き方（`<owner>/<名前>#7`）と、 この Pull Request の owner の下の名前（`MirumeAI/<名前>`）も同じ
+    owner, repo = ctx.slug.split("/", 1)
+    for t in texts:
+        # 数字だけの owner と名前（`10/28 #7` の日付）は、 Repository と読まない
+        named = [s for s in SLUG_NUMBER.findall(t) if not re.fullmatch(r"[0-9._-]+/[0-9._-]+", s)] + [
+            f"{owner}/{n}" for n in re.findall(
+            rf"(?<![\w.-]){re.escape(owner)}/([A-Za-z0-9_.-]+)", t, re.ASCII | re.I)]
+        if any(s.rstrip(".").casefold() != ctx.slug.casefold() for s in named):
+            raise Stop("人の判断の言葉が、別の Repository を名指ししています（`owner/名前` の Repository が違います）")
     if nums != {ctx.number}:
         raise Stop("人の判断の言葉が、この Pull Request（#番号）だけを名指ししていません（番号だけの答え・別の Pull Request の判断は引かない。"
                    "Pull Request のコメントの形の人の判断は、この道具の外なので決まりの形で手で書く）")
-    repo = ctx.slug.split("/", 1)[1]
     # 区切りは ASCII で見る（Unicode の \w だと、 名前のすぐ後に和文が続くと見逃す）
     if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", t, re.ASCII | re.I) for n in KNOWN - {repo} for t in texts):
         raise Stop("人の判断の言葉が、別の Repository を名指ししています")

@@ -51,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 try:
@@ -63,6 +64,23 @@ TOOL_REL = "scripts/ci/run_required_verification.py"
 CANONICAL_SLUG = "MirumeAI/.github"
 EVENT = "pull_request"
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
+
+#: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
+#: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
+#: 孤立した surrogate（Cs）も、 出力の所で落ちないよう escape する
+BREAKING = ("Cc", "Cf", "Zl", "Zp", "Cs")
+
+
+def _show(name) -> str:
+    """出力に出す名前（workflow のファイル名・job・段・対象外の理由・止まるときの文）。 行を崩しうる字は
+    \\uXXXX（U+FFFF を超える字は \\UXXXXXXXX）にする。 表示だけに使い、 結果の鍵には使わない。"""
+    return "".join((f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
+                   if unicodedata.category(c) in BREAKING else c for c in str(name))
+
+#: job の id の形（GitHub と同じ）。 **これに合わない id は流さない**。 `/` を含む id は、 再利用
+#: workflow の中の job の鍵（`呼ぶ job/中の job`）と重なり、 落ちた job の結果を後の job の結果で
+#: 上書きして PASS にできた。 改行などの字で出力を崩す道もここで閉じる（#77 の Reviewer B）
+JOB_ID = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 #: 再利用 workflow は正本の main だけ。 ほかの Repository や枝を指すものは、
 #: 手元で同じものを取れる保証が無いので止める。
@@ -573,6 +591,11 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
             continue
         _check_keys(d, WORKFLOW_KEYS, wf)
         for jn, spec in (d.get("jobs") or {}).items():
+            if not isinstance(jn, str):
+                raise Unsupported(f"{wf} の job の id {jn!r} を、YAML が文字以外（真偽値・数など）に読みました。"
+                                  "引用符で囲んでください")
+            if not JOB_ID.fullmatch(jn):
+                raise Unsupported(f"{wf} の job の id {jn!r} は、GitHub の形（英字か _ で始まり、英数字・_・- だけ）ではありません")
             if not isinstance(spec, dict):
                 raise Unsupported(f"{wf} の job {jn} を読めません")
             needs = spec.get("needs") or []
@@ -589,6 +612,8 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
                     raise Unsupported(f"{m.group(1)} は workflow_call で動きません")
                 inputs = _inputs(on["workflow_call"] or {}, spec.get("with") or {})
                 for ij, ispec in (rw.get("jobs") or {}).items():
+                    if not (isinstance(ij, str) and JOB_ID.fullmatch(ij)):
+                        raise Unsupported(f"{m.group(1)} の job の id {ij!r} は、GitHub の形ではありません")
                     if not isinstance(ispec, dict):
                         raise Unsupported(f"{m.group(1)} の job {ij} を読めません")
                     ineeds = ispec.get("needs") or []
@@ -904,7 +929,7 @@ def main(argv: list | None = None) -> int:
         a.canonical = Path(_git(Path(a.canonical), "rev-parse", "--show-toplevel"))
         a.canonical_sha = _git(a.canonical, "rev-parse", "--verify", f"{a.canonical_ref}^{{commit}}")
     except Unsupported as e:
-        print(f"流せません: {e}（基準の ref が無いときは、 先に git fetch してください）", file=sys.stderr)
+        print(f"流せません: {_show(e)}（基準の ref が無いときは、 先に git fetch してください）", file=sys.stderr)
         return 2
     a.target_slug, a.origin_url = _slug(a.target)
     a.head_ref = _head_ref(a.target, a.head, a.head_sha)
@@ -935,7 +960,8 @@ def main(argv: list | None = None) -> int:
         _precheck(jobs, probe)
         pythons = {} if a.list else _python_map(plan.pythons, a.python)
     except Unsupported as e:
-        print(f"流せません: {e}", file=sys.stderr)
+        # 止まるときの文にも workflow のファイル名・job の名前が入る（行を崩しうる字を escape する。 #77）
+        print(f"流せません: {_show(e)}", file=sys.stderr)
         return 2
 
     print(f"===== Required Verification: {a.target_slug}")
@@ -946,11 +972,11 @@ def main(argv: list | None = None) -> int:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")
     for wf, why in plan.skipped:
-        print(f"対象外: {wf}（{why}）")
+        print(f"対象外: {_show(wf)}（{_show(why)}）")
     if a.list:
         for j in jobs:
-            print(f"  {j['workflow']} の job {j['name']}: 段 {len(j['spec']['steps'])}"
-                  + (f"・needs {j['needs']}" if j["needs"] else ""))
+            print(f"  {_show(j['workflow'])} の job {_show(j['name'])}: 段 {len(j['spec']['steps'])}"
+                  + (f"・needs {', '.join(_show(n) for n in j['needs'])}" if j["needs"] else ""))
         return 0
 
     if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
@@ -969,7 +995,7 @@ def main(argv: list | None = None) -> int:
             status = "failure" if "failure" in got else ("skipped" if "skipped" in got else "success")
             ex = Expr({**probe, "inputs": j["inputs"], "env": {}}, status)
             run_it = _cond(j.get("caller_if"), ex) and _cond(j["spec"].get("if"), ex)
-            label = f"{j['workflow']} の job {j['name']}"
+            label = f"{_show(j['workflow'])} の job {_show(j['name'])}"
             if not run_it:
                 outcome[key] = "skipped"
                 why = {"success": "条件で流さない", "skipped": "前の job が流れなかったので流さない",
@@ -981,12 +1007,12 @@ def main(argv: list | None = None) -> int:
             jlog.mkdir(parents=True)
             res = _run_job(j, probe, a, work / f"job-{idx:02d}", jlog, pythons, real_cache)
             outcome[key] = res["status"]
-            results[label] = res
+            results[key] = (label, res)            # 鍵は元の名前（表示の見出しは escape して重なりうる）
             print(f"\n{label}: {'PASS' if res['status'] == 'success' else 'FAIL'}（{time.monotonic() - t0:.0f} 秒）")
             for r in res["steps"]:
                 tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "")
                          if r["ran"] else "")
-                print(f"  {r['n']:02d} {r['result']:<8} {r['name']}（{r['secs']} 秒{tests}）")
+                print(f"  {r['n']:02d} {r['result']:<8} {_show(r['name'])}（{r['secs']} 秒{tests}）")
             if not a.keep:
                 _rmtree(work / f"job-{idx:02d}")
     except KeyboardInterrupt:
@@ -996,7 +1022,7 @@ def main(argv: list | None = None) -> int:
         if not a.keep:
             for p in work.glob("job-*"):
                 _rmtree(p)
-    ran = [s for r in results.values() for s in r["steps"] if s["result"] != "skipped"]
+    ran = [s for _, r in results.values() for s in r["steps"] if s["result"] != "skipped"]
     n_tests = sum(s["ran"] for s in ran)
     n_skip = sum(s["skipped_tests"] for s in ran)
     passed = all(v in ("success", "skipped") for v in outcome.values()) and bool(results)
@@ -1004,7 +1030,8 @@ def main(argv: list | None = None) -> int:
                "base": base_sha, "merge_base": merge_base, "head_has_base": has_base,
                "canonical_ref": a.canonical_ref, "canonical": a.canonical_sha,
                "tool_blob": tool_blob, "tool_same_as_canonical": tool_blob == canon_blob,
-               "passed": passed, "jobs": results, "skipped_workflows": plan.skipped}
+               "passed": passed, "jobs": [{"label": label, **res} for label, res in results.values()],
+               "skipped_workflows": plan.skipped}
     (logs / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     wfs = len({j["workflow"] for j in jobs})
     detail = (f"{a.target_slug} head {a.head_sha[:12]}・{base_note}・{canon_note}・{tool_note}・"
@@ -1016,7 +1043,7 @@ def main(argv: list | None = None) -> int:
         print("記録の行（PR に書く）:")
         print(f"{RECORD_PASS}（{detail}）")
     else:
-        failed = [f"{k} の段 {s['n']}" for k, r in results.items() for s in r["steps"]
+        failed = [f"{label} の段 {s['n']}" for label, r in results.values() for s in r["steps"]
                   if s["result"] in ("failed", "timeout")]
         print(f"結果: FAIL（{detail}。 落ちた段: {', '.join(failed) or '前の job が落ちた'}）")
     print(f"段ごとの記録: {logs}")

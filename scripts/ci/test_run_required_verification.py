@@ -562,6 +562,101 @@ class ReusableWorkflowTest(E2E):
                            "true / false")
 
 
+class DuplicateKeysTest(E2E):
+    """**同じ鍵が 2 回ある workflow は、 何も流す前に止める**（#131）。
+
+    YAML の読み手の既定は後の値で黙って上書きするので、 同じ job の id を 2 回書くと、
+    先の落ちる job が消えて PASS の記録が出ていた。
+    """
+
+    def _refused(self, body: str):
+        t = _repo(self.root, self.wf(body), {})
+        p = self.run_it(t)
+        self.assertRefused(p, "同じ鍵が 2 回あります")
+        self.assertNotIn(R.RECORD_PASS, p.stdout)
+
+    def test_a_job_written_twice_does_not_hide_the_failing_one(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """)
+
+    def test_a_key_written_twice_in_a_step_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+                    run: echo ok
+            """)
+
+    def test_a_top_level_key_written_twice_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """)
+
+    def test_a_reusable_workflow_with_a_key_written_twice_is_refused(self):
+        canon = _repo(self.root, self.wf("""\
+            on: {workflow_call: {}}
+            jobs:
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """, "common.yml"), {}, name="canon")
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              common:
+                uses: MirumeAI/.github/.github/workflows/common.yml@main
+            """), {})
+        p = self.run_it(t, canonical=canon)
+        self.assertRefused(p, "同じ鍵が 2 回あります")
+        self.assertIn("common.yml", p.stderr)
+
+    def test_broken_yaml_stops_without_a_traceback(self):
+        t = _repo(self.root, self.wf("on: pull_request\njobs: [\n"), {})
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("workflow を読めません", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+
+    def test_distinct_keys_and_merge_keys_still_load(self):
+        d = R._load_yaml(textwrap.dedent("""\
+            on: pull_request
+            x: &base {runs-on: ubuntu-latest}
+            jobs:
+              a: {<<: *base, steps: [{run: echo}]}
+              b: {<<: *base, steps: [{run: echo}]}
+            """), "w.yml")
+        self.assertEqual(sorted(d["jobs"]), ["a", "b"])
+        self.assertEqual(d["jobs"]["a"]["runs-on"], "ubuntu-latest")
+
+
 class ExprAndGlobTest(unittest.TestCase):
 
     def test_expressions(self):

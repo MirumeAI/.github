@@ -446,8 +446,39 @@ class Plan:
         self.pythons: set = set()
 
 
+def _unique_key_loader():
+    """同じ鍵が 2 回ある mapping で止まる読み手（#131）。
+
+    PyYAML の既定は、 後の値で黙って上書きする。 同じ job の id を 2 回書くと、 先の
+    落ちる job が消えて PASS になる（GitHub はこの workflow を受け付けない）。 鍵は
+    書いたとおりの鍵で照らし、 合わせる鍵（`<<`）は見ない。
+    """
+    class Loader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            seen = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    dup = key in seen
+                except TypeError:            # list などの鍵は、 下の組み立てが断る
+                    continue
+                if dup:
+                    raise yaml.constructor.ConstructorError(
+                        None, None, f"同じ鍵が 2 回あります: {key!r}", key_node.start_mark)
+                seen.add(key)
+            return super().construct_mapping(node, deep=deep)
+    return Loader
+
+
 def _load_yaml(text: str, where: str) -> dict:
-    d = yaml.safe_load(text)
+    try:
+        d = yaml.load(text, Loader=_unique_key_loader())
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        line = f"・{mark.line + 1} 行目" if mark is not None else ""
+        raise Unsupported(f"{where}: workflow を読めません（{getattr(e, 'problem', None) or 'YAML の誤り'}{line}）") from None
     if not isinstance(d, dict):
         raise Unsupported(f"{where}: workflow を読めません")
     if True in d and "on" not in d:          # YAML 1.1 では on: が true になる

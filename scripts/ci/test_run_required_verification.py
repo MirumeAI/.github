@@ -569,10 +569,10 @@ class DuplicateKeysTest(E2E):
     先の落ちる job が消えて PASS の記録が出ていた。
     """
 
-    def _refused(self, body: str):
+    def _refused(self, body: str, word: str = "同じ鍵が 2 回あります"):
         t = _repo(self.root, self.wf(body), {})
         p = self.run_it(t)
-        self.assertRefused(p, "同じ鍵が 2 回あります")
+        self.assertRefused(p, word)
         self.assertNotIn(R.RECORD_PASS, p.stdout)
 
     def test_a_job_written_twice_does_not_hide_the_failing_one(self):
@@ -645,16 +645,71 @@ class DuplicateKeysTest(E2E):
         self.assertIn("workflow を読めません", p.stderr)
         self.assertNotIn("Traceback", p.stderr)
 
-    def test_distinct_keys_and_merge_keys_still_load(self):
+    def test_on_and_quoted_on_hide_nothing(self):
+        """`on:` は YAML 1.1 で True になり、 `"on":` とは別の鍵に読める。 GitHub では同じ鍵。"""
+        t = _repo(self.root, {
+            ".github/workflows/new.yml": """\
+                on: pull_request
+                "on": push
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: exit 1
+                """,
+            ".github/workflows/ci.yml": """\
+                on: pull_request
+                jobs:
+                  ok:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ok
+                """}, {})
+        p = self.run_it(t)
+        self.assertRefused(p, "同じ鍵が 2 回あります: 'on'")
+        self.assertNotIn(R.RECORD_PASS, p.stdout)
+
+    def test_a_job_written_twice_through_a_merge_key_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              <<: {j: {runs-on: ubuntu-latest, steps: [{run: exit 1}]}}
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """, "合わせる鍵（<<）は使えません")
+
+    def test_merge_keys_are_refused_in_every_form(self):
+        for text in (
+                # 合わせる中で鍵が重なる
+                "on: pull_request\njobs:\n  <<: {j: {runs-on: x, steps: [{run: exit 1}]}, "
+                "j: {runs-on: x, steps: [{run: echo}]}}\n",
+                # <<: を 2 回書く
+                "on: pull_request\njobs:\n  <<: {j: {runs-on: x, steps: [{run: exit 1}]}}\n"
+                "  <<: {j: {runs-on: x, steps: [{run: echo}]}}\n",
+                # 段の中で、 合わせた run を明示の run が上書きする
+                "on: pull_request\njobs:\n  j:\n    runs-on: x\n    steps:\n"
+                "      - <<: {run: exit 1}\n        run: echo ok\n"):
+            with self.subTest(text=text), self.assertRaises(R.Unsupported) as cm:
+                R._load_yaml(text, "w.yml")
+            self.assertRegex(str(cm.exception), "合わせる鍵|同じ鍵が 2 回")
+
+    def test_values_that_cannot_be_read_stop_without_a_traceback(self):
+        for text in ("on: pull_request\njobs: !!int abc\n", "on: pull_request\nx: 2026-02-30\n"):
+            with self.subTest(text=text), self.assertRaises(R.Unsupported):
+                R._load_yaml(text, "w.yml")
+
+    def test_distinct_keys_and_whole_node_aliases_still_load(self):
         d = R._load_yaml(textwrap.dedent("""\
             on: pull_request
-            x: &base {runs-on: ubuntu-latest}
+            x: &steps [{run: echo}]
             jobs:
-              a: {<<: *base, steps: [{run: echo}]}
-              b: {<<: *base, steps: [{run: echo}]}
+              a: {runs-on: ubuntu-latest, steps: *steps}
+              b: {runs-on: ubuntu-latest, steps: *steps}
             """), "w.yml")
         self.assertEqual(sorted(d["jobs"]), ["a", "b"])
-        self.assertEqual(d["jobs"]["a"]["runs-on"], "ubuntu-latest")
+        self.assertEqual(d["jobs"]["b"]["steps"], [{"run": "echo"}])
 
 
 class ExprAndGlobTest(unittest.TestCase):

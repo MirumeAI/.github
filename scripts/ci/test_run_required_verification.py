@@ -475,6 +475,117 @@ class FiltersTest(E2E):
         self.assertRefused(p, "制御文字")
 
 
+class NamesInTheOutputTest(E2E):
+    """名前（workflow のファイル名・job・段）に行を崩しうる字があっても、 出力の 1 行に収まり、
+    記録の行に似た行が独立しない（#77）。"""
+
+    def test_names_are_escaped(self):
+        fake = R.RECORD_PASS + "（偽の記録）"
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: "段\\u2028{fake}"
+                    run: echo ran
+                  - name: "向き\\u202e\\u0085{fake}"
+                    run: echo ran
+            """, name="b\u2029c.yml") | self.wf("on: push\njobs: {}\n", name="d\u2028e.yml"),
+            {"a.txt": "x"}, name="t13")
+        for extra in ((), ("--list",)):
+            with self.subTest(extra=extra):
+                p = self.run_it(t, *extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                lines = p.stdout.splitlines()                  # 復帰・U+0085・U+2028・U+2029 でも分ける
+                forged = [ln for ln in lines if ln.lstrip().startswith(R.RECORD_PASS) and "偽の記録" in ln]
+                self.assertEqual(forged, [], "記録の行に似た行が独立した")
+                self.assertTrue(all(R.unicodedata.category(c) not in R.BREAKING for c in p.stdout
+                                    if c not in "\n"), "行を崩しうる字が出力に残った")
+                self.assertIn("b\\u2029c.yml", p.stdout)
+                self.assertIn("対象外: d\\u2028e.yml", p.stdout)
+                if not extra:
+                    self.assertIn("段\\u2028" + R.RECORD_PASS, p.stdout)
+                    self.assertIn("向き\\u202e\\u0085" + R.RECORD_PASS, p.stdout)
+                    self.assertEqual(sum(ln.startswith(R.RECORD_PASS) for ln in lines), 1)
+
+    def test_refusals_escape_names_too(self):
+        """止まるときの文（stderr・終了コード 2）にも、 記録の行に似た行が独立しない（#77）。"""
+        fake = R.RECORD_PASS + "（偽の記録）"
+        cases = {
+            "needs に無い job": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    needs: ["n\\n{fake}"]
+                    steps:
+                      - run: echo ran
+                """),
+            "知らない鍵": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    "k\\n{fake}": 1
+                    steps:
+                      - run: echo ran
+                """),
+            "流す workflow が無い": self.wf("on: push\njobs: {}\n", name=f"x\u2028{fake}.yml"),
+        }
+        for i, (name, files) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                t = _repo(self.root, files, {"a.txt": "x"}, name=f"t14{i}")
+                p = self.run_it(t)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                for out in (p.stdout, p.stderr):
+                    self.assertEqual([ln for ln in out.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_jobs_whose_headings_look_the_same_are_not_merged(self):
+        """見出しが同じになる別の job（U+2028 のファイル名と、 文字どおり \\u2028 と書いたファイル名）を、
+        1 つに数えない（結果の鍵は元の名前。 #77）。"""
+        body = "on: pull_request\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo one\n"
+        two = body + "      - run: echo two\n"
+        t = _repo(self.root, self.wf(body, name="a\u2028.yml") | self.wf(two, name="a\\u2028.yml"),
+                  {"a.txt": "x"}, name="t16")
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("workflow 2・job 2・段 3", p.stdout)
+
+    def test_job_ids_that_yaml_reads_as_other_types_are_refused_with_a_reason(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              yes:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """), {"a.txt": "x"}, name="t17")
+        self.assertRefused(self.run_it(t), "文字以外")
+
+    def test_job_ids_must_be_the_github_form(self):
+        """job の id は GitHub の形に限る。 `/` を含む id で、 再利用 workflow の中の job の鍵と重ねて、
+        落ちた job の結果を上書きする道を閉じる（#77 の Reviewer B）。"""
+        for i, jid in enumerate(('"a\\nb"', "'a\\u000ab'", '"x/y"', '"1abc"', '"a b"')):
+            with self.subTest(jid=jid):
+                t = _repo(self.root, self.wf(f"""\
+                    on: pull_request
+                    jobs:
+                      {jid}:
+                        runs-on: ubuntu-latest
+                        steps:
+                          - run: echo ran
+                    """), {"a.txt": "x"}, name=f"t15{i}")
+                p = self.run_it(t)
+                self.assertRefused(p, "GitHub の形")
+                self.assertEqual([ln for ln in p.stderr.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_show_keeps_ordinary_names(self):
+        self.assertEqual(R._show("検査 の job unit（3.10）"), "検査 の job unit（3.10）")
+        self.assertEqual(R._show("a\tb\x7fc\ufeffd"), "a\\u0009b\\u007fc\\ufeffd")
+        self.assertEqual(R._show("x\ud800y\U000e0001z"), "x\\ud800y\\U000e0001z")   # 孤立した surrogate・U+FFFF を超える書式の字
+
+
 class EnvironmentTest(E2E):
 
     def test_home_is_isolated_and_only_listed_variables_are_passed(self):
@@ -560,6 +671,21 @@ class ReusableWorkflowTest(E2E):
             "t1", "with: {flag: \"${{ github.event_name == 'pull_request' }}\"}"), canonical=canon), "式")
         self.assertRefused(self.run_it(self._caller("t2", "with: {flag: yes-please}"), canonical=canon),
                            "true / false")
+
+
+    def test_reusable_inner_job_ids_must_be_the_github_form(self):
+        """再利用 workflow の中の job の id も、 GitHub の形に限る（#77 の Reviewer B）。"""
+        canon = _repo(self.root, {
+            ".github/workflows/basic-checks-reusable.yml": """\
+                on:
+                  workflow_call: {}
+                jobs:
+                  "in/ner":
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ran
+                """}, {}, name="canonical-bad")
+        self.assertRefused(self.run_it(self._caller("t3"), canonical=canon), "GitHub の形")
 
 
 class DuplicateKeysTest(E2E):

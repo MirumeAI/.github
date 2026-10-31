@@ -73,8 +73,11 @@ BREAKING = ("Cc", "Cf", "Zl", "Zp", "Cs")
 
 def _show(name) -> str:
     """出力に出す名前（workflow のファイル名・job・段・対象外の理由・止まるときの文）。 行を崩しうる字は
-    \\uXXXX（U+FFFF を超える字は \\UXXXXXXXX）にする。 表示だけに使い、 結果の鍵には使わない。"""
-    return "".join((f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
+    \\uXXXX（U+FFFF を超える字は \\UXXXXXXXX）にする。 `\\` そのものも `\\\\` にして、 名前に
+    文字どおり書いた `\\u2028` と、 escape した本物の U+2028 を見分けられるようにする（#121）。
+    表示だけに使い、 結果の鍵には使わない。"""
+    return "".join("\\\\" if c == "\\" else
+                   (f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}")
                    if unicodedata.category(c) in BREAKING else c for c in str(name))
 
 #: job の id の形（GitHub と同じ）。 **これに合わない id は流さない**。 `/` を含む id は、 再利用
@@ -490,6 +493,14 @@ def _unique_key_loader():
                         None, None, f"同じ鍵が 2 回あります: {shown!r}", key_node.start_mark)
                 seen.add(key)
             return super().construct_mapping(node, deep=deep)
+
+    def refuse(loader, node):
+        raise yaml.constructor.ConstructorError(
+            None, None, f"YAML の型 !!{node.tag.rsplit(':', 1)[-1]} は使えません", node.start_mark)
+    # 明示の YAML 1.1 の型は知らない書き方として断る（`on: !!omap [...]` は list に読まれ、
+    # その workflow が「対象外」として飛ばされた。 #121）。 鍵の型の推し量り（真偽値・数・日付）は読む
+    for tag in ("omap", "pairs", "set", "binary"):
+        Loader.add_constructor(f"tag:yaml.org,2002:{tag}", refuse)
     return Loader
 
 
@@ -650,8 +661,12 @@ def plan_for(target: Path, head: str, canonical: Path, canonical_sha: str, base_
                     raise Unsupported(f"{m.group(1)} は workflow_call で動きません")
                 inputs = _inputs(on["workflow_call"] or {}, spec.get("with") or {})
                 for ij, ispec in (rw.get("jobs") or {}).items():
-                    if not (isinstance(ij, str) and JOB_ID.fullmatch(ij)):
-                        raise Unsupported(f"{m.group(1)} の job の id {ij!r} は、GitHub の形ではありません")
+                    if not isinstance(ij, str):          # 呼ぶ側の job と同じ文にする（#121）
+                        raise Unsupported(f"{m.group(1)} の job の id {ij!r} を、YAML が文字以外（真偽値・数など）に"
+                                          "読みました。引用符で囲んでください")
+                    if not JOB_ID.fullmatch(ij):
+                        raise Unsupported(f"{m.group(1)} の job の id {ij!r} は、GitHub の形（英字か _ で始まり、"
+                                          "英数字・_・- だけ）ではありません")
                     if not isinstance(ispec, dict):
                         raise Unsupported(f"{m.group(1)} の job {ij} を読めません")
                     ineeds = ispec.get("needs") or []
@@ -947,6 +962,25 @@ def _head_ref(target: Path, head: str, head_sha: str) -> str:
 
 # ------------------------------------------------------------------ main
 def main(argv: list | None = None) -> int:
+    """捕まえていない誤りも、 traceback で落とさず、 行を崩さない 1 行で止める（#121）。 PASS の記録の行は出さない。
+    job を流し始める前なら流せない（終了コード 2。 何も流していない）。 流し始めた後なら FAIL（1）とし、
+    落ちた job を「流せない」に隠さない。"""
+    state = {"running": False}
+    try:
+        return _main(argv, state)
+    except Exception as e:
+        # 例外の文に URL の資格情報（://user:pass@）があっても出さない（host の前の最後の @ まで。
+        # git は最初の @ で区切るので、 それより広く伏せる）
+        text = re.sub(r"://[^/\s]*@", "://***@", str(e))
+        why = f"{type(e).__name__}: {_show(text)}"
+        if state["running"]:
+            print(f"\n結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: {why}）")
+            return 1
+        print(f"流せません（道具の中の誤り）: {why}", file=sys.stderr)
+        return 2
+
+
+def _main(argv: list | None, state: dict) -> int:
     ap = argparse.ArgumentParser(description="merge の前提の検査を、 PR で動く workflow と同じ段で手元で流す")
     ap.add_argument("repo", help="検査する Repository の clone（作業ツリーの未 commit の変更は入らない）")
     ap.add_argument("--head", default="HEAD", help="検査する commit（既定 HEAD。 merge する PR の head）")
@@ -1026,6 +1060,7 @@ def main(argv: list | None = None) -> int:
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     results, outcome = {}, {}
     t_all = time.monotonic()
+    state["running"] = True             # ここから先の思わぬ誤りは FAIL（main）
     try:
         for idx, j in enumerate(jobs, 1):
             key = (j["workflow"], j["name"])
@@ -1070,7 +1105,9 @@ def main(argv: list | None = None) -> int:
                "tool_blob": tool_blob, "tool_same_as_canonical": tool_blob == canon_blob,
                "passed": passed, "jobs": [{"label": label, **res} for label, res in results.values()],
                "skipped_workflows": plan.skipped}
-    (logs / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 名前に孤立した surrogate があっても落ちずに書く（JSON の文字列の中で \udXXX の escape になる。 #121）
+    (logs / "summary.json").write_bytes(
+        json.dumps(summary, ensure_ascii=False, indent=2).encode("utf-8", "backslashreplace"))
     wfs = len({j["workflow"] for j in jobs})
     detail = (f"{a.target_slug} head {a.head_sha[:12]}・{base_note}・{canon_note}・{tool_note}・"
               f"workflow {wfs}・job {len(results)}・段 {len(ran)}・試験 {n_tests} 件・飛ばした試験 {n_skip} 件・"

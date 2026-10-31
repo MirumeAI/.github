@@ -962,16 +962,23 @@ def _head_ref(target: Path, head: str, head_sha: str) -> str:
 
 # ------------------------------------------------------------------ main
 def main(argv: list | None = None) -> int:
-    """捕まえていない誤りも、 traceback で落とさず、 行を崩さない 1 行で止める（終了コード 2。 #121）。
-    PASS の記録の行は出さない。"""
+    """捕まえていない誤りも、 traceback で落とさず、 行を崩さない 1 行で止める（#121）。 PASS の記録の行は出さない。
+    job を流し始める前なら流せない（終了コード 2。 何も流していない）。 流し始めた後なら FAIL（1）とし、
+    落ちた job を「流せない」に隠さない。"""
+    state = {"running": False}
     try:
-        return _main(argv)
+        return _main(argv, state)
     except Exception as e:
-        print(f"流せません（道具の中の誤り）: {type(e).__name__}: {_show(e)}", file=sys.stderr)
+        # 例外の文に URL の資格情報（://user:pass@）があっても出さない
+        why = f"{type(e).__name__}: {_show(re.sub(r'://[^/@\s]+@', '://***@', str(e)))}"
+        if state["running"]:
+            print(f"\n結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: {why}）")
+            return 1
+        print(f"流せません（道具の中の誤り）: {why}", file=sys.stderr)
         return 2
 
 
-def _main(argv: list | None = None) -> int:
+def _main(argv: list | None, state: dict) -> int:
     ap = argparse.ArgumentParser(description="merge の前提の検査を、 PR で動く workflow と同じ段で手元で流す")
     ap.add_argument("repo", help="検査する Repository の clone（作業ツリーの未 commit の変更は入らない）")
     ap.add_argument("--head", default="HEAD", help="検査する commit（既定 HEAD。 merge する PR の head）")
@@ -1051,6 +1058,7 @@ def _main(argv: list | None = None) -> int:
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     results, outcome = {}, {}
     t_all = time.monotonic()
+    state["running"] = True             # ここから先の思わぬ誤りは FAIL（main）
     try:
         for idx, j in enumerate(jobs, 1):
             key = (j["workflow"], j["name"])

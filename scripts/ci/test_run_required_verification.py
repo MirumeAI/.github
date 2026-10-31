@@ -882,9 +882,10 @@ class Backlog121Test(E2E):
                      "on: pull_request\nx: !!pairs [{a: 1}]\n",
                      "on: pull_request\nx: !!set {a: null}\n",
                      "on: pull_request\nx: !!binary aGk=\n"):
-            with self.subTest(text=text), self.assertRaises(R.Unsupported) as cm:
-                R._load_yaml(text, "w.yml")
-            self.assertIn("YAML の型", str(cm.exception))
+            with self.subTest(text=text):
+                with self.assertRaises(R.Unsupported) as cm:
+                    R._load_yaml(text, "w.yml")
+                self.assertIn("YAML の型", str(cm.exception))
         # 型の推し量り（真偽値・数・日付）は今までどおり読む
         d = R._load_yaml("on: pull_request\nx: {a: true, b: 1, c: 2026-10-31}\n", "w.yml")
         self.assertEqual(d["x"]["a"], True)
@@ -907,6 +908,41 @@ class Backlog121Test(E2E):
         self.assertIn("道具の中の誤り", text)
         self.assertNotIn("Traceback", text)
         self.assertEqual(len(text.strip().splitlines()), 1, "1 行で止まる（記録の行を作らない）")
+
+    def test_an_unexpected_error_after_jobs_started_is_a_fail_not_unrunnable(self):
+        # 落ちた job の後の誤りを「流せない（2）」にすると、 FAIL が代えのきく側に隠れる（#134 の B）
+        import contextlib
+        import io
+        import re
+        from unittest import mock
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              b:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+        failed = {"status": "failure", "steps": [{"n": 1, "name": "x", "result": "failed", "secs": 0.0,
+                                                  "ran": 0, "skipped_tests": 0}]}
+        broken = RuntimeError("壊れた https://u:secret@example.invalid/x\n" + R.RECORD_PASS)
+        for name, effects in (("落ちた job の後", [failed, broken]), ("最初の job で", [broken])):
+            with self.subTest(name):
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.object(R, "_run_job", side_effect=effects), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t),
+                                 "--canonical-ref", "main", "--work", str(self.root / f"work-{name}")])
+                text = out.getvalue() + err.getvalue()
+                self.assertEqual(rc, 1, text)
+                self.assertRegex(text, r"(?m)^結果: FAIL（job を流し始めた後に道具の中の誤り")
+                self.assertNotRegex(text, rf"(?m)^\s*{re.escape(R.RECORD_PASS)}")
+                self.assertNotIn("Traceback", text)
+                self.assertNotIn("secret", text, "URL の資格情報を出さない")
 
 
 class ExprAndGlobTest(unittest.TestCase):

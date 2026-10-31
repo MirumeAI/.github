@@ -119,30 +119,34 @@ TAIL = ("顧客の名前と値は、報告に写さないでください。GitHu
 
 #: 人の判断の印の言葉と人の確認の言葉。 人の判断の欄（adjudication）のほかに書かせない（人の確認の言葉は、 人の判断の欄にも書かせない）
 MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human Verification")
-#: 番号の区切りに使うダッシュ（`-`・U+2010〜U+2015 の `‐`〜`―`・`−`）。 文字の集まり（`[...]`）の中に置く形
-DASHES = "\\-\u2010-\u2015\u2212"
+#: 番号の区切りに使うダッシュ（`-`・U+2010〜U+2015 の `‐`〜`―`・`−`・長音の `ー`〔半角の `ｰ` は NFKC で `ー`〕）。
+#: 文字の集まり（`[...]`）の中に置く形
+DASHES = "\\-\u2010-\u2015\u2212\u30fc"
 #: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`PR ― 7`・`PR: 7`・`PR = 7`・`PR 番号 7`・`PR ナンバー 7`・
 #: `Pull Request 7`・`Pull Request number 7`・`プルリク 7`・`№7`・URL の `/pull/7`。 元の文と NFKC にそろえた文の
 #: 両方で照らす）。 空白の並びは、 字をはさまずに 2 つ続けない（長い空白で照らしが遅くならないように）
 NUMBER = re.compile(r"(?:(?:#|№|/pull/)\s*|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requests?|プルリク(?:エスト)?|No\.)"
                     r"\s*(?:の\s*)?(?:(?:番号|ナンバー|numbers?|num\.?|no\.?)\s*(?:[はが]\s*)?)?"
-                    r"(?:[#:=ー" + DASHES + r"]\s*)?)([0-9]+)", re.I)
+                    r"(?:[#:=" + DASHES + r"]\s*)?)([0-9]+)", re.I)
 #: 番号を前に書いた形（`8 番の PR`・`8 番目のプルリク`）
 NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:PRs?|Pull[\s-]*Requests?|プルリク)"
                            r"(?![A-Za-z])", re.I)
 #: 番号を前に書いた形の前に並べた番号（`7・8 番の PR`・`7 番と 8 番の PR` の 7）。 番号の前から 1 つずつたどる
 #: （`$` は番号の前）。 前の番号の後の `番`（`番目`）の有無は問わない
 BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:番目?\s*)?(?:[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|"
-                         r"または|(?:and|or)(?![A-Za-z]))\s*$", re.I)
-#: GitHub の略した書き方（`MirumeAI/<名前>#7`・`<owner> / <名前> #7`・`<owner>/<名前> の #7`・`<owner>/<名前> PR 7`）。
-#: Repository がこの Pull Request の Repository でなければ止める
-SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+)\s*/\s*([A-Za-z0-9_.-]+)\s*(?:の\s*)?(?:[#№]|PR|Pull|プルリク)",
+                         r"または|(?:and|or|to)(?![A-Za-z]))\s*$", re.I)
+#: 番号の前置き（Repository の名前の後ろに来ると、 その名前を Pull Request の Repository と読む）
+PR_WORDS = r"(?:[#№]|PR|Pull|プルリク|No\.)"
+#: GitHub の略した書き方（`MirumeAI/<名前>#7`・`<owner> / <名前> #7`・`<owner>/<名前> の #7`・`<owner>/<名前>: #7`・
+#: `<owner>/<名前> で PR 7`・`<owner>/<名前> No.7`）。 Repository がこの Pull Request の Repository でなければ止める
+SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+)\s*/\s*([A-Za-z0-9_.-]+)\s*(?::\s*)?(?:[のでに]\s*)?" + PR_WORDS,
                          re.ASCII | re.I)
-#: owner の後の名前として読まない言葉（`MirumeAI の PR #7`・`MirumeAI の No.7` の `PR`・`No.7`）
+#: owner の後に `の`・`:`・空白で続く言葉のうち、 名前として読まないもの（`MirumeAI の PR #7`・`MirumeAI の No.7` の
+#: `PR`・`No.7` と、 数字だけの言葉）。 `/` で続く形（`MirumeAI/PR-7`）には当てない（main と同じく止める）
 NOT_A_NAME = re.compile(r"(?:prs?|pull|no\.?|nums?\.?|numbers?)[0-9._-]*|[0-9._-]+", re.ASCII | re.I)
 #: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`・`#7 and 8`・`#7〜9`・`#7-8`・`#7 や 8`・`#7 & 8`）。
 #: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英字が続くもの（head の先頭）は番号に数えない
-MORE_NUMBER = re.compile(r"\s*(?P<sep>[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|または|(?:and|or)(?![A-Za-z]))"
+MORE_NUMBER = re.compile(r"\s*(?P<sep>[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|または|(?:and|or|to)(?![A-Za-z]))"
                          r"\s*#?\s*([0-9]{1,6})(?![0-9A-Za-z])", re.I)
 #: 区切りの後ろで、 並べた番号に数えない日付と時刻（`10/28`・`2026-10-28`・`10:30`・`10月28日` など）。
 #: 月は 1〜12・日は 1〜31・時は 0〜23・分は 0〜59 のときだけ日付と時刻とみなす（`13/14` は番号に数える）。
@@ -152,7 +156,7 @@ DATE_TIME = re.compile(r"(?:(?:19|20)[0-9]{2}[-/.](?P<ym>[0-9]{1,2})(?:[-/.](?P<
                        r"|(?=[0-9]{1,4}[年月日時分])(?:[0-9]{4}年)?(?:[0-9]{1,2}月)?(?:[0-9]{1,2}日)?(?:[0-9]{1,2}時)?"
                        r"(?:[0-9]{1,2}分)?")   # 和文の日付と時刻は、 年・月・日・時・分の続きを 1 つとして飛ばす
 #: 番号を範囲や続きとしてつなぐ区切り。 この後ろの数字は、 日付の形でも番号に数える（`#7/8/9`・`#7-8-9`）
-CHAIN_SEPS = set("/~〜-\u2010\u2011\u2012\u2013\u2014\u2015\u2212")
+CHAIN_SEPS = set("/~〜-\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u30fc")
 
 
 def _date_time_end(text: str, pos: int) -> "int | None":
@@ -228,10 +232,13 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
 
 
 #: 頼む文で、 印の言葉の後に来ると記録の形とみなすもの（`_norm` した文に当てる。 `Human Verification: PASS`・
-#: `Human Verification → PASS`・`Human Verification = PASS`・`Human Verification PASS`・`人の判断（人の言葉のまま）「x」`）。
+#: `Human Verification → PASS`・`Human Verification = PASS`・`Human Verification PASS`・`Human Verification ✓`・
+#: `Human Verification は PASS`・`Human Verification 結果: PASS`・`人の判断（人の言葉のまま）「x」`）。
 #: 迷ったら断る側に置く（言葉に触れるだけの文は、 印の言葉の後に字〔`が`・`の` など〕が来るので通る）
-RECORD_AFTER_MARK = (r"[\W_]*?(?:[:=>|「『\"“" + DASHES + r"\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff]"
-                     r"|pass|fail|ok|lgtm|approv|merge|done|済|合格|承認|完了)")
+RECORD_AFTER_MARK = (r"[\W_]*?(?:(?:は|結果|result)[\W_]*?)?"
+                     r"(?:[:=>|「『\"“" + DASHES + r"\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff"
+                     r"\u25b6\u25ba\u2611\u2705\u2713-\u2718\u274c]"
+                     r"|pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承認|完了|確認済|確認した)")
 
 #: 外さない結合の字（かなの濁点・半濁点。 `プルリク` などの字を変えないため）
 KEEP_MARKS = {"\u3099", "\u309a"}
@@ -492,17 +499,20 @@ def named_head(ctx: Ctx, words: str) -> str:
                 pos = end
     # URL の番号は、 URL の Repository がこの Pull Request の Repository と同じときだけ（別の Repository の判断は引かない）
     for t in texts:
-        for owner_repo in re.findall(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+", t, re.I):   # host の無い形も
+        # host の無い形も。 前に境を置く（名前の字の長い並びで、 照らしが並びの長さの 2 乗で遅くならないように）
+        for owner_repo in re.findall(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+", t, re.I):
             if owner_repo.casefold() != ctx.slug.casefold():
                 raise Stop("人の判断の言葉が、別の Repository を名指ししています（URL の Repository が違います）")
     # 略した書き方（`<owner>/<名前>#7`）と、 この Pull Request の owner の下の名前（`MirumeAI/<名前>`・`MirumeAI / <名前>`・
-    # `MirumeAI の <名前>`・`MirumeAI <名前> #7`）も同じ
+    # `MirumeAI の <名前>`・`MirumeAI: <名前>`・`MirumeAI <名前> #7`・`MirumeAI <名前> PR 7`）も同じ
     owner, repo = ctx.slug.split("/", 1)
+    at_owner = rf"(?<![\w.-]){re.escape(owner)}"
     for t in texts:
         # 数字だけの owner と名前（`10/28 #7` の日付）は、 Repository と読まない
-        named = [f"{o}/{n}" for o, n in SLUG_NUMBER.findall(t) if not re.fullmatch(r"[0-9._-]+", o + n)] + [
-            f"{owner}/{n}" for n in re.findall(
-            rf"(?<![\w.-]){re.escape(owner)}(?:\s*/\s*|\s*の\s*|\s+(?=[A-Za-z0-9_.-]+\s*(?:の\s*)?[#№]))([A-Za-z0-9_.-]+)",
+        named = [f"{o}/{n}" for o, n in SLUG_NUMBER.findall(t) if not re.fullmatch(r"[0-9._-]+", o + n)]
+        named += [f"{owner}/{n}" for n in re.findall(at_owner + r"\s*/\s*([A-Za-z0-9_.-]+)", t, re.ASCII | re.I)]
+        named += [f"{owner}/{n}" for n in re.findall(
+            at_owner + r"(?:\s*[:の]\s*|\s+(?=[A-Za-z0-9_.-]+\s*(?::\s*)?(?:の\s*)?" + PR_WORDS + r"))([A-Za-z0-9_.-]+)",
             t, re.ASCII | re.I) if not NOT_A_NAME.fullmatch(n)]
         if any(s.rstrip(".").casefold() != ctx.slug.casefold() for s in named):
             raise Stop("人の判断の言葉が、別の Repository を名指ししています（`owner/名前` の Repository が違います）")

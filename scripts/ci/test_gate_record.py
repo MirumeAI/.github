@@ -256,10 +256,19 @@ class ReviewTest(Base):
                      "Human Adjudication MERGE APPROVED", "人の判断（人の言葉のまま）「x」", "Human Verification（済）",
                      # 後ろが結果の言葉でなくても、 区切りがあれば記録の形
                      "Human Verification → x", "human verification ⇒ x", "Human Verification ➡ x",
-                     "Human Verification = x", "Human Adjudication | x"):
+                     "Human Verification = x", "Human Adjudication | x",
+                     # 矢印の別の範囲・かぎ括弧・`>`・印の記号、 結果の言葉、 `は`・`結果` をはさむ形（#135 の Reviewer A・B）
+                     "Human Verification \u27f6 x", "Human Verification \u2905 x", "Human Verification \u2b95 x",
+                     "Human Verification “x”", "Human Verification『x』", "Human Verification > x",
+                     "Human Verification ✓", "Human Verification ✅", "Human Verification ▶ x", "Human Verification 確認した",
+                     "Human Verification fail", "Human Verification ok", "Human Verification lgtm",
+                     "Human Adjudication approved", "Human Verification done", "Human Verification verified",
+                     "Human Verification 合格", "Human Adjudication 承認", "Human Verification 完了",
+                     "Human Verification 確認済", "Human Verification は PASS", "Human Verification 結果: PASS"):
             with self.subTest(look=look):
                 self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
-        for look in ("Human Verification の要る場面に当たらないか", "Human Verification（人の確認）が要るか"):
+        for look in ("Human Verification の要る場面に当たらないか", "Human Verification（人の確認）が要るか",
+                     "Human Verification は要らないか"):
             with self.subTest(look=look):
                 rc, _, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
@@ -678,7 +687,10 @@ class GateTest(Base):
                       f"#7（head {h12}）と PR \u2010 8 を承認します", f"#7（head {h12}）と PR = 8 を承認します",
                       f"#7（head {h12}）と PR ー 8 を承認します", f"#7（head {h12}）と PR No. 8 を承認します",
                       f"#7\u20158（head {h12}）を承認します", f"8\u20157 番の PR（head {h12}）を承認します",
-                      f"#7\u201510/28（head {h12}）を承認します"):
+                      f"#7\u201510/28（head {h12}）を承認します", f"#7ー8（head {h12}）を承認します",
+                      f"#7\uff708（head {h12}）を承認します", f"8ー7 番の PR（head {h12}）を承認します",
+                      f"#7ー10/28（head {h12}）を承認します", f"#7 to 8（head {h12}）を承認します", f"8 to 7 番の PR（head {h12}）を承認します",
+                      f"#7（head {h12}）と PR num. 8 を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
         for words in (f"MirumeAI / customer-synthetic-example #7（head {h12}）を承認します",
@@ -688,7 +700,15 @@ class GateTest(Base):
                       f"MirumeAI customer-synthetic-example #7（head {h12}）を承認します",
                       f"other/development-docs の #7（head {h12}）を承認します",
                       f"other / development-docs #7（head {h12}）を承認します",
-                      f"other/development-docs PR 7（head {h12}）を承認します"):
+                      f"other/development-docs PR 7（head {h12}）を承認します",
+                      f"other/development-docs: #7（head {h12}）を承認します",
+                      f"other/development-docs で #7（head {h12}）を承認します",
+                      f"other/development-docs No.7（head {h12}）を承認します",
+                      f"MirumeAI customer-synthetic-example PR 7（head {h12}）を承認します",
+                      f"MirumeAI: customer-synthetic-example #7（head {h12}）を承認します",
+                      # `/` の後ろは、 PR などの言葉や数字でも名前に読む（main と同じく止める。 #135 の Reviewer B）
+                      f"MirumeAI/PR-7（head {h12}）#7 を承認します", f"MirumeAI/pull/7（head {h12}）#7 を承認します",
+                      f"MirumeAI/no.7（head {h12}）#7 を承認します", f"MirumeAI/123（head {h12}）#7 を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
         for words in (f"MirumeAI の PR #7（head {h12}）を承認します", f"MirumeAI の development-docs #7（head {h12}）を承認します",
@@ -696,7 +716,8 @@ class GateTest(Base):
                       f"MirumeAI/development-docs の #7（head {h12}）を承認します", f"PR ナンバー 7（head {h12}）を承認します",
                       f"Pull Request number 7（head {h12}）を承認します", f"PR \u2015 7（head {h12}）を承認します",
                       f"Reviewer A/B の結果を見て #7（head {h12}）を承認します",
-                      f"#7（head {h12}）を MirumeAI の 2 つ目の案で承認します"):
+                      f"#7（head {h12}）を MirumeAI の 2 つ目の案で承認します",
+                      f"MirumeAI PR #7（head {h12}）を承認します", f"MirumeAI: PR #7（head {h12}）を承認します"):
             with self.subTest(words=words):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
@@ -730,7 +751,10 @@ class GateTest(Base):
         words = [f"PR{sp}x", f"No.{sp}x", f"Pull Request{sp}の{sp}番号{sp}x", f"プルリク{sp}#{sp}x",
                  f"8{sp}番{sp}の{sp}x", f"#7（head {'a' * 12}）PR{sp}", f"PR{sp}number{sp}\u2015{sp}x",
                  f"PR{sp}ナンバー{sp}は{sp}x", f"MirumeAI{sp}の{sp}x", f"MirumeAI{sp}x{sp}の{sp}y", f"a{sp}/{sp}b{sp}の{sp}x",
-                 f"Human Verification{sp}x", f"人の判断（人の言葉のまま）{sp}x"]
+                 f"Human Verification{sp}x", f"人の判断（人の言葉のまま）{sp}x", f"Human Verification{sp}は{sp}x",
+                 f"MirumeAI{sp}:{sp}x", f"MirumeAI{sp}x{sp}:{sp}の{sp}y",
+                 # 空白の無い名前の字の長い並び（URL の照らしが 2 乗で遅くならない）
+                 "-" * 100000 + "/x", "a" * 100000]
         try:
             r = subprocess.run([sys.executable, "-c", code, *words], capture_output=True, text=True, timeout=20)
         except subprocess.TimeoutExpired:

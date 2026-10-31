@@ -64,7 +64,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 6. `--report-only` を付けずに流して `結果: PASS` になったら、`run-isolation-check` を `true` にする
 7. Pull Request の CI で、混入の照合の段が動いて `結果: PASS` になることを確かめ、Merge の門に従って merge する
 
-初めて値を書く Pull Request では、基準（初期形）が読めないので、CI の宣言の増減は「比べていません」と出て、`PROFILE EXPANSION DETECTED` は出ません。宣言を変えた Pull Request は、知らせが出なくても、人が確かめるまで merge しません。
+初めて値を書く Pull Request では、基準（初期形）が今の決まりでは読めないので、CI の宣言の増減は空の宣言と比べて、すべてを増えたものとして数え、`PROFILE EXPANSION DETECTED` を出します。宣言を変えた Pull Request は、知らせが出ても出なくても、人が確かめるまで merge しません。
 
 ## 参照
 

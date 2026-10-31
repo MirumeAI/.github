@@ -970,7 +970,8 @@ def main(argv: list | None = None) -> int:
         return _main(argv, state)
     except Exception as e:
         # 例外の文に URL の資格情報（://user:pass@）があっても出さない
-        why = f"{type(e).__name__}: {_show(re.sub(r'://[^/@\s]+@', '://***@', str(e)))}"
+        text = re.sub(r"://[^/@\s]+@", "://***@", str(e))
+        why = f"{type(e).__name__}: {_show(text)}"
         if state["running"]:
             print(f"\n結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: {why}）")
             return 1

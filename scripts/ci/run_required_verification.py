@@ -969,8 +969,8 @@ def main(argv: list | None = None) -> int:
     try:
         return _main(argv, state)
     except Exception as e:
-        # 例外の文に URL の資格情報（://user:pass@）があっても出さない
-        text = re.sub(r"://[^/@\s]+@", "://***@", str(e))
+        # 例外の文に URL の資格情報（://user:pass@）があっても出さない（git と同じく host の前の最後の @ まで）
+        text = re.sub(r"://[^/\s]*@", "://***@", str(e))
         why = f"{type(e).__name__}: {_show(text)}"
         if state["running"]:
             print(f"\n結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: {why}）")

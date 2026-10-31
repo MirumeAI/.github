@@ -929,20 +929,22 @@ class Backlog121Test(E2E):
             """), {})
         failed = {"status": "failure", "steps": [{"n": 1, "name": "x", "result": "failed", "secs": 0.0,
                                                   "ran": 0, "skipped_tests": 0}]}
-        broken = RuntimeError("壊れた https://u:secret@example.invalid/x\n" + R.RECORD_PASS)
+        # パスワードに encode していない @ があっても、 host の前の最後の @ まで伏せる
+        broken = RuntimeError("壊れた https://u:se@cret@example.invalid/x\n" + R.RECORD_PASS)
         for name, effects in (("落ちた job の後", [failed, broken]), ("最初の job で", [broken])):
             with self.subTest(name):
                 out, err = io.StringIO(), io.StringIO()
-                with mock.patch.object(R, "_run_job", side_effect=effects), \
+                # mock の job は job の場所を作らないので、 片付けも止めて、 入れた誤りが起きるようにする
+                with mock.patch.object(R, "_run_job", side_effect=effects), mock.patch.object(R, "_rmtree"), \
                         contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t),
                                  "--canonical-ref", "main", "--work", str(self.root / f"work-{name}")])
                 text = out.getvalue() + err.getvalue()
                 self.assertEqual(rc, 1, text)
-                self.assertRegex(text, r"(?m)^結果: FAIL（job を流し始めた後に道具の中の誤り")
+                self.assertRegex(text, r"(?m)^結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: RuntimeError: 壊れた")
                 self.assertNotRegex(text, rf"(?m)^\s*{re.escape(R.RECORD_PASS)}")
                 self.assertNotIn("Traceback", text)
-                self.assertNotIn("secret", text, "URL の資格情報を出さない")
+                self.assertNotIn("cret", text, "URL の資格情報を出さない")
 
 
 class ExprAndGlobTest(unittest.TestCase):

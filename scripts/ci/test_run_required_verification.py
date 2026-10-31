@@ -838,6 +838,115 @@ class DuplicateKeysTest(E2E):
         self.assertEqual(d["jobs"]["b"]["steps"], [{"run": "echo"}])
 
 
+class Backlog121Test(E2E):
+    """#114・#133 の Reviewer の Backlog（#121）。"""
+
+    def test_a_non_string_inner_job_id_asks_for_quotes(self):
+        canon = _repo(self.root, self.wf("""\
+            on: {workflow_call: {}}
+            jobs:
+              1:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """, "common.yml"), {}, name="canon")
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              common:
+                uses: MirumeAI/.github/.github/workflows/common.yml@main
+            """), {})
+        self.assertRefused(self.run_it(t, canonical=canon), "引用符で囲んでください")
+
+    def test_a_lone_surrogate_in_a_step_name_is_written_to_the_summary(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: "a\\ud800b"
+                    run: echo ok
+            """), {})
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(R.RECORD_PASS, p.stdout)
+        self.assertIn("a\\ud800b", p.stdout)
+        import json
+        summary = json.loads((self.work / "logs" / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["jobs"][0]["steps"][0]["name"], "a\ud800b")
+
+    def test_explicit_yaml_types_are_refused(self):
+        for text in ("on: !!omap [{pull_request: {}}]\njobs: {}\n",
+                     "on: pull_request\njobs: !!omap [{j: {runs-on: x}}]\n",
+                     "on: pull_request\nx: !!pairs [{a: 1}]\n",
+                     "on: pull_request\nx: !!set {a: null}\n",
+                     "on: pull_request\nx: !!binary aGk=\n"):
+            with self.subTest(text=text):
+                with self.assertRaises(R.Unsupported) as cm:
+                    R._load_yaml(text, "w.yml")
+                self.assertIn("YAML の型", str(cm.exception))
+        # 型の推し量り（真偽値・数・日付）は今までどおり読む
+        d = R._load_yaml("on: pull_request\nx: {a: true, b: 1, c: 2026-10-31}\n", "w.yml")
+        self.assertEqual(d["x"]["a"], True)
+
+    def test_a_backslash_is_shown_apart_from_an_escaped_character(self):
+        self.assertEqual(R._show("a\\b"), "a\\\\b")
+        self.assertNotEqual(R._show("x\\u2028y"), R._show("x y"))
+        self.assertEqual(R._show("x y"), "x\\u2028y")
+
+    def test_an_unexpected_error_stops_on_one_line_without_a_traceback(self):
+        import contextlib
+        import io
+        from unittest import mock
+        err = io.StringIO()
+        with mock.patch.object(R, "_bootstrap_yaml", side_effect=RuntimeError("壊れた\n" + R.RECORD_PASS)), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = R.main([str(self.root)])
+        self.assertEqual(rc, 2)
+        text = err.getvalue()
+        self.assertIn("道具の中の誤り", text)
+        self.assertNotIn("Traceback", text)
+        self.assertEqual(len(text.strip().splitlines()), 1, "1 行で止まる（記録の行を作らない）")
+
+    def test_an_unexpected_error_after_jobs_started_is_a_fail_not_unrunnable(self):
+        # 落ちた job の後の誤りを「流せない（2）」にすると、 FAIL が代えのきく側に隠れる（#134 の B）
+        import contextlib
+        import io
+        import re
+        from unittest import mock
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              b:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+        failed = {"status": "failure", "steps": [{"n": 1, "name": "x", "result": "failed", "secs": 0.0,
+                                                  "ran": 0, "skipped_tests": 0}]}
+        # パスワードに encode していない @ があっても、 host の前の最後の @ まで伏せる
+        broken = RuntimeError("壊れた https://u:se@cret@example.invalid/x\n" + R.RECORD_PASS)
+        for name, effects in (("落ちた job の後", [failed, broken]), ("最初の job で", [broken])):
+            with self.subTest(name):
+                out, err = io.StringIO(), io.StringIO()
+                # mock の job は job の場所を作らないので、 片付けも止めて、 入れた誤りが起きるようにする
+                with mock.patch.object(R, "_run_job", side_effect=effects), mock.patch.object(R, "_rmtree"), \
+                        contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t),
+                                 "--canonical-ref", "main", "--work", str(self.root / f"work-{name}")])
+                text = out.getvalue() + err.getvalue()
+                self.assertEqual(rc, 1, text)
+                self.assertRegex(text, r"(?m)^結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: RuntimeError: 壊れた")
+                self.assertNotRegex(text, rf"(?m)^\s*{re.escape(R.RECORD_PASS)}")
+                self.assertNotIn("Traceback", text)
+                self.assertNotIn("cret", text, "URL の資格情報を出さない")
+
+
 class ExprAndGlobTest(unittest.TestCase):
 
     def test_expressions(self):

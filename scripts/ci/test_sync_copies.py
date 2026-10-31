@@ -153,6 +153,7 @@ class World:
         gh.chmod(0o755)
         self.rv_fail: set = set()
         self.rv_fail_rc_only: set = set()       # 記録の行らしい文は出たが、 終了コードが失敗
+        self.form_ng_expected = False           # Issue Form の確かめで止まるのを試す（記録を出さない）
         self.rv_line: dict = {}                 # 名前 → 記録の行の差し替え（基準を含まない・道具が正本と違う）
         self.rv_calls: list = []
         self.on_rv = None                       # 検査の間に起きること（push 先が変わるなど）
@@ -271,7 +272,23 @@ class World:
                            "--guard-cases", "257"],
                           remote_base=str(self.remotes), rv=self.rv, sleep=lambda s: None)
         self.load()
+        if "Issue Form に合いません" in out.getvalue() and not self.form_ng_expected:
+            self.show_form_check_log()
         return code, out.getvalue()
+
+    def show_form_check_log(self) -> None:
+        """Issue Form の確かめで思わず止まったら、 その段の記録（終了コードと出力）を試験の流し手の
+        標準エラーに出す（記録は試験の一時の dir と一緒に消えるので、 まれな揺れの回を後から読むため。
+        #130）。 道具の出力（`out`）には足さない（名前を出さない確かめを汚さない）。"""
+        lines = []
+        for log in sorted(self.state.rglob("commands.log")):
+            take = False
+            for ln in log.read_text(encoding="utf-8", errors="replace").splitlines():
+                if ln.startswith("$ "):
+                    take = "issue-form.sh check" in ln
+                if take:
+                    lines.append(ln)
+        print("\n--- Issue Form の確かめの記録（commands.log）---", *lines, sep="\n", file=sys.__stderr__)
 
 
 def claude_md(count: int) -> bytes:
@@ -547,6 +564,7 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(set(self.w.remote_heads("PDM")), {"refs/heads/main"})
 
     def test_bad_issue_body_stops_before_creating(self) -> None:
+        self.w.form_ng_expected = True
         with mock.patch.object(S, "issue_body", lambda *a: "### 目的\n\nx\n"):
             code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 2)

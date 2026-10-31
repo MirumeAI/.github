@@ -248,6 +248,22 @@ class ReviewTest(Base):
         self.assertStops(self.w.run("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "b", "--rv-log", self.w.rv(),
                                     "--human", "Human Adjudication: MERGE APPROVED"), "記録の形", 2)
 
+    def test_review_inputs_refuse_more_record_forms(self) -> None:
+        # 印の言葉の後に、 矢印・`=`・`|`・かぎ括弧や、 区切りの無い結果の言葉が来る形も記録の形（#128）
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        for look in ("Human Verification → PASS", "Human Verification = PASS", "Human Verification PASS",
+                     "human verification ⇒ pass", "Human Verification ➡ PASS", "Human Adjudication | MERGE APPROVED",
+                     "Human Adjudication MERGE APPROVED", "人の判断（人の言葉のまま）「x」", "Human Verification（済）",
+                     # 後ろが結果の言葉でなくても、 区切りがあれば記録の形
+                     "Human Verification → x", "human verification ⇒ x", "Human Verification ➡ x",
+                     "Human Verification = x", "Human Adjudication | x"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+        for look in ("Human Verification の要る場面に当たらないか", "Human Verification（人の確認）が要るか"):
+            with self.subTest(look=look):
+                rc, _, err = self.w.run(*base, "--look", look)
+                self.assertEqual(rc, 0, err)
+
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
         self.assertStops(self.w.run(*base, "--prev", self.w.head, "--fixed", "x"), "同じ", 2)
@@ -653,6 +669,38 @@ class GateTest(Base):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
 
+    def test_more_number_and_repository_forms(self) -> None:
+        # `ナンバー`・`number`・U+2015 などのダッシュでつないだ番号と、 owner の後の空白・`の`、 slug の後の `の`・`PR` で
+        # 書いた別の Repository も照らす（#128）
+        h12 = self.w.head[:12]
+        for words in (f"#7（head {h12}）と プルリクエストの 8 を承認します", f"#7（head {h12}）と PR ナンバー 8 を承認します",
+                      f"#7（head {h12}）と Pull Request number 8 を承認します", f"#7（head {h12}）と PR \u2015 8 を承認します",
+                      f"#7（head {h12}）と PR \u2010 8 を承認します", f"#7（head {h12}）と PR = 8 を承認します",
+                      f"#7（head {h12}）と PR ー 8 を承認します", f"#7（head {h12}）と PR No. 8 を承認します",
+                      f"#7\u20158（head {h12}）を承認します", f"8\u20157 番の PR（head {h12}）を承認します",
+                      f"#7\u201510/28（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"MirumeAI / customer-synthetic-example #7（head {h12}）を承認します",
+                      f"MirumeAI の customer-synthetic-example #7（head {h12}）を承認します",
+                      f"MirumeAI の customer-synthetic-example の件で #7（head {h12}）を承認します",
+                      f"MirumeAI / customer-synthetic-example の件で #7（head {h12}）を承認します",
+                      f"MirumeAI customer-synthetic-example #7（head {h12}）を承認します",
+                      f"other/development-docs の #7（head {h12}）を承認します",
+                      f"other / development-docs #7（head {h12}）を承認します",
+                      f"other/development-docs PR 7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
+        for words in (f"MirumeAI の PR #7（head {h12}）を承認します", f"MirumeAI の development-docs #7（head {h12}）を承認します",
+                      f"MirumeAI / development-docs #7（head {h12}）を承認します", f"MirumeAI の No.7（head {h12}）を承認します",
+                      f"MirumeAI/development-docs の #7（head {h12}）を承認します", f"PR ナンバー 7（head {h12}）を承認します",
+                      f"Pull Request number 7（head {h12}）を承認します", f"PR \u2015 7（head {h12}）を承認します",
+                      f"Reviewer A/B の結果を見て #7（head {h12}）を承認します",
+                      f"#7（head {h12}）を MirumeAI の 2 つ目の案で承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+
     def test_a_letter_with_a_mark_keeps_the_boundary(self) -> None:
         # 結合の字を外すと `ö` が `o` になり、 すぐ後の別の head を見逃す。 外さない文でも照らす（#127 の Reviewer B）
         h, h12 = self.w.head, self.w.head[:12]
@@ -673,10 +721,16 @@ class GateTest(Base):
                 "    try:\n"
                 "        g.named_head(ctx, w)\n"
                 "    except g.Stop:\n"
+                "        pass\n"
+                "    try:\n"
+                "        g._one_line(w, 'x', True)\n"
+                "    except g.Fatal:\n"
                 "        pass\n")
         sp = " " * 3000
         words = [f"PR{sp}x", f"No.{sp}x", f"Pull Request{sp}の{sp}番号{sp}x", f"プルリク{sp}#{sp}x",
-                 f"8{sp}番{sp}の{sp}x", f"#7（head {'a' * 12}）PR{sp}"]
+                 f"8{sp}番{sp}の{sp}x", f"#7（head {'a' * 12}）PR{sp}", f"PR{sp}number{sp}\u2015{sp}x",
+                 f"PR{sp}ナンバー{sp}は{sp}x", f"MirumeAI{sp}の{sp}x", f"MirumeAI{sp}x{sp}の{sp}y", f"a{sp}/{sp}b{sp}の{sp}x",
+                 f"Human Verification{sp}x", f"人の判断（人の言葉のまま）{sp}x"]
         try:
             r = subprocess.run([sys.executable, "-c", code, *words], capture_output=True, text=True, timeout=20)
         except subprocess.TimeoutExpired:

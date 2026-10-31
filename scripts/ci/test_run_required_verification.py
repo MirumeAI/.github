@@ -475,6 +475,117 @@ class FiltersTest(E2E):
         self.assertRefused(p, "制御文字")
 
 
+class NamesInTheOutputTest(E2E):
+    """名前（workflow のファイル名・job・段）に行を崩しうる字があっても、 出力の 1 行に収まり、
+    記録の行に似た行が独立しない（#77）。"""
+
+    def test_names_are_escaped(self):
+        fake = R.RECORD_PASS + "（偽の記録）"
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - name: "段\\u2028{fake}"
+                    run: echo ran
+                  - name: "向き\\u202e\\u0085{fake}"
+                    run: echo ran
+            """, name="b\u2029c.yml") | self.wf("on: push\njobs: {}\n", name="d\u2028e.yml"),
+            {"a.txt": "x"}, name="t13")
+        for extra in ((), ("--list",)):
+            with self.subTest(extra=extra):
+                p = self.run_it(t, *extra)
+                self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                lines = p.stdout.splitlines()                  # 復帰・U+0085・U+2028・U+2029 でも分ける
+                forged = [ln for ln in lines if ln.lstrip().startswith(R.RECORD_PASS) and "偽の記録" in ln]
+                self.assertEqual(forged, [], "記録の行に似た行が独立した")
+                self.assertTrue(all(R.unicodedata.category(c) not in R.BREAKING for c in p.stdout
+                                    if c not in "\n"), "行を崩しうる字が出力に残った")
+                self.assertIn("b\\u2029c.yml", p.stdout)
+                self.assertIn("対象外: d\\u2028e.yml", p.stdout)
+                if not extra:
+                    self.assertIn("段\\u2028" + R.RECORD_PASS, p.stdout)
+                    self.assertIn("向き\\u202e\\u0085" + R.RECORD_PASS, p.stdout)
+                    self.assertEqual(sum(ln.startswith(R.RECORD_PASS) for ln in lines), 1)
+
+    def test_refusals_escape_names_too(self):
+        """止まるときの文（stderr・終了コード 2）にも、 記録の行に似た行が独立しない（#77）。"""
+        fake = R.RECORD_PASS + "（偽の記録）"
+        cases = {
+            "needs に無い job": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    needs: ["n\\n{fake}"]
+                    steps:
+                      - run: echo ran
+                """),
+            "知らない鍵": self.wf(f"""\
+                on: pull_request
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    "k\\n{fake}": 1
+                    steps:
+                      - run: echo ran
+                """),
+            "流す workflow が無い": self.wf("on: push\njobs: {}\n", name=f"x\u2028{fake}.yml"),
+        }
+        for i, (name, files) in enumerate(cases.items()):
+            with self.subTest(case=name):
+                t = _repo(self.root, files, {"a.txt": "x"}, name=f"t14{i}")
+                p = self.run_it(t)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                for out in (p.stdout, p.stderr):
+                    self.assertEqual([ln for ln in out.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_jobs_whose_headings_look_the_same_are_not_merged(self):
+        """見出しが同じになる別の job（U+2028 のファイル名と、 文字どおり \\u2028 と書いたファイル名）を、
+        1 つに数えない（結果の鍵は元の名前。 #77）。"""
+        body = "on: pull_request\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo one\n"
+        two = body + "      - run: echo two\n"
+        t = _repo(self.root, self.wf(body, name="a\u2028.yml") | self.wf(two, name="a\\u2028.yml"),
+                  {"a.txt": "x"}, name="t16")
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("workflow 2・job 2・段 3", p.stdout)
+
+    def test_job_ids_that_yaml_reads_as_other_types_are_refused_with_a_reason(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              yes:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ran
+            """), {"a.txt": "x"}, name="t17")
+        self.assertRefused(self.run_it(t), "文字以外")
+
+    def test_job_ids_must_be_the_github_form(self):
+        """job の id は GitHub の形に限る。 `/` を含む id で、 再利用 workflow の中の job の鍵と重ねて、
+        落ちた job の結果を上書きする道を閉じる（#77 の Reviewer B）。"""
+        for i, jid in enumerate(('"a\\nb"', "'a\\u000ab'", '"x/y"', '"1abc"', '"a b"')):
+            with self.subTest(jid=jid):
+                t = _repo(self.root, self.wf(f"""\
+                    on: pull_request
+                    jobs:
+                      {jid}:
+                        runs-on: ubuntu-latest
+                        steps:
+                          - run: echo ran
+                    """), {"a.txt": "x"}, name=f"t15{i}")
+                p = self.run_it(t)
+                self.assertRefused(p, "GitHub の形")
+                self.assertEqual([ln for ln in p.stderr.splitlines() if ln.lstrip().startswith(R.RECORD_PASS)], [])
+
+    def test_show_keeps_ordinary_names(self):
+        self.assertEqual(R._show("検査 の job unit（3.10）"), "検査 の job unit（3.10）")
+        self.assertEqual(R._show("a\tb\x7fc\ufeffd"), "a\\u0009b\\u007fc\\ufeffd")
+        self.assertEqual(R._show("x\ud800y\U000e0001z"), "x\\ud800y\\U000e0001z")   # 孤立した surrogate・U+FFFF を超える書式の字
+
+
 class EnvironmentTest(E2E):
 
     def test_home_is_isolated_and_only_listed_variables_are_passed(self):
@@ -560,6 +671,171 @@ class ReusableWorkflowTest(E2E):
             "t1", "with: {flag: \"${{ github.event_name == 'pull_request' }}\"}"), canonical=canon), "式")
         self.assertRefused(self.run_it(self._caller("t2", "with: {flag: yes-please}"), canonical=canon),
                            "true / false")
+
+
+    def test_reusable_inner_job_ids_must_be_the_github_form(self):
+        """再利用 workflow の中の job の id も、 GitHub の形に限る（#77 の Reviewer B）。"""
+        canon = _repo(self.root, {
+            ".github/workflows/basic-checks-reusable.yml": """\
+                on:
+                  workflow_call: {}
+                jobs:
+                  "in/ner":
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ran
+                """}, {}, name="canonical-bad")
+        self.assertRefused(self.run_it(self._caller("t3"), canonical=canon), "GitHub の形")
+
+
+class DuplicateKeysTest(E2E):
+    """**同じ鍵が 2 回ある workflow は、 何も流す前に止める**（#131）。
+
+    YAML の読み手の既定は後の値で黙って上書きするので、 同じ job の id を 2 回書くと、
+    先の落ちる job が消えて PASS の記録が出ていた。
+    """
+
+    def _refused(self, body: str, word: str = "同じ鍵が 2 回あります"):
+        t = _repo(self.root, self.wf(body), {})
+        p = self.run_it(t)
+        self.assertRefused(p, word)
+        self.assertNotIn(R.RECORD_PASS, p.stdout)
+
+    def test_a_job_written_twice_does_not_hide_the_failing_one(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """)
+
+    def test_a_key_written_twice_in_a_step_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+                    run: echo ok
+            """)
+
+    def test_a_top_level_key_written_twice_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """)
+
+    def test_a_reusable_workflow_with_a_key_written_twice_is_refused(self):
+        canon = _repo(self.root, self.wf("""\
+            on: {workflow_call: {}}
+            jobs:
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """, "common.yml"), {}, name="canon")
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              common:
+                uses: MirumeAI/.github/.github/workflows/common.yml@main
+            """), {})
+        p = self.run_it(t, canonical=canon)
+        self.assertRefused(p, "同じ鍵が 2 回あります")
+        self.assertIn("common.yml", p.stderr)
+
+    def test_broken_yaml_stops_without_a_traceback(self):
+        t = _repo(self.root, self.wf("on: pull_request\njobs: [\n"), {})
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("workflow を読めません", p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+
+    def test_on_and_quoted_on_hide_nothing(self):
+        """`on:` は YAML 1.1 で True になり、 `"on":` とは別の鍵に読める。 GitHub では同じ鍵。"""
+        t = _repo(self.root, {
+            ".github/workflows/new.yml": """\
+                on: pull_request
+                "on": push
+                jobs:
+                  j:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: exit 1
+                """,
+            ".github/workflows/ci.yml": """\
+                on: pull_request
+                jobs:
+                  ok:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - run: echo ok
+                """}, {})
+        p = self.run_it(t)
+        self.assertRefused(p, "同じ鍵が 2 回あります: 'on'")
+        self.assertNotIn(R.RECORD_PASS, p.stdout)
+
+    def test_a_job_written_twice_through_a_merge_key_is_refused(self):
+        self._refused("""\
+            on: pull_request
+            jobs:
+              <<: {j: {runs-on: ubuntu-latest, steps: [{run: exit 1}]}}
+              j:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """, "合わせる鍵（<<）は使えません")
+
+    def test_merge_keys_are_refused_in_every_form(self):
+        for text in (
+                # 合わせる中で鍵が重なる
+                "on: pull_request\njobs:\n  <<: {j: {runs-on: x, steps: [{run: exit 1}]}, "
+                "j: {runs-on: x, steps: [{run: echo}]}}\n",
+                # <<: を 2 回書く
+                "on: pull_request\njobs:\n  <<: {j: {runs-on: x, steps: [{run: exit 1}]}}\n"
+                "  <<: {j: {runs-on: x, steps: [{run: echo}]}}\n",
+                # 段の中で、 合わせた run を明示の run が上書きする
+                "on: pull_request\njobs:\n  j:\n    runs-on: x\n    steps:\n"
+                "      - <<: {run: exit 1}\n        run: echo ok\n"):
+            with self.subTest(text=text), self.assertRaises(R.Unsupported) as cm:
+                R._load_yaml(text, "w.yml")
+            self.assertRegex(str(cm.exception), "合わせる鍵|同じ鍵が 2 回")
+
+    def test_values_that_cannot_be_read_stop_without_a_traceback(self):
+        for text in ("on: pull_request\njobs: !!int abc\n", "on: pull_request\nx: 2026-02-30\n"):
+            with self.subTest(text=text), self.assertRaises(R.Unsupported):
+                R._load_yaml(text, "w.yml")
+
+    def test_distinct_keys_and_whole_node_aliases_still_load(self):
+        d = R._load_yaml(textwrap.dedent("""\
+            on: pull_request
+            x: &steps [{run: echo}]
+            jobs:
+              a: {runs-on: ubuntu-latest, steps: *steps}
+              b: {runs-on: ubuntu-latest, steps: *steps}
+            """), "w.yml")
+        self.assertEqual(sorted(d["jobs"]), ["a", "b"])
+        self.assertEqual(d["jobs"]["b"]["steps"], [{"run": "echo"}])
 
 
 class ExprAndGlobTest(unittest.TestCase):

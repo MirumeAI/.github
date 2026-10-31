@@ -24,7 +24,7 @@ MirumeAI Organization 配下の Repository で共通に使うものの正本で�
 | `.github/workflows/basic-checks.yml` | この Repository 自身の検査 | この Repository |
 | `templates/customer-project/` | 顧客案件の Repository の雛形 | `scripts/ci/new_customer_repo.py` が使う |
 
-- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・検査の作業の置き場（伏せていない段ごとの記録）を片付ける。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
+- **写しは、各 Repository で直しません。** この Repository の Pull Request で正本を変え、merge の後に、各 Repository へ同期の Pull Request で合わせます。写しが正本と同じかは、共通の検査（`scripts/ci/copy_sync_check.py`）が照らします。同期の Pull Request は、`scripts/ci/sync_copies.py` でまとめて作ります（既定は計画の表示だけ。`apply --source <この Repository の Pull Request の番号>` で、Issue・作業 Branch・commit・merge の前の検査・Draft の Pull Request まで進める。merge はしない。merge の後は `cleanup --source <番号>` で、merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・検査の作業の置き場（伏せていない段ごとの記録）を片付ける。Pull Request ができる前に止まった同期と、merge されずに閉じた同期は、検査の作業の置き場だけを片付ける。同じ `--source` の `apply` と `cleanup` は同時に流せない。顧客 Repository の名前は出力に出さない。状態の置き場の中身はそのまま表示・一覧しない）
 - 守りの境に当たる変更（ガード `.claude/hooks/` とその回帰テスト、`.claude/settings.json` のフックと禁止、CI の守りの検査〔秘密の走査・顧客の値の混入・顧客の間の混入・写しの照合と `.ci-copy-allow`・Release の識別〕とそれを走らせる workflow など）を変える Pull Request は、merge の前に人の判断が要ります（一覧の正本は、development-docs の `02_github_workflow/pull_request_review.md` の「人の判断が要る変更」）
 - 開発の手順と判断の決まり（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です
 
@@ -72,7 +72,7 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
   - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）
   - 仮の HOME
 - 元の clone と HOME は変えません。環境変数は決めた名前（`PATH`・`LANG` など）だけを渡し、token・ssh の agent・git の設定などは渡しません。段が終わったら、後ろで動き続ける子の process も止めます（`setsid` で抜けたものは止められません）。pip で依存を入れるので、network が要ります
-- 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。落ちた段があれば FAIL です（終了コード 1）
+- 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。同じ鍵が 2 回ある workflow（同じ job の id を 2 回書いたもの・`on:` と `"on":` を両方書いたものなど。GitHub は受け付けず、黙って後の値で読むと先の job が消える）、合わせる鍵（`<<`。明示の鍵で中身を黙って上書きできる。node 全体の alias は読む）、YAML として読めない workflow も同じく止まります。落ちた段があれば FAIL です（終了コード 1）
 - PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。記録の行には、次のものが入ります
   - head と、基準（`origin/main`）を含むか
   - 正本の ref と commit
@@ -110,7 +110,7 @@ python3 $G merged <作業ツリー> --pr 42 --head <固定した head> --out mer
   - Reviewer A・B の最後の結果が、merge する head を見て BLOCKER・MAJOR・IN-PR が 0
   - In-PR の残りが無い
   - 作成者と Reviewer A・B の「人の判断が要る変更」の読みが同じ
-  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head を並べた言葉も引かない。道具が見分けるのは a〜f を含む 7〜11 桁の並びだけで、数字だけ・6 桁以下の並びは Agent が言葉を読んで確かめる。全角と大文字も照らし（元の文と、全角を半角にそろえた文の両方で探す。ゼロ幅の空白などの書式の字は外す）、`PR 7`・`PR-7`・`Pull Request 7`・`プルリク 7`・URL の `/pull/7` のような番号と、`#7・8`・`#7 と 8`・`#7〜9`・`#7–9`・`#7 & 8`・`#7 or 8` のように並べた番号も数える（区切りの後ろの `10/28`・`10:30` のような日付と時刻は数えずに飛ばし、その後ろの番号は数える。年の無い `8-9` は日付と読まない。番号の前置きの直後と、`/`・`-`・`〜` などでつないで続く番号は、日付の形でも数える。URL の番号は、URL の Repository がこの Pull Request の Repository でなければ止まる）。人の言葉に人の判断の印（`Human Adjudication`）や人の確認（`Human Verification`）の言葉があれば止まる。Agent が head を別に書いて、人が名指ししたことにはしない）
+  - 当たるときは、人の言葉のまま（1 行）が、この Pull Request（`#番号`）と今の head（12 桁以上）だけを名指ししている（番号だけの答え・古い head・別の Pull Request や Repository の判断は引かない。12 桁より短い別の head を並べた言葉も引かない。道具が見分けるのは a〜f を含む 7〜11 桁の並びだけで、数字だけ・6 桁以下の並びは Agent が言葉を読んで確かめる。全角と大文字も照らし（元の文と、全角を半角にそろえた文の両方で探す。ゼロ幅の空白などの書式の字は外し、上に重なる結合の字は外した文と外さない文の両方で照らす）、`PR 7`・`PR-7`・`PR: 7`・`PR 番号 7`・`7 番の PR`（前に並べた番号も、`番` の有無によらず数える）・`Pull Request 7`・`プルリク 7`・URL の `/pull/7` のような番号と、`#7・8`・`#7 と 8`・`#7〜9`・`#7–9`・`#7 & 8`・`#7 or 8` のように並べた番号も数える（区切りの後ろの `10/28`・`10:30` のような日付と時刻は数えずに飛ばし、その後ろの番号は数える。年の無い `8-9` は日付と読まない。番号の前置きの直後と、`/`・`-`・`〜` などでつないで続く番号は、日付の形でも数える。URL の番号と、`MirumeAI/<名前>`・`<owner>/<名前>#7` の略した書き方は、その Repository がこの Pull Request の Repository でなければ止まる〔`10/28 #7` のような数字だけの並びは Repository と読まない〕。つなぐ区切りの後ろの日付〔`#7 – 10/28`〕と `No.1` のような項目の番号は、番号の並びと見分けられないので止まる〔言い直せば通る〕）。人の言葉に人の判断の印（`Human Adjudication`。字の間の空白・記号・括弧の有無を問わない）や人の確認（`Human Verification`）の言葉があれば止まる。Agent が head を別に書いて、人が名指ししたことにはしない）
   - 検査の記録の行の飛ばした試験が 0 でなければ、理由を確かめて `--record` の `skipped_reason` に書いてある（門の記録に件数と理由を出す）
 - `gate` が出す merge の命令は、head を固定し、main が進んでいたら merge まで進みません
 - base が main でない Pull Request（LEGACY の長期 Branch）と、人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）のときは扱いません（決まりの形で手で書きます）

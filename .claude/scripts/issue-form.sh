@@ -16,6 +16,11 @@
 
 set -euo pipefail
 
+# 途中で読むのをやめる命令（grep -q・awk の exit）には、パイプでなく <<< で渡す。
+# パイプの書き手（printf）は、読み手が先に終わると SIGPIPE で落ち、pipefail の
+# もとでは確かめの結果が逆になる（見出しの NG を見逃して OK を出す・正しい本文を
+# NG にする・止まる）。行ごとに書くので、小さい本文でも混んだ機械ではまれに起きる。
+
 FORM_REPO="MirumeAI/.github"
 FORM_DIR=".github/ISSUE_TEMPLATE"
 
@@ -49,8 +54,8 @@ load_form() {
     echo "Issue Form の正本を読めません（base64 として読めない）: $src" >&2
     exit 2
   fi
-  if ! printf '%s\n' "$_FORM_CACHE" | grep -q '^body:' \
-     || ! printf '%s\n' "$_FORM_CACHE" | grep -q '^      label: '; then
+  if ! grep -q '^body:' <<< "$_FORM_CACHE" \
+     || ! grep -q '^      label: ' <<< "$_FORM_CACHE"; then
     echo "Issue Form の正本に、Form の形（body: と見出し）がありません: $src" >&2
     exit 2
   fi
@@ -153,7 +158,7 @@ check() {
   fi
 
   # 2) Form の出力は '### ' のみ。'# ' と '## ' を使わない（フェンス内は除外済み）
-  if printf '%s\n' "$body" | grep -qE '^#{1,2} [^#]'; then
+  if grep -qE '^#{1,2} [^#]' <<< "$body"; then
     ng=1
     echo "NG: 本文に '# ' または '## ' の見出しがあります。Form の出力は '### ' のみです" >&2
     printf '%s\n' "$body" | grep -nE '^#{1,2} [^#]' >&2
@@ -183,11 +188,11 @@ check() {
   if [ -n "$opts" ]; then
     while IFS= read -r lab; do
       [ -n "$lab" ] || continue
-      val="$(printf '%s\n' "$body" | awk -v l="### $lab" '
+      val="$(awk -v l="### $lab" '
                $0 == l { insec = 1; next }
                /^### / { insec = 0 }
-               insec && $0 !~ /^[[:space:]]*$/ { print; exit }')"
-      if [ -n "$val" ] && ! printf '%s\n' "$opts" | grep -qxF "$(printf '%s\t%s' "$lab" "$val")"; then
+               insec && $0 !~ /^[[:space:]]*$/ { print; exit }' <<< "$body")"
+      if [ -n "$val" ] && ! grep -qxF "$(printf '%s\t%s' "$lab" "$val")" <<< "$opts"; then
         ng=1
         echo "NG: 「$lab」の値が選択肢にありません: $val" >&2
         echo "--- 選択肢 ---" >&2

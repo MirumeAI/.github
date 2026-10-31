@@ -170,5 +170,59 @@ class AFetchFailureStopsTest(unittest.TestCase):
         self.assertIn("ファイルがありません", r.stderr)
 
 
+class AnEarlyReaderDoesNotFlipTheResultTest(unittest.TestCase):
+    """**途中で読むのをやめる命令（grep -q・awk の exit）に、 パイプで渡さない（#130）。**
+
+    bash の printf は行ごとに書くので、 読み手が先に終わると、 残りを書く printf が
+    SIGPIPE で落ち、 pipefail のもとでは確かめの結果が逆になる（見出しの NG を見逃して
+    OK を出す・正しい本文を NG にする・止まる）。 小さい本文では混んだ機械でまれにしか
+    起きない（写しの同期の道具の試験の揺れ）ので、 パイプの容量（64KB）を超える大きさで、
+    読み手が必ず先に終わる形にして確かめる。
+    """
+
+    #: 1MB の行の並び（awk は先に 200KB ほどを読み込むので、 それよりずっと大きくする）
+    LONG = ("z" * 99 + "\n") * 10000
+
+    def _check(self, body: str, forms_dir: Path = FORMS) -> subprocess.CompletedProcess:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as b:
+            b.write(body)
+        try:
+            return _run(["check", "feature", b.name], forms_dir=forms_dir)
+        finally:
+            os.unlink(b.name)
+
+    def _form(self, d: str, edit) -> Path:
+        src = (FORMS / "feature.yml").read_text(encoding="utf-8")
+        (Path(d) / "feature.yml").write_text(edit(src), encoding="utf-8")
+        return Path(d)
+
+    def test_a_heading_before_a_long_body_is_seen(self) -> None:
+        """**見出しの確かめ（grep -q）が先に終わっても、 NG を見逃さない。**"""
+        r = self._check("## 見出し\n\n" + _filled_body("feature") + self.LONG)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("OK", r.stdout)
+        self.assertIn("NG: 本文に '# ' または '## ' の見出しがあります", r.stderr)
+
+    def test_a_long_body_after_the_dropdown_is_ok(self) -> None:
+        """選んだ値を読む awk が先に終わっても、 止まらない。"""
+        r = self._check(_filled_body("feature") + self.LONG)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("OK:", r.stdout)
+
+    def test_a_long_form_is_read(self) -> None:
+        """**正本の形の確かめ（grep -q）と、 選択肢の照らし（grep -qxF）が先に終わっても、 正しい本文を
+        止めない・NG にしない。**"""
+        filler = "".join(f"# {'z' * 97}\n" for _ in range(5000))
+        options = "".join(f"        - 予備 {i:04d} {'z' * 80}\n" for i in range(5000))
+        for name, edit in (("Form の後ろが長い", lambda s: s + filler),
+                           ("選択肢が長い", lambda s: s.replace("        - Other\n", "        - Other\n" + options))):
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                forms = self._form(d, edit)
+                self.assertGreater((forms / "feature.yml").stat().st_size, 1 << 18)
+                r = self._check(_filled_body("feature"), forms_dir=forms)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("OK:", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,10 @@ Pull Request を、 まとめて作る。
 その同期の検査の作業の置き場（`w/` の下に道具が作った dir）を片付ける（merge されていない・
 作業ツリーに commit していない変更がある・ローカルの Branch の先頭が merge された head と
 違う、 のどれかなら触らない。 リモートの Branch は GitHub が消すので触らない）。
+Pull Request ができる前に止まった同期と、 merge されずに閉じた同期は、 検査の作業の置き場
+だけを片付ける（作業ツリーと作業 Branch は、 続きや見直しに使うので触らない）。
+同じ `--source` の `apply` と `cleanup` は、 同時に流せない（状態の置き場の錠。 流れている
+検査の置き場を消さない）。
 
 守ること:
 
@@ -68,6 +72,8 @@ Repository の名前は実行時に Organization の一覧から読む。
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import io
 import json
 import os
@@ -761,17 +767,46 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
             f"Required Verification PASS（{st['rv_summary']}）")
 
 
+def remove_rv_work(ctx: Ctx, st: dict, done: str) -> None:
+    """検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す。
+    置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）。 `done` は、 止まったときに済んだことの文。"""
+    work_root = ctx.run_dir.parents[1] / "w"
+    for name in st.get("rv_work", []):
+        if not (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")):
+            continue
+        d = work_root / name
+        if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
+            continue
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。{done}"
+                       " 原因を直して同じ命令で続けてください）") from None
+    st.pop("rv_work", None)
+    ctx.save()
+
+
 def cleanup_one(ctx: Ctx, t: Target) -> str:
-    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch と、 検査の作業の置き場を片付ける。"""
+    """merge された同期の Pull Request の、 作業ツリーとローカルの作業 Branch と、 検査の作業の置き場を片付ける。
+    Pull Request ができる前に止まった同期と、 merge されずに閉じた同期は、 検査の作業の置き場だけを片付ける。"""
     run = ctx.run
     st = ctx.state.get("targets", {}).get(t.alias, {})
     if "pr" not in st:
-        return "同期の Pull Request が無い（片付けるものは無い）"
+        if not st.get("rv_work"):
+            return "同期の Pull Request が無い（片付けるものは無い）"
+        remove_rv_work(ctx, st, "")
+        return "同期の Pull Request が無い（検査の作業の置き場を片付けた。 作業ツリーと作業 Branch は触らない）"
     br = st["branch"]
     check_work_branch(br)
     r = ctx.gh(["pr", "view", st["pr"], "-R", f"{ORG}/{t.name}", "--json", "state,headRefOid"],
                retries=3, what="Pull Request の状態")
     pr = json.loads(r.out or "{}")
+    if pr.get("state") == "CLOSED":
+        if not st.get("rv_work"):
+            return f"Pull Request #{st['pr']} は merge されずに閉じた（作業ツリーと作業 Branch は触らない）"
+        remove_rv_work(ctx, st, "")
+        return (f"Pull Request #{st['pr']} は merge されずに閉じた（検査の作業の置き場を片付けた。"
+                " 作業ツリーと作業 Branch は触らない）")
     if pr.get("state") != "MERGED":
         return f"Pull Request #{st['pr']} はまだ merge されていない（触らない）"
     head = pr.get("headRefOid") or ""
@@ -788,34 +823,37 @@ def cleanup_one(ctx: Ctx, t: Target) -> str:
             raise Stop(f"ローカルの {br} の先頭が、 merge された head と違います（片付けません）")
         run(["git", "-C", t.clone, "worktree", "prune"])      # 手で消された作業ツリーの登録を外す
         run(["git", "-C", t.clone, "branch", "-D", br], what="作業 Branch の片付け")
-    # 検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す。
-    # 置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）
-    work_root = ctx.run_dir.parents[1] / "w"
-    for name in st.get("rv_work", []):
-        if not (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")):
-            continue
-        d = work_root / name
-        if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
-            continue
-        try:
-            shutil.rmtree(d)
-        except OSError as e:
-            raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。 作業ツリーと作業 Branch は片付け済み。"
-                       " 原因を直して同じ命令で続けてください）") from None
-    st.pop("rv_work", None)
+    remove_rv_work(ctx, st, " 作業ツリーと作業 Branch は片付け済み。")
     st["cleaned"] = head
     ctx.save()
     return f"片付けた（Pull Request #{st['pr']}・merge された head {head[:12]}）"
 
 
+def take_lock(run_dir: Path):
+    """同じ --source の apply と cleanup を同時に流さない錠。 取れなければ None（ほかが流れている）。"""
+    f = open(run_dir / "lock", "a", encoding="utf-8")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 # ---------------------------------------------------------------- 入口
 def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep) -> int:
+    with contextlib.ExitStack() as held:                   # 錠は、 返るときに放す
+        return _main(argv, held, remote_base=remote_base, rv=rv, sleep=sleep)
+
+
+def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> int:
     ap = argparse.ArgumentParser(description="写しを持つ Repository へ、 正本の共通のファイルを合わせる Pull Request を作る")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("plan", "計画を表示する（clone と fetch のほかは変えない）"),
                        ("apply", "Issue・Branch・commit・Required Verification・Draft の Pull Request まで進める"),
                        ("cleanup", "merge された同期の Pull Request の作業ツリー・ローカルの作業 Branch・"
-                        "検査の作業の置き場を片付ける")):
+                        "検査の作業の置き場を片付ける（Pull Request ができる前に止まった・閉じた同期は、"
+                        " 検査の作業の置き場だけ）")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")
@@ -871,6 +909,15 @@ def main(argv=None, *, remote_base: str = REMOTE_BASE, rv=None, sleep=time.sleep
     targets = [t for t in targets if not only or t.alias in only]
     say(f"正本: {ORG}/{CANONICAL} の main {canon.commit[:12]}（ガードの回帰テスト {cases} ケース）")
 
+    if args.cmd == "apply":
+        run_dir.mkdir(parents=True, exist_ok=True)
+    if args.cmd in ("apply", "cleanup") and run_dir.is_dir():
+        # 流れている検査の作業の置き場を cleanup が消さないよう、 また状態を取り合わないよう、 同時に流さない
+        lock = take_lock(run_dir)
+        if lock is None:
+            say("止まりました: 同じ --source の apply か cleanup が流れています。 終わってから流してください", err=True)
+            return 2
+        held.enter_context(lock)
     state_file = run_dir / "state.json"
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else {}
     if args.cmd == "cleanup" and not state:

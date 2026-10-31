@@ -1186,7 +1186,10 @@ def expansion(root: Path, base: "str | None", head: Profile, yaml) -> "list[str]
     """基準の commit の宣言と比べた、 種類ごとの増減の **数だけ**。
 
     **PR の中身を実行しない。** 読むのは git の中の基準の宣言だけ（`cat-file`）。
-    取れなければ「比べていません」と言い、 これだけで不合格にはしない。
+    取れなければ「比べていません」と言い、 これだけで不合格にはしない。 基準に宣言があるが
+    今の決まりで読めない（新しい顧客 Repository の値の無い初期形・大きすぎる・ファイルでない
+    など）ときは、 空の宣言と比べて、 すべてを増えたものとして数える（初めて値を書く
+    Pull Request でも知らせを出す。 #54）。
     """
     if base is None:
         return ["宣言の増減: 比べていません（--base-ref がありません）"]
@@ -1194,24 +1197,28 @@ def expansion(root: Path, base: "str | None", head: Profile, yaml) -> "list[str]
         if _git(root, "cat-file", "-e", f"{base}^{{commit}}").returncode != 0:
             return ["宣言の増減: 比べていません（基準の commit が手元にありません）"]
         spec = f"{base}:./{PROFILE}"
-        old = None
+        old, unreadable = None, False
         if _git(root, "cat-file", "-e", spec).returncode == 0:
             size = _git(root, "cat-file", "-s", spec)
-            if size.returncode != 0 or int(size.stdout.strip() or 0) > MAX_PROFILE_BYTES:
-                return ["宣言の増減: 比べていません（基準の宣言を読めません）"]
-            blob = _git(root, "cat-file", "blob", spec)
-            if blob.returncode != 0:
-                return ["宣言の増減: 比べていません（基準の宣言を読めません）"]
-            try:
-                old = parse_profile(blob.stdout.decode("utf-8-sig"), yaml)
-            except Exception:  # noqa: BLE001  形の誤り・使えない文字など。 比べないだけ
-                return ["宣言の増減: 比べていません（基準の宣言が、 今の決まりでは読めません）"]
+            blob = None
+            if size.returncode == 0 and int(size.stdout.strip() or 0) <= MAX_PROFILE_BYTES:
+                blob = _git(root, "cat-file", "blob", spec)
+            if blob is None or blob.returncode != 0:
+                unreadable = True   # 大きすぎる・ファイルでない（フォルダなど）も、 空の宣言と比べる
+            else:
+                try:
+                    old = parse_profile(blob.stdout.decode("utf-8-sig"), yaml)
+                except Exception:  # noqa: BLE001  値の無い初期形・形の誤り・使えない文字など
+                    unreadable = True   # 空の宣言と比べる（すべてを増えたものとして数え、 知らせを出す）
     except Exception:  # noqa: BLE001  git を使えないなど。 比べないだけ（照合の結果は変えない）
         return ["宣言の増減: 比べていません（基準の宣言を取り出せません）"]
 
     out = [f"宣言の増減（基準 {base[:12]} と比べた数。 値は出しません）:"]
     grew = old is None
-    if old is None:
+    if unreadable:
+        out.append("  基準の宣言は、 今の決まりでは読めません（値の無い初期形・大きすぎる・ファイルでないなど）。"
+                   " 空の宣言と比べて、 すべてを増えたものとして数えます")
+    elif old is None:
         out.append("  基準には宣言がありません（この変更で作られました）。"
                    " すべてを増えたものとして数えます")
     changed = False

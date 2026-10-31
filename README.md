@@ -72,7 +72,7 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
   - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）
   - 仮の HOME
 - 元の clone と HOME は変えません。環境変数は決めた名前（`PATH`・`LANG` など）だけを渡し、token・ssh の agent・git の設定などは渡しません。段が終わったら、後ろで動き続ける子の process も止めます（`setsid` で抜けたものは止められません）。pip で依存を入れるので、network が要ります
-- 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。同じ鍵が 2 回ある workflow（同じ job の id を 2 回書いたもの・`on:` と `"on":` を両方書いたものなど。GitHub は受け付けず、黙って後の値で読むと先の job が消える）、合わせる鍵（`<<`。明示の鍵で中身を黙って上書きできる。node 全体の alias は読む）、YAML として読めない workflow も同じく止まります。落ちた段があれば FAIL です（終了コード 1）
+- 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。同じ鍵が 2 回ある workflow（同じ job の id を 2 回書いたもの・`on:` と `"on":` を両方書いたものなど。GitHub は受け付けず、黙って後の値で読むと先の job が消える）、合わせる鍵（`<<`。明示の鍵で中身を黙って上書きできる。node 全体の alias は読む）、明示の YAML 1.1 の型（`!!omap`・`!!pairs`・`!!set`・`!!binary`）、YAML として読めない workflow も同じく止まります。道具の中で思わぬ誤りが起きたときも、traceback でなく 1 行の知らせで止まります（終了コード 2。PASS の記録の行は出ません）。落ちた段があれば FAIL です（終了コード 1）
 - PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。記録の行には、次のものが入ります
   - head と、基準（`origin/main`）を含むか
   - 正本の ref と commit

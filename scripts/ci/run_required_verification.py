@@ -969,7 +969,8 @@ def main(argv: list | None = None) -> int:
     try:
         return _main(argv, state)
     except Exception as e:
-        # 例外の文に URL の資格情報（://user:pass@）があっても出さない（git と同じく host の前の最後の @ まで）
+        # 例外の文に URL の資格情報（://user:pass@）があっても出さない（host の前の最後の @ まで。
+        # git は最初の @ で区切るので、 それより広く伏せる）
         text = re.sub(r"://[^/\s]*@", "://***@", str(e))
         why = f"{type(e).__name__}: {_show(text)}"
         if state["running"]:

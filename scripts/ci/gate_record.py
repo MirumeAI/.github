@@ -123,11 +123,11 @@ MARKS = ("人の判断（人の言葉のまま）", "Human Adjudication", "Human
 #: 文字の集まり（`[...]`）の中に置く形
 DASHES = "\\-\u2010-\u2015\u2212\u30fc"
 #: 人の言葉の中の Pull Request の番号（`#7`・`PR 7`・`PR-7`・`PR ― 7`・`PR: 7`・`PR = 7`・`PR 番号 7`・`PR ナンバー 7`・
-#: `Pull Request 7`・`Pull Request number 7`・`プルリク 7`・`№7`・URL の `/pull/7`。 元の文と NFKC にそろえた文の
-#: 両方で照らす）。 空白の並びは、 字をはさまずに 2 つ続けない（長い空白で照らしが遅くならないように）
+#: `Pull Request 7`・`Pull Request number 7`・`PR number is 7`・`PR #s 7`・`プルリク 7`・`№7`・URL の `/pull/7`。 元の文と
+#: NFKC にそろえた文の両方で照らす）。 空白の並びは、 字をはさまずに 2 つ続けない（長い空白で照らしが遅くならないように）
 NUMBER = re.compile(r"(?:(?:#|№|/pull/)\s*|(?<![A-Za-z])(?:PRs?|Pull[\s-]*Requests?|プルリク(?:エスト)?|No\.)"
-                    r"\s*(?:の\s*)?(?:(?:番号|ナンバー|numbers?|num\.?|no\.?)\s*(?:[はが]\s*)?)?"
-                    r"(?:[#:=" + DASHES + r"]\s*)?)([0-9]+)", re.I)
+                    r"\s*(?:の\s*)?(?:(?:番号|ナンバー|numbers?|num\.?|no\.?)\s*(?:(?:[はが]|is)\s*)?)?"
+                    r"(?:(?:#s?|[:=" + DASHES + r"])\s*)?)([0-9]+)", re.I)
 #: 番号を前に書いた形（`8 番の PR`・`8 番目のプルリク`）
 NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:PRs?|Pull[\s-]*Requests?|プルリク)"
                            r"(?![A-Za-z])", re.I)
@@ -136,7 +136,8 @@ NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:
 BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:番目?\s*)?(?:[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|"
                          r"または|(?:and|or|to)(?![A-Za-z]))\s*$", re.I)
 #: 番号の前置き（Repository の名前の後ろに来ると、 その名前を Pull Request の Repository と読む）
-PR_WORDS = r"(?:[#№]|PR|Pull|プルリク|No\.)"
+#: 後ろに境を置く（`pr…`・`pull` で始まる英語の言葉と、 番号の続かない `no.` を前置きに数えない。 #135 の Reviewer A）
+PR_WORDS = r"(?:[#№]|PRs?(?![A-Za-z])|Pull[\s-]*Requests?(?![A-Za-z])|プルリク|No\.(?=\s*[0-9]))"
 #: GitHub の略した書き方（`MirumeAI/<名前>#7`・`<owner> / <名前> #7`・`<owner>/<名前> の #7`・`<owner>/<名前>: #7`・
 #: `<owner>/<名前> で PR 7`・`<owner>/<名前> No.7`）。 Repository がこの Pull Request の Repository でなければ止める
 SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+)\s*/\s*([A-Za-z0-9_.-]+)\s*(?::\s*)?(?:[のでに]\s*)?" + PR_WORDS,
@@ -233,9 +234,10 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
 
 #: 頼む文で、 印の言葉の後に来ると記録の形とみなすもの（`_norm` した文に当てる。 `Human Verification: PASS`・
 #: `Human Verification → PASS`・`Human Verification = PASS`・`Human Verification PASS`・`Human Verification ✓`・
-#: `Human Verification は PASS`・`Human Verification 結果: PASS`・`人の判断（人の言葉のまま）「x」`）。
+#: `Human Verification は PASS`・`Human Verification の結果: PASS`・`Human Verification's result: PASS`・
+#: `Human Verification が済んだ`・`Human Verification を確認した`・`人の判断（人の言葉のまま）「x」`）。
 #: 迷ったら断る側に置く（言葉に触れるだけの文は、 印の言葉の後に字〔`が`・`の` など〕が来るので通る）
-RECORD_AFTER_MARK = (r"[\W_]*?(?:(?:は|結果|result)[\W_]*?)?"
+RECORD_AFTER_MARK = (r"[\W_]*?(?:(?:の|が|を|s)[\W_]*?)?(?:(?:結果|result)[\W_]*?)?(?:(?:は|が|is)[\W_]*?)?"
                      r"(?:[:=>|「『\"“" + DASHES + r"\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff"
                      r"\u25b6\u25ba\u2611\u2705\u2713-\u2718\u274c]"
                      r"|pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承認|完了|確認済|確認した)")
@@ -465,6 +467,29 @@ def load_record(path: str, wt: Path) -> dict:
     return rec
 
 
+#: Repository の owner と名前の字
+NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+
+
+def _pull_slugs(text: str) -> "list[str]":
+    """URL の `<owner>/<名前>/pull/<番号>`（host の無い形も）の `<owner>/<名前>`。 `/pull/` の位置ごとに、 前の 2 つの
+    区切りを後ろから読む（前に境の無い正規表現は、 名前の字の長い並びで並びの長さの 2 乗に遅くなり、 前に境を置くと、
+    すき間なくつないだ 2 つ目の URL〔`…/pull/7-<owner>/<名前>/pull/7`〕の Repository を見ない。 #135 の Reviewer B）。"""
+    out = []
+    for m in re.finditer(r"/pull/[0-9]+", text, re.I):
+        name_end = i = m.start()
+        while i > 0 and text[i - 1] in NAME_CHARS:
+            i -= 1
+        if i == name_end or i == 0 or text[i - 1] != "/":
+            continue
+        j = i - 1
+        while j > 0 and text[j - 1] in NAME_CHARS:
+            j -= 1
+        if j < i - 1:
+            out.append(f"{text[j:i - 1]}/{text[i:name_end]}")
+    return out
+
+
 def named_head(ctx: Ctx, words: str) -> str:
     """人の言葉が、 この Pull Request と今の head だけを名指ししていること。 名指しした head を返す。
 
@@ -477,13 +502,17 @@ def named_head(ctx: Ctx, words: str) -> str:
         raise Stop("人の判断の言葉が Pull Request のコメントの形（Human Adjudication の印）です。この道具の外なので、決まりの形で手で書く")
     # 書式の字（Cf）は外してから照らす。 結合の字（Mn・Me）は、 外した文と外さない文の両方で照らす（外すと、 上に
     # 重ねて番号や head を割る形が見える。 外さないと、 `ö` のような字が head や名前の前の境のまま残る）
-    texts = tuple(dict.fromkeys(_bare(words, form, strip) for form in ("NFC", "NFKC") for strip in (False, True)))
+    # 空白の並びは 1 つにする（前に並べた番号を、 番号の前の短い範囲だけで探せるように）
+    texts = tuple(dict.fromkeys(re.sub(r"\s+", " ", _bare(words, form, strip))
+                                for form in ("NFC", "NFKC") for strip in (False, True)))
     nums = set()
     for t in texts:
         for m in NUMBER_BEFORE.finditer(t):
             nums.add(int(m[1]))
             end = m.start(1)
-            while (more := BEFORE_MORE.search(t, 0, end)):          # 前に並べた番号（`8・7 番の PR` の 8）
+            # 前に並べた番号（`8・7 番の PR` の 8）。 番号の前の短い範囲だけで探す（文の頭から探し直すと、 並べた番号の
+            # 数と長さの積で遅くなる。 空白の並びは 1 つにしたので、 番号と区切りは 32 字に収まる。 #135 の Reviewer A・B）
+            while (more := BEFORE_MORE.search(t, max(0, end - 32), end)):
                 nums.add(int(more[1]))
                 end = more.start(1)
         for m in NUMBER.finditer(t):
@@ -499,8 +528,7 @@ def named_head(ctx: Ctx, words: str) -> str:
                 pos = end
     # URL の番号は、 URL の Repository がこの Pull Request の Repository と同じときだけ（別の Repository の判断は引かない）
     for t in texts:
-        # host の無い形も。 前に境を置く（名前の字の長い並びで、 照らしが並びの長さの 2 乗で遅くならないように）
-        for owner_repo in re.findall(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/[0-9]+", t, re.I):
+        for owner_repo in _pull_slugs(t):
             if owner_repo.casefold() != ctx.slug.casefold():
                 raise Stop("人の判断の言葉が、別の Repository を名指ししています（URL の Repository が違います）")
     # 略した書き方（`<owner>/<名前>#7`）と、 この Pull Request の owner の下の名前（`MirumeAI/<名前>`・`MirumeAI / <名前>`・

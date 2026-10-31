@@ -47,6 +47,7 @@ SUPPORT.md               … 困ったときの案内（根に置く。実際の
    - `02_github_workflow/pull_request_review.md`
    - `02_github_workflow/organization_templates.md`
    - `00_management/current_github_operation.md`
+   - `03_customer_development/customer_isolation_check.md`（顧客の間の混入の検査と、雛形の `customer-profile.yaml` を変えたとき）
 3. `development-docs` の `00_management/implementation_changelog.md` の「記録ルール」に当たる変更なら、1 行で記録する（番号は Issue の番号）
 4. 両リポジトリの Pull Request を相互にリンクする
 

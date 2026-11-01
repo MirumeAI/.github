@@ -247,8 +247,12 @@ RESULT_WORD = r"(?:pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承�
 #: `の`・`が`・`を` の後ろで見る結果の言葉（`確認しました` も見るため `確認`）。 どの言葉も、 ほかの言葉の頭にならない
 #: （短い言葉で照らし直して、 名詞として触れる形の見分けを外さないように）
 RESULT_WORD_AFTER = r"(?:pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承認|完了|確認)"
-#: 結果の言葉に名詞として触れる形（英語の語尾の後のすぐ後に `の`・`を`、 または送り仮名の後に問いの `か`）。 #137
-MENTION = r"[a-z]* ?(?:の|を|[\u3041-\u309f]*か)"
+#: 結果の言葉に名詞として触れる形（英語の語尾の後のすぐ後に `の`・`を`、 または送り仮名の後に問いの `か`）。 #137。
+#: `を` の後ろが結果の言葉や受け取る・出す言葉（`を確認した`・`を得た`・`をもらった`・`を出した`）なら触れる形にしない。
+#: 問いの `か` は、 後ろが文の終わり・ひらがなでない字・`を`・`は`・`も`・`どうか` のときだけ（`から`・`ばかり`・`かつ` の
+#: `か` を問いと読まない。 #137 の Reviewer A・B）
+MENTION = (r"[a-z]* ?(?:の|を(?! ?(?:" + RESULT_WORD_AFTER + r"|得|もら|貰|出))"
+           r"|[\u3041-\u309f]*か(?:どうか)?(?=$|[^\u3041-\u309f]|[をはも]))")
 #: 頼む文で、 印の言葉の後に来ると記録の形とみなすもの（`_norm` した文に当てる。 `Human Verification: PASS`・
 #: `Human Verification → PASS`・`Human Verification = PASS`・`Human Verification PASS`・`Human Verification ✓`・
 #: `Human Verification は PASS`・`Human Verification の結果: PASS`・`Human Verification's result: PASS`・

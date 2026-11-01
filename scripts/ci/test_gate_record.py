@@ -283,7 +283,9 @@ class ReviewTest(Base):
         for look in ("Human Adjudication が merge の前に要るか", "Human Verification の完了を待つか",
                      "Human Verification の合格の後に流す", "Human Verification が完了したか確かめる",
                      "Human Verification が merged の後で要るか", "Human Verification の結果を待つ",
-                     "Human Verification の確認の手順", "Human Adjudication が承認されているかどうか"):
+                     "Human Verification の確認の手順", "Human Adjudication が承認されているかどうか",
+                     "Human Verification が完了したかを確かめる", "Human Adjudication の承認を求める",
+                     "Human Verification が完了したかは A が見る"):
             with self.subTest(look=look):
                 rc, out, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
@@ -298,6 +300,12 @@ class ReviewTest(Base):
                      "Human Verification が PASS なので進める", "Human Adjudication が approved by 山田",
                      "Human Verification が PASS 済みの記録", "Human Verification を確認しました", "Human Verification の承認者",
                      "Human Adjudication を承認する人", "Human Verification's が PASS", "Human Verification が は PASS",
+                     # 問いでない `か`（`から`・`ばかり`・`しかし`）と、 `を` の後ろの結果の言葉や受け取る・出す言葉（#137 の Reviewer A・B）
+                     "Human Verification が完了したから merge", "Human Verification が済んだから進める",
+                     "Human Verification が PASS したから", "Human Verification が完了しているから merge します",
+                     "Human Verification が完了したばかり", "Human Verification が PASS しかし x",
+                     "Human Verification の PASS を確認した", "Human Verification の完了を確認しました",
+                     "Human Adjudication の承認を得た", "Human Verification が ok をもらった", "Human Adjudication が承認を出しました",
                      # `は`・`'s`・`結果` をはさむ形と、 すぐ後の形は、 今までどおり後ろを問わない
                      "Human Verification は PASS の後", "Human Verification's approval is needed", "Human Verification の結果が merge の前",
                      "Human Adjudication merge の前"):

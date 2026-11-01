@@ -313,13 +313,19 @@ class ReviewTest(Base):
                 self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
 
     def test_wo_passes_only_before_words_of_not_yet(self) -> None:
-        # `を` の後ろは、 結果をまだ得ていないと言う言葉（待つ・求める・頼む・お願いする・要する・必要とする）のときだけ
-        # 通す。 一覧に無い言葉は断る（#139）
+        # `を` の後ろは、 結果をまだ得ていないと言う言葉（待つ・求める・頼む・お願いする・要する・要求する・必要とする）の
+        # ときだけ通す。 一覧に無い言葉と、 `頼`・`要` で始まる別の言葉は断る（#139 と、 その Reviewer A・B）
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
         for look in ("Human Adjudication の承認を要するか", "Human Adjudication の承認を頼む",
                      "Human Adjudication の承認を必要とするか", "Human Adjudication の承認をお願いする",
                      "Human Verification の完了をお待ちください", "Human Verification の PASS を待つ",
-                     "Human Adjudication の approval を求める", "Human Adjudication の承認を 待つ"):
+                     "Human Adjudication の approval を求める", "Human Adjudication の承認を 待つ",
+                     # `頼`・`要` の活用
+                     "Human Adjudication の承認を頼まれた", "Human Adjudication の承認を頼みたい",
+                     "Human Adjudication の承認を頼めるか", "Human Adjudication の承認を頼もう",
+                     "Human Adjudication の承認を頼んだか", "Human Adjudication の承認をお頼みする",
+                     "Human Verification の完了を要さない", "Human Verification の完了を要しないか",
+                     "Human Verification の完了を要せず", "Human Adjudication の承認を要求する"):
             with self.subTest(look=look):
                 rc, out, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
@@ -329,10 +335,16 @@ class ReviewTest(Base):
                      "Human Verification の PASS を見た", "Human Verification の完了を確かめた",
                      "Human Adjudication の承認を受領", "Human Verification の完了を経て merge",
                      "Human Verification の PASS を記録した", "Human Adjudication の承認を",
+                     # `頼`・`要` で始まる別の言葉（#139 の Reviewer A・B）
+                     "Human Adjudication の承認を頼りに merge した", "Human Adjudication の承認を頼って merge",
+                     "Human Adjudication の承認を要約すると OK", "Human Adjudication の承認を要点に",
                      # 形で見分けられない触れる形も断る（`が完了したかを確かめる` と言い直せば通る）
                      "Human Verification の完了を確かめる"):
             with self.subTest(look=look):
                 self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+        # 止めたときの知らせに、 言い直しの例を書く（#139 の Reviewer A）
+        self.assertStops(self.w.run(*base, "--look", "Human Verification の完了を確かめる"),
+                         "`が完了したかを確かめる`・`の完了を待つか` のように言い直して", 2)
 
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())

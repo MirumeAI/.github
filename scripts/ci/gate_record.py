@@ -136,15 +136,21 @@ NUMBER_BEFORE = re.compile(r"(?<![0-9A-Za-z])([0-9]+)\s*番目?\s*(?:の\s*)?(?:
 BEFORE_MORE = re.compile(r"(?<![0-9A-Za-z])([0-9]{1,6})\s*(?:番目?\s*)?(?:[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|"
                          r"または|(?:and|or|to)(?![A-Za-z]))\s*$", re.I)
 #: 番号の前置き（Repository の名前の後ろに来ると、 その名前を Pull Request の Repository と読む）
-#: 後ろに境を置く（`pr…`・`pull` で始まる英語の言葉と、 番号の続かない `no.` を前置きに数えない。 #135 の Reviewer A）
-PR_WORDS = r"(?:[#№]|PRs?(?![A-Za-z])|Pull[\s-]*Requests?(?![A-Za-z])|プルリク|No\.(?=\s*[0-9]))"
+#: 後ろに境を置く（`pr…`・`pull` で始まる英語の言葉と、 番号の続かない `pull`・`no.` を前置きに数えない。 #135 の Reviewer A）。
+#: `Pull #7`・`No. #7` のように、 `#` をはさんで番号が続く形も前置き（#137）
+PR_WORDS = (r"(?:[#№]|PRs?(?![A-Za-z])|Pull[\s-]*Requests?(?![A-Za-z])|Pull(?=\s*[#№0-9])|プルリク"
+            r"|No\.(?=\s*(?:#\s*)?[0-9]))")
 #: GitHub の略した書き方（`MirumeAI/<名前>#7`・`<owner> / <名前> #7`・`<owner>/<名前> の #7`・`<owner>/<名前>: #7`・
-#: `<owner>/<名前> で PR 7`・`<owner>/<名前> No.7`）。 Repository がこの Pull Request の Repository でなければ止める
+#: `<owner>/<名前> で PR 7`・`<owner>/<名前> No.7`・`<owner>/<名前> Pull #7`・`<owner>/<名前> No. #7`）。
+#: Repository がこの Pull Request の Repository でなければ止める
 SLUG_NUMBER = re.compile(r"(?<![\w.-])([A-Za-z0-9_.-]+)\s*/\s*([A-Za-z0-9_.-]+)\s*(?::\s*)?(?:[のでに]\s*)?" + PR_WORDS,
                          re.ASCII | re.I)
 #: owner の後に `の`・`:`・空白で続く言葉のうち、 名前として読まないもの（`MirumeAI の PR #7`・`MirumeAI の No.7` の
 #: `PR`・`No.7` と、 数字だけの言葉）。 `/` で続く形（`MirumeAI/PR-7`）には当てない（main と同じく止める）
 NOT_A_NAME = re.compile(r"(?:prs?|pull|no\.?|nums?\.?|numbers?)[0-9._-]*|[0-9._-]+", re.ASCII | re.I)
+#: コメントの位置の付いた URL（`…/pull/7#issuecomment-…`・`#discussion_r…`・`#pullrequestreview-…`）の `/pull/7#`。
+#: 略した書き方（`<owner>/<名前>#7`）の形にも当たるが、 Repository と読まない（URL の Repository は `_pull_slugs` で照らす。 #137）
+PULL_ANCHOR = re.compile(r"/pull/[0-9]+#[A-Za-z]", re.I)
 #: 番号のすぐ後に並べた番号（`#7・8`・`PR 7, 8`・`#7 と 8`・`#7 and 8`・`#7〜9`・`#7-8`・`#7 や 8`・`#7 & 8`）。
 #: 7 桁以上の数字（数字だけの head の先頭）と、 すぐ後に英字が続くもの（head の先頭）は番号に数えない
 MORE_NUMBER = re.compile(r"\s*(?P<sep>[・、,/&~〜" + DASHES + r"]|と|および|及び|や|から|または|(?:and|or|to)(?![A-Za-z]))"
@@ -232,15 +238,23 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
     return _no_mark(text.strip(), what)
 
 
+#: 記録の形の区切り（`:`・`=`・ダッシュ・矢印・`|`・かぎ括弧・`✓` などの印）と、 結果の言葉
+RECORD_SEP = (r"[:=>|「『\"“" + DASHES + r"\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff"
+              r"\u25b6\u25ba\u2611\u2705\u2713-\u2718\u274c]")
+RESULT_WORD = r"(?:pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承認|完了|確認済|確認した)"
+#: 結果の言葉の後ろに続いても、 記録の形のままとみなす字（英語の語尾・送り仮名と助動詞・`済`・数字・空白）。 これだけが
+#: 並んだ後に、 文の終わりか区切り（字でも空白でもないもの）が来れば、 結果の言葉は文の終わりか区切りの前にある
+RESULT_TAIL = r"[a-z0-9 みんだしたまませされるですと済]*(?:$|[^\w ]|_)"
 #: 頼む文で、 印の言葉の後に来ると記録の形とみなすもの（`_norm` した文に当てる。 `Human Verification: PASS`・
 #: `Human Verification → PASS`・`Human Verification = PASS`・`Human Verification PASS`・`Human Verification ✓`・
 #: `Human Verification は PASS`・`Human Verification の結果: PASS`・`Human Verification's result: PASS`・
 #: `Human Verification が済んだ`・`Human Verification を確認した`・`人の判断（人の言葉のまま）「x」`）。
-#: 迷ったら断る側に置く（言葉に触れるだけの文は、 印の言葉の後に字〔`が`・`の` など〕が来るので通る）
-RECORD_AFTER_MARK = (r"[\W_]*?(?:(?:の|が|を|s)[\W_]*?)?(?:(?:結果|result)[\W_]*?)?(?:(?:は|が|is)[\W_]*?)?"
-                     r"(?:[:=>|「『\"“" + DASHES + r"\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff"
-                     r"\u25b6\u25ba\u2611\u2705\u2713-\u2718\u274c]"
-                     r"|pass|fail|ok|lgtm|approv|merge|done|verified|済|合格|承認|完了|確認済|確認した)")
+#: `の`・`が`・`を` の後ろの結果の言葉は、 文の終わりか区切りの前に来るときだけ（`Human Adjudication が merge の前に
+#: 要るか`・`Human Verification の完了を待つか` は言葉に触れるだけなので通す。 #137）。 迷ったら断る側に置く
+RECORD_AFTER_MARK = (r"[\W_]*?(?:(?:s[\W_]*?)?(?:(?:は|is)[\W_]*?)?(?:" + RECORD_SEP + "|" + RESULT_WORD + ")"
+                     r"|(?:(?:の|が|を|s)[\W_]*?)?(?:結果|result)[\W_]*?(?:(?:は|が|is)[\W_]*?)?"
+                     r"(?:" + RECORD_SEP + "|" + RESULT_WORD + ")"
+                     r"|(?:の|が|を)[\W_]*?(?:" + RECORD_SEP + "|" + RESULT_WORD + RESULT_TAIL + "))")
 
 #: 外さない結合の字（かなの濁点・半濁点。 `プルリク` などの字を変えないため）
 KEEP_MARKS = {"\u3099", "\u309a"}
@@ -471,22 +485,29 @@ def load_record(path: str, wt: Path) -> dict:
 NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 
 
+def _back(text: str, pos: int, chars) -> int:
+    """`pos` の前の、 `chars` の字の並びの始まり。"""
+    while pos > 0 and text[pos - 1] in chars:
+        pos -= 1
+    return pos
+
+
 def _pull_slugs(text: str) -> "list[str]":
     """URL の `<owner>/<名前>/pull/<番号>`（host の無い形も）の `<owner>/<名前>`。 `/pull/` の位置ごとに、 前の 2 つの
     区切りを後ろから読む（前に境の無い正規表現は、 名前の字の長い並びで並びの長さの 2 乗に遅くなり、 前に境を置くと、
-    すき間なくつないだ 2 つ目の URL〔`…/pull/7-<owner>/<名前>/pull/7`〕の Repository を見ない。 #135 の Reviewer B）。"""
+    すき間なくつないだ 2 つ目の URL〔`…/pull/7-<owner>/<名前>/pull/7`〕の Repository を見ない。 #135 の Reviewer B）。
+    `/` の前後の空白（`<owner> / <名前>/pull/7`・`<owner>/<名前> /pull/7`）はとばして読む（#137）。"""
     out = []
     for m in re.finditer(r"/pull/[0-9]+", text, re.I):
-        name_end = i = m.start()
-        while i > 0 and text[i - 1] in NAME_CHARS:
-            i -= 1
-        if i == name_end or i == 0 or text[i - 1] != "/":
+        name_end = _back(text, m.start(), " ")
+        i = _back(text, name_end, NAME_CHARS)
+        k = _back(text, i, " ")
+        if i == name_end or k == 0 or text[k - 1] != "/":
             continue
-        j = i - 1
-        while j > 0 and text[j - 1] in NAME_CHARS:
-            j -= 1
-        if j < i - 1:
-            out.append(f"{text[j:i - 1]}/{text[i:name_end]}")
+        owner_end = _back(text, k - 1, " ")
+        j = _back(text, owner_end, NAME_CHARS)
+        if j < owner_end:
+            out.append(f"{text[j:owner_end]}/{text[i:name_end]}")
     return out
 
 
@@ -536,8 +557,9 @@ def named_head(ctx: Ctx, words: str) -> str:
     owner, repo = ctx.slug.split("/", 1)
     at_owner = rf"(?<![\w.-]){re.escape(owner)}"
     for t in texts:
-        # 数字だけの owner と名前（`10/28 #7` の日付）は、 Repository と読まない
-        named = [f"{o}/{n}" for o, n in SLUG_NUMBER.findall(t) if not re.fullmatch(r"[0-9._-]+", o + n)]
+        # 数字だけの owner と名前（`10/28 #7` の日付）と、 コメントの位置の付いた URL の `/pull/7#` は、 Repository と読まない
+        named = [f"{m[1]}/{m[2]}" for m in SLUG_NUMBER.finditer(t)
+                 if not re.fullmatch(r"[0-9._-]+", m[1] + m[2]) and not PULL_ANCHOR.match(t, m.start(1) - 1)]
         named += [f"{owner}/{n}" for n in re.findall(at_owner + r"\s*/\s*([A-Za-z0-9_.-]+)", t, re.ASCII | re.I)]
         named += [f"{owner}/{n}" for n in re.findall(
             at_owner + r"(?:\s*[:の]\s*|\s+(?=[A-Za-z0-9_.-]+\s*(?::\s*)?(?:の\s*)?" + PR_WORDS + r"))([A-Za-z0-9_.-]+)",

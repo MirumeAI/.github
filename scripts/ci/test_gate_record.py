@@ -276,6 +276,26 @@ class ReviewTest(Base):
                 rc, _, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
 
+    def test_result_words_after_no_ga_wo_are_records_only_at_the_end(self) -> None:
+        # `の`・`が`・`を` の後ろの結果の言葉は、 文の終わりか区切りの前に来るときだけ記録の形（#137）
+        base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
+        for look in ("Human Adjudication が merge の前に要るか", "Human Verification の完了を待つか",
+                     "Human Verification の承認者", "Human Verification の合格の後に流す", "Human Adjudication を承認する人",
+                     "Human Verification が merged の後で要るか", "Human Verification の結果を待つ"):
+            with self.subTest(look=look):
+                rc, out, err = self.w.run(*base, "--look", look)
+                self.assertEqual(rc, 0, err)
+                self.assertIn(look, out)
+        for look in ("Human Verification が PASS", "Human Verification が PASS です。", "Human Verification の完了",
+                     "Human Adjudication が MERGE APPROVED", "Human Verification が merge 済み", "Human Verification を PASS とする",
+                     "Human Verification が承認されました", "Human Verification が PASS（10/31）", "Human Adjudication が merge、の前",
+                     "Human Verification を確認した 2026-10-31", "Human Verification が「x」", "Human Verification を → x",
+                     # `は`・`'s`・`結果` をはさむ形と、 すぐ後の形は、 今までどおり後ろを問わない
+                     "Human Verification は PASS の後", "Human Verification's approval is needed", "Human Verification の結果が merge の前",
+                     "Human Adjudication merge の前"):
+            with self.subTest(look=look):
+                self.assertStops(self.w.run(*base, "--look", look), "記録の形", 2)
+
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
         self.assertStops(self.w.run(*base, "--prev", self.w.head, "--fixed", "x"), "同じ", 2)
@@ -735,6 +755,39 @@ class GateTest(Base):
                 rc, _, err = self.w.gate(human_required=self.human(words))
                 self.assertEqual(rc, 0, err)
 
+    def test_comment_anchored_urls_and_more_repository_forms(self) -> None:
+        # コメントの位置の付いた URL は、 URL の Repository で照らす。 `Pull #7`・`No. #7` と、 URL の `/` の前後の空白も
+        # 照らす（#137）
+        h12 = self.w.head[:12]
+        url = "https://github.com/MirumeAI/development-docs/pull/7"
+        for words in (f"{url}#issuecomment-2412345678（head {h12}）を承認します",
+                      f"{url}#discussion_r1812345678（head {h12}）を承認します",
+                      f"{url}#pullrequestreview-2412345678 で head {h12} を承認します",
+                      f"MirumeAI/development-docs Pull #7（head {h12}）を承認します",
+                      f"MirumeAI/development-docs No. #7（head {h12}）を承認します",
+                      f"MirumeAI Pull #7（head {h12}）を承認します", f"MirumeAI の No. #7（head {h12}）を承認します",
+                      f"MirumeAI / development-docs/pull/7（head {h12}）を承認します",
+                      f"#7（head {h12}）を origin/main で pull して承認します"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+        for words in ("https://github.com/MirumeAI/customer-synthetic-example/pull/7#issuecomment-2412345678"
+                      f"（head {h12}）を承認します",
+                      f"{url}#issuecomment-1 と MirumeAI/customer-synthetic-example/pull/7#issuecomment-2（head {h12}）を承認します",
+                      f"other/development-docs Pull #7（head {h12}）を承認します",
+                      f"other/development-docs No. #7（head {h12}）を承認します",
+                      f"MirumeAI customer-synthetic-example Pull #7（head {h12}）を承認します",
+                      f"other / development-docs/pull/7（head {h12}）を承認します",
+                      f"other/development-docs /pull/7（head {h12}）を承認します",
+                      f"other / development-docs /pull/7（head {h12}）を承認します",
+                      # 位置が番号（`#7`）の形と、 ファイルの位置（`/files#diff-…`）は、 略した書き方と見分けずに止める
+                      f"{url}#7（head {h12}）を承認します", f"{url}/files#diff-{'b' * 64}（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
+        # 位置の後ろに並べた別の番号は、 今までどおり数える
+        self.assertStops(self.w.gate(human_required=self.human(f"{url}#issuecomment-1 #8（head {h12}）を承認します")),
+                         "#番号")
+
     def test_a_letter_with_a_mark_keeps_the_boundary(self) -> None:
         # 結合の字を外すと `ö` が `o` になり、 すぐ後の別の head を見逃す。 外さない文でも照らす（#127 の Reviewer B）
         h, h12 = self.w.head, self.w.head[:12]
@@ -768,6 +821,9 @@ class GateTest(Base):
                  f"MirumeAI{sp}:{sp}x", f"MirumeAI{sp}x{sp}:{sp}の{sp}y",
                  # 空白の無い名前の字の長い並び（URL の照らしが 2 乗で遅くならない）
                  "-" * 100000 + "/x", "a" * 100000, "-" * 100000 + "/pull/7",
+                 # URL の `/` の前後の空白をとばす読みと、 `の`・`が`・`を` の後ろの結果の言葉の続き（#137）
+                 "a" * 50000 + " / " + "b" * 50000 + " /pull/7", "x / y /pull/7 " * 8000,
+                 "Human Verification が merge " + "a" * 100000 + "の", "Human Verification が merge の" * 3000,
                  # 前に並べた番号の長い並び（文の頭から探し直すと、 並べた数と長さの積で遅くなる）
                  "1・" * 30000 + "8 番の PR", "1 to " * 20000 + "8 番の PR"]
         try:

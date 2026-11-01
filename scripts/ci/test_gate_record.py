@@ -277,11 +277,13 @@ class ReviewTest(Base):
                 self.assertEqual(rc, 0, err)
 
     def test_result_words_after_no_ga_wo_are_records_only_at_the_end(self) -> None:
-        # `の`・`が`・`を` の後ろの結果の言葉は、 文の終わりか区切りの前に来るときだけ記録の形（#137）
+        # `の`・`が`・`を` の後ろの結果の言葉は、 名詞として触れる形（すぐ後の `の`・`を`、 送り仮名の後の問いの `か`）だけを
+        # 通す（#137 と、 その Reviewer A・B）
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())
         for look in ("Human Adjudication が merge の前に要るか", "Human Verification の完了を待つか",
-                     "Human Verification の承認者", "Human Verification の合格の後に流す", "Human Adjudication を承認する人",
-                     "Human Verification が merged の後で要るか", "Human Verification の結果を待つ"):
+                     "Human Verification の合格の後に流す", "Human Verification が完了したか確かめる",
+                     "Human Verification が merged の後で要るか", "Human Verification の結果を待つ",
+                     "Human Verification の確認の手順", "Human Adjudication が承認されているかどうか"):
             with self.subTest(look=look):
                 rc, out, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
@@ -290,6 +292,12 @@ class ReviewTest(Base):
                      "Human Adjudication が MERGE APPROVED", "Human Verification が merge 済み", "Human Verification を PASS とする",
                      "Human Verification が承認されました", "Human Verification が PASS（10/31）", "Human Adjudication が merge、の前",
                      "Human Verification を確認した 2026-10-31", "Human Verification が「x」", "Human Verification を → x",
+                     # 送り仮名・続く語の後に文が続く形も記録の形（#137 の Reviewer A・B）
+                     "Human Verification が完了しています", "Human Verification が済んでいる", "Human Adjudication が承認されており",
+                     "Human Verification が PASS になりました", "Human Verification が完了しており merge できます",
+                     "Human Verification が PASS なので進める", "Human Adjudication が approved by 山田",
+                     "Human Verification が PASS 済みの記録", "Human Verification を確認しました", "Human Verification の承認者",
+                     "Human Adjudication を承認する人", "Human Verification's が PASS", "Human Verification が は PASS",
                      # `は`・`'s`・`結果` をはさむ形と、 すぐ後の形は、 今までどおり後ろを問わない
                      "Human Verification は PASS の後", "Human Verification's approval is needed", "Human Verification の結果が merge の前",
                      "Human Adjudication merge の前"):
@@ -784,9 +792,40 @@ class GateTest(Base):
                       f"{url}#7（head {h12}）を承認します", f"{url}/files#diff-{'b' * 64}（head {h12}）を承認します"):
             with self.subTest(words=words):
                 self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
-        # 位置の後ろに並べた別の番号は、 今までどおり数える
-        self.assertStops(self.w.gate(human_required=self.human(f"{url}#issuecomment-1 #8（head {h12}）を承認します")),
-                         "#番号")
+        # 位置の後ろに並べた別の番号は、 今までどおり数える（`#` の無い並べ方も。 #137 の Reviewer A）
+        for words in (f"{url}#issuecomment-1 #8（head {h12}）を承認します", f"{url}#issuecomment-1 と 8（head {h12}）を承認します",
+                      f"{url}#issuecomment-1、8（head {h12}）を承認します", f"{url}#discussion_r1 and 8（head {h12}）を承認します",
+                      f"{url}#issuecomment-1〜9（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+
+    def test_more_forms_from_the_reviewers_of_137(self) -> None:
+        # 区切りをはさんだ `Pull`・`No.`、 `Pull 8`、 owner の無い `<名前>/pull/7`、 `-` の後ろの既知の名前（#137 の Reviewer A・B）
+        h12 = self.w.head[:12]
+        for words in (f"other/development-docs Pull-#7（head {h12}）を承認します", f"other/development-docs Pull: #7（head {h12}）を承認します",
+                      f"other/development-docs No.: 7（head {h12}）を承認します", f"other/development-docs No. - #7（head {h12}）を承認します",
+                      f"customer-synthetic-example/pull/7（head {h12}）を承認します",
+                      f"customer-synthetic-example/pull/7#issuecomment-1（head {h12}）を承認します",
+                      f"MirumeAI-PDM #7（head {h12}）を承認します", f"a-.github-private #7（head {h12}）を承認します"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "別の Repository")
+        for words in (f"#7（head {h12}）と Pull 8 を承認します", f"#7（head {h12}）を承認します（git pull 2 回目）"):
+            with self.subTest(words=words):
+                self.assertStops(self.w.gate(human_required=self.human(words)), "#番号")
+        for words in (f"Pull 7（head {h12}）を承認します", f"development-docs/pull/7（head {h12}）を承認します",
+                      f"foo development-docs/pull/7（head {h12}）を承認します", f"PR 7 /pull/7（head {h12}）を承認します",
+                      f"PR 7（head {h12}）を承認します。OK /pull/7"):
+            with self.subTest(words=words):
+                rc, _, err = self.w.gate(human_required=self.human(words))
+                self.assertEqual(rc, 0, err)
+        # Image-Acquisition-PDM の Pull Request では、 名前の中の `PDM` を別の Repository と読まない
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        ia = World(Path(td.name), repo="Image-Acquisition-PDM")
+        rc, _, err = ia.gate(human_required=self.human(f"Image-Acquisition-PDM #7（head {ia.head[:12]}）を承認します"))
+        self.assertEqual(rc, 0, err)
+        for call in ia.db["calls"]:
+            self.assertEqual(call[:2], ["pr", "view"], call)
 
     def test_a_letter_with_a_mark_keeps_the_boundary(self) -> None:
         # 結合の字を外すと `ö` が `o` になり、 すぐ後の別の head を見逃す。 外さない文でも照らす（#127 の Reviewer B）

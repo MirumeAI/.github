@@ -325,7 +325,14 @@ class ReviewTest(Base):
                      "Human Adjudication の承認を頼めるか", "Human Adjudication の承認を頼もう",
                      "Human Adjudication の承認を頼んだか", "Human Adjudication の承認をお頼みする",
                      "Human Verification の完了を要さない", "Human Verification の完了を要しないか",
-                     "Human Verification の完了を要せず", "Human Adjudication の承認を要求する"):
+                     "Human Verification の完了を要せず", "Human Adjudication の承認を要求する",
+                     # 依頼・要請・仰ぐと、 名詞でない `頼み`・`要す`（#141 と、 #140 の Reviewer A）
+                     "Human Adjudication の承認を依頼する", "Human Adjudication の承認を要請したか",
+                     "Human Adjudication の承認を仰ぐ", "Human Adjudication の承認を仰いだか",
+                     "Human Adjudication の承認を仰ぎたい", "Human Adjudication の承認を仰がない",
+                     "Human Adjudication の承認を仰げるか", "Human Adjudication の承認を仰ごう",
+                     "Human Adjudication の承認を頼みます", "Human Adjudication の承認を頼み",
+                     "Human Verification の完了を要する場面"):
             with self.subTest(look=look):
                 rc, out, err = self.w.run(*base, "--look", look)
                 self.assertEqual(rc, 0, err)
@@ -338,6 +345,10 @@ class ReviewTest(Base):
                      # `頼`・`要` で始まる別の言葉（#139 の Reviewer A・B）
                      "Human Adjudication の承認を頼りに merge した", "Human Adjudication の承認を頼って merge",
                      "Human Adjudication の承認を要約すると OK", "Human Adjudication の承認を要点に",
+                     # 名詞の `頼み`・`要するに`・`仰せ`（#141 と、 #140 の Reviewer A・B）
+                     "Human Adjudication の承認を頼みに merge した", "Human Adjudication の承認を頼みとして merge",
+                     "Human Adjudication の承認を頼みの綱に", "Human Adjudication の承認を要するに得た",
+                     "Human Adjudication の承認を仰せつかった",
                      # 形で見分けられない触れる形も断る（`が完了したかを確かめる` と言い直せば通る）
                      "Human Verification の完了を確かめる"):
             with self.subTest(look=look):
@@ -345,6 +356,11 @@ class ReviewTest(Base):
         # 止めたときの知らせに、 言い直しの例を書く（#139 の Reviewer A）
         self.assertStops(self.w.run(*base, "--look", "Human Verification の完了を確かめる"),
                          "`が完了したかを確かめる`・`の完了を待つか` のように言い直して", 2)
+        # 知らせが指す README の節の名前は、 見出しと同じ（#141）
+        self.assertStops(self.w.run(*base, "--look", "Human Verification の完了を確かめる"),
+                         "README の「門の記録と頼みの文（`gate_record.py`）」の節", 2)
+        readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+        self.assertIn("\n## 門の記録と頼みの文（`gate_record.py`）\n", readme)
 
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:
         base = ("review", self.w.wt, "--pr", 7, "--issue", 6, "--role", "a", "--rv-log", self.w.rv())

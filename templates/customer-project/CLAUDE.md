@@ -25,7 +25,7 @@ Branch protection を設定できないため、 これと運用ルールが唯�
 
 ## この Repository の位置づけ
 
-<案件の名前> 向けの**顧客固有差分のみ**を持つ Repository です。
+<案件の名前> 向けの**顧客固有差分**（設定と記録と、この案件の開発）を持つ Repository です。Core の Source は持ちません。
 
 ```text
 PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> の検査システム
@@ -40,9 +40,17 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> �
 - 対象Component: `PDM` / `Image-Acquisition-PDM` / `Both` / `Customer only`
 - 実装分類: `Config` / `Core` / `Core + Config` / `Plugin・Adapter` / `Architecture Review`
 
-**設定だけで対応できるならこの Repository、一般製品機能として成立するなら Core** へ実装する。
+**この案件だけで成り立つならこの Repository、一般製品機能として成立するなら Core** へ実装する。
 顧客名を除いても成立する機能をこの Repository に閉じ込めない。判断できない場合は
 Architecture Review としてチームに相談する。
+
+この Repository で開発してよいもの（正本は `MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」）:
+
+- 今から: この案件で値を選んだ記録（`evaluation/`）
+- 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
+- コード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る。それまで Core の内部を直に import しない
+
+次のどれかに当たったら、Core の Issue を作って還元する（同じ文書の「Coreへの還元」）: 2 件目の案件でも要る・Core の内部を使わないと作れない・System Release を作るときの見直しで上げられると分かった。
 
 Core を変更した場合は、Core 側で Release したうえで `versions.yaml` を
 検証済みの組合せへ更新する。

@@ -19,17 +19,19 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `poc/` | 実現性の検証（**本番のコードは置かない**） |
 | `config/` | Core へ配る設定 |
 | `manifests/` | Dataset と Model の**参照と hash**（本体は置かない） |
-| `evaluation/` | 固定した評価の結果 |
+| `evaluation/` | 固定した評価の結果と、この案件で値を選んだ記録 |
 | `validation/` | 仕様に対する技術検証 |
 | `acceptance/` | 顧客・現場が受け入れた記録 |
 | `release/` | System Release の manifest |
 | `deployment/` | 配置した事実の記録 |
 | `deploy/` | この機体固有の起動・配置設定 |
-| `plugins/` | この案件固有の拡張（Interface は未検証） |
+| `plugins/` | この案件固有の拡張（差し込む Core の入口ができてから） |
 | `recipes/` | 製品・検査条件 |
 | `tests/` | この案件の組合せの検証 |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
+
+この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録と回帰の試験から。コードは Core の入口ができてから）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」）。
 
 ## 置かないもの
 

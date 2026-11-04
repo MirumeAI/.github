@@ -1,10 +1,11 @@
 # plugins/ — この案件固有の拡張
 
-Core に安全な拡張の入口が用意された段階で、案件固有の拡張をここへ置きます。
+差し込む Core の入口ができた後に、案件固有の拡張をここへ置きます。
 
-**Plugin / Adapter の Interface は未検証です。** 存在を前提に実装しないでください。
+**今、Core に入口はありません。** 入口は、具体の要求が出たときに Architecture Review で 1 つずつ作ります（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「Core の入口」）。入口ができるまで、ここのコードから Core の内部を直に import しないでください（Core を変えるたびに壊れ、Core の写しを持つのと同じになります）。
 
 ## 置かないもの
 
 - Core に入れるべき機能（2案件以上で使うものは Core へ還元する）
 - Core 内に顧客名で分岐を書くこと
+- Core の内部を直に import するコード

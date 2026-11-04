@@ -46,7 +46,7 @@ Architecture Review としてチームに相談する。
 
 この Repository で開発してよいもの（正本は `MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」）:
 
-- 今から: この案件で値を選んだ記録（形と置き場は `MirumeAI/development-docs` #273 で決める。決まるまでの仮の置き場は `evaluation/`。混入の検査が照らさないので、記録の Pull Request では Reviewer B が混入を見る）
+- 今から: この案件で値を選んだ記録（形と置き場は `MirumeAI/development-docs#273` で決める。決まるまでの仮の置き場は `evaluation/`。混入の検査が照らさないので、記録の Pull Request では Reviewer B が混入を見る）
 - 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
 - コード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る。それまで Core の内部を直に import しない
 

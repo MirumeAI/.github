@@ -349,6 +349,13 @@ class ReviewTest(Base):
                      "Human Adjudication の承認を頼みに merge した", "Human Adjudication の承認を頼みとして merge",
                      "Human Adjudication の承認を頼みの綱に", "Human Adjudication の承認を要するに得た",
                      "Human Adjudication の承認を仰せつかった",
+                     # 間に空白 1 つをはさむ形も（`を` の側とそろえる。 #143）
+                     "Human Adjudication の承認を頼み に merge した", "Human Adjudication の承認を頼み として merge",
+                     "Human Adjudication の承認を頼み の綱に", "Human Adjudication の承認を要する に得た",
+                     "Human Adjudication の承認を頼み\u3000に merge した",
+                     # 名詞の `頼み`・`要するに` を断るので止まる（README に書いた。 `頼む`・`要する` と言い直す。 #143）
+                     "Human Adjudication の承認を頼みに行く", "Human Adjudication の承認を頼みにくい",
+                     "Human Adjudication の承認を要するには",
                      # 形で見分けられない触れる形も断る（`が完了したかを確かめる` と言い直せば通る）
                      "Human Verification の完了を確かめる"):
             with self.subTest(look=look):

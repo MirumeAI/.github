@@ -33,7 +33,7 @@ argument-hint: [顧客要求の内容]
             └─ NO  → Architecture Review
 ```
 
-`Plugin・Adapter` 候補でも、Core 側の拡張 Interface は**今は無い**（2026-11-04 に確かめた）。要るときは、具体の要求で Architecture Review をして入口を 1 つずつ作る。入口ができるまで、顧客 Repository のコードから Core の内部を直に import しない（development-docs の `03_customer_development/customer_specific_development.md` の「Core の入口」）。
+`Plugin・Adapter` 候補でも、Core 側の拡張 Interface は**今は無い**（2026-11-04 に確かめた）。要るときは、具体の要求で Architecture Review をして入口を 1 つずつ作る。顧客 Repository のコードから Core の内部を直に import しない。入口ができた後も、使うのは入口だけ（development-docs の `03_customer_development/customer_specific_development.md` の「Core の入口」）。
 
 ## 出力
 

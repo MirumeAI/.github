@@ -48,7 +48,7 @@ Architecture Review としてチームに相談する。
 
 - 今から: この案件で値を選んだ記録（形と置き場は `MirumeAI/development-docs#273` で決める。決まるまでの仮の置き場は `evaluation/`。混入の検査が照らさないので、記録の Pull Request では Reviewer B が混入を見る）
 - 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
-- コード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る。それまで Core の内部を直に import しない
+- コード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る。Core の内部は、入口ができた後も直に import しない（使うのは入口だけ）
 
 次のどれかに当たったら、Core の Issue を作って還元する（同じ文書の「Coreへの還元」）: 2 件目の案件でも要る・Core の内部を使わないと作れない・System Release を作るときの見直しで上げられると分かった。
 

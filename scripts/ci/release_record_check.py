@@ -94,6 +94,9 @@ VERSIONS_CORES = {
     "image_acquisition_pdm": "MirumeAI/Image-Acquisition-PDM",
     "pdm": "MirumeAI/PDM",
 }
+#: 開発中に使う Core の commit の節（任意）。 **選択ではない。** System Release と
+#: 配置は tag と commit の行だけを見るので、 ここに書いた版は機体に配置できない。
+VERSIONS_DEVELOPMENT = "development"
 #: 手元の確かめで Core の写しの道を渡す環境の変数。
 CORE_ROOT_ENV = {
     "image_acquisition_pdm": "CORE_ROOT_IMAGE_ACQUISITION_PDM",
@@ -266,6 +269,22 @@ def _verify_cores(chosen: dict, roots: dict, errors: list) -> None:
                       f"（{lock.get('tag')}）と違います")
 
 
+def _check_development(node, errors: list, notes: list) -> None:
+    """開発中の固定。 Core ごとの 40 桁の commit だけを持つ。"""
+    if not isinstance(node, dict) or not node:
+        errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} は Core ごとの commit を書きます")
+        return
+    unknown = sorted(str(k) for k in node if k not in VERSIONS_CORES)
+    if unknown:
+        errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} に知らない項目があります"
+                      f"（{', '.join(unknown)}）")
+    for key in VERSIONS_CORES:
+        if key in node and not (isinstance(node[key], str) and SHA_RE.fullmatch(node[key])):
+            errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT}.{key} は 40 桁の commit SHA にします")
+    notes.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} あり（開発中の固定。"
+                 " System Release と配置には使えません）")
+
+
 def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
     d = _load(p, errors, yaml)
     if d is None:
@@ -278,7 +297,8 @@ def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
         errors.append(f"versions.yaml: schema_version の {v!r} は知らない形式です"
                       f"（知っているのは {', '.join(map(str, VERSIONS_SCHEMAS))}）")
         return
-    extra = sorted(str(k) for k in d if k not in ("schema_version", *VERSIONS_CORES))
+    extra = sorted(str(k) for k in d
+                   if k not in ("schema_version", VERSIONS_DEVELOPMENT, *VERSIONS_CORES))
     if extra:
         errors.append(f"versions.yaml: 選択のほかの項目があります（{', '.join(extra)}）。"
                       " 配置・検証・移行の経緯は書きません")
@@ -305,6 +325,8 @@ def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
                           "（未選択なら tag と commit の両方を null）")
         else:
             chosen[key] = (tag, commit)
+    if VERSIONS_DEVELOPMENT in d:
+        _check_development(d[VERSIONS_DEVELOPMENT], errors, notes)
     if "pdm" in chosen and "image_acquisition_pdm" not in chosen:
         errors.append("versions.yaml: 撮像側を選ばずに PDM だけを選べません"
                       "（PDM は撮像側のタグの pdm.lock.json に従います）")

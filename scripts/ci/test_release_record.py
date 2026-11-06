@@ -370,6 +370,71 @@ class VersionsYamlTest(unittest.TestCase):
 
 
 @unittest.skipIf(_needs_yaml() or shutil.which("git") is None, "PyYAML か git が無い")
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class VersionsDevelopmentTest(unittest.TestCase):
+    """開発中の固定（任意の節 `development`）。 **選択ではない**（#153）。"""
+
+    A40, B40 = "a" * 40, "b" * 40
+
+    def _run(self, text: str) -> tuple:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.yaml").write_text(text, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=td)
+            for k in ("CORE_ROOT_IMAGE_ACQUISITION_PDM", "CORE_ROOT_PDM"):
+                env.pop(k, None)
+            r = subprocess.run([sys.executable, str(CHECKER)],
+                               capture_output=True, text=True, env=env)
+            return r.returncode, r.stdout + r.stderr
+
+    def _dev(self, body: str) -> str:
+        return _versions(extra=f"development: {body}\n")
+
+    def test_commits_pass_and_are_told_as_not_deployable(self) -> None:
+        code, out = self._run(self._dev(
+            f"{{image_acquisition_pdm: {self.A40}, pdm: {self.B40}}}"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("System Release と配置には使えません", out)
+
+    def test_it_is_not_a_selection(self) -> None:
+        code, out = self._run(self._dev(f"{{pdm: {self.B40}}}"))
+        self.assertEqual(code, 0, out)
+        self.assertIn("versions.yaml: 未選択", out)
+
+    def test_an_unknown_core_is_refused(self) -> None:
+        code, out = self._run(self._dev(f"{{other: {self.A40}}}"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("知らない項目", out)
+
+    def test_a_branch_name_is_refused(self) -> None:
+        code, out = self._run(self._dev("{pdm: main}"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("development.pdm は 40 桁", out)
+
+    def test_a_short_commit_is_refused(self) -> None:
+        code, out = self._run(self._dev("{image_acquisition_pdm: abc1234}"))
+        self.assertEqual(code, 1, out)
+
+    def test_an_empty_section_is_refused(self) -> None:
+        for body in ("{}", "null", "[]"):
+            code, out = self._run(self._dev(body))
+            self.assertEqual(code, 1, (body, out))
+
+    def test_a_tag_in_the_section_is_refused(self) -> None:
+        code, out = self._run(self._dev("{tag: v1.0.0}"))
+        self.assertEqual(code, 1, out)
+
+    def test_other_extra_keys_stay_refused(self) -> None:
+        code, out = self._run(_versions(extra="deployment: {machine: M01}\n"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("選択のほかの項目", out)
+
+    def test_the_selection_rules_do_not_change(self) -> None:
+        code, out = self._run(_versions(pdm=("v1.0.0", self.A40),
+                                        extra=f"development: {{pdm: {self.B40}}}\n"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("撮像側を選ばずに PDM だけを選べません", out)
+
+
 class VersionsAgainstCoreCopiesTest(unittest.TestCase):
     """Core の写しを渡したとき、 タグ・commit と、 PDM の行と撮像側の lock を照らす。"""
 

@@ -33,7 +33,7 @@ argument-hint: [顧客要求の内容]
             └─ NO  → Architecture Review
 ```
 
-`Plugin・Adapter` 候補でも、Core 側の拡張 Interface は**未検証**です。存在を前提にせず、未確認なら Architecture Review を経て実装方法を決める。
+`Plugin・Adapter` 候補でも、Core 側の拡張 Interface は**今は無い**（2026-11-04 に確かめた）。要るときは、具体の要求で Architecture Review をして入口を 1 つずつ作る。入口ができるまで、顧客 Repository のコードから Core の内部を直に import しない（development-docs の `03_customer_development/customer_specific_development.md` の「Core の入口」）。
 
 ## 出力
 
@@ -41,7 +41,7 @@ argument-hint: [顧客要求の内容]
 2. 実装分類と判断根拠
 3. 確認すべきコード・設定の場所
 4. `Both` の場合: 顧客 Repository の Issue（1 つ）・各 Core の Pull Request・各 Core の Product Release（タグは人が打つ）・顧客 Repository の `versions.yaml` で選ぶ組合せ（撮像側の lock と合うことを確かめる）の構成案。Core 側で独立した Issue が要るのは、その Core 単独で意味のある変更になり他の顧客にも影響する場合と、Core の公開 Interface を変える場合（Architecture Review の対象）だけ（development-docs の `03_customer_development/customer_specific_development.md` の「Bothの場合」）
-5. Core へ還元すべき共通機能があるか
+5. Core へ還元すべき共通機能があるか。次のどれかに当たれば、Core の Issue を作る: 2 件目の案件でも同じものが要る・Core の内部を直に使わないと作れない・System Release を作るときの見直しで上げられると分かった。還元の Pull Request では、顧客の値が Core に入らないことを、各 Core の混入の検査と Reviewer B で確かめる（同じ文書の「Coreへの還元」）
 6. Architecture Review が必要なら、決めるべき論点の一覧
 
 ## 禁止事項に該当しないか確認する

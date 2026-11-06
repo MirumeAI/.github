@@ -1029,6 +1029,7 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
+    _STOP.clear()
     if a.jobs < 1:
         print("流せません: --jobs は 1 以上にしてください", file=sys.stderr)
         return 2
@@ -1079,6 +1080,10 @@ def _main(argv: list | None, state: dict) -> int:
     print(f"head: {a.head_sha}（{base_note}）")
     print(f"{canon_note}・{tool_note}")
     print(f"変更のファイル: {len(changed)}（merge-base {merge_base[:12]}）")
+    if a.jobs > 1 and any("concurrency" in j["spec"] for j in jobs):
+        # GitHub は同じ組（concurrency）の job を同時に流さない。 組を照らさずに、 全部を 1 つずつ流す（#149 の B）
+        a.jobs = 1
+        print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
     if not has_base:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")
@@ -1102,11 +1107,20 @@ def _main(argv: list | None, state: dict) -> int:
     state["running"] = True             # ここから先の思わぬ誤りは FAIL（main）
     signals = {}
 
+    def ignored(_signum, _frame):
+        """止め始めた後の合図は、 何もしない（SIG_IGN に替えると、 替える間に届いた合図で Python が
+        「race condition」の traceback を出す）。"""
+
+    def hold() -> None:
+        signal.signal(signal.SIGTERM, ignored)
+        signal.signal(signal.SIGINT, ignored)
+
     def interrupted(signum, _frame):
+        hold()                          # 次の合図で、 止めるのと消すのを途中でやめない
         signals["got"] = signum
         raise KeyboardInterrupt
 
-    old_term, old_int = signal.signal(signal.SIGTERM, interrupted), signal.getsignal(signal.SIGINT)
+    old_term, old_int = signal.signal(signal.SIGTERM, interrupted), signal.signal(signal.SIGINT, interrupted)
     shown = [0]
     sys.stdout.flush()                  # 見出しを先に書き出す（出力をファイルに向けたときも、 終わりまで空にしない）
 
@@ -1171,20 +1185,20 @@ def _main(argv: list | None, state: dict) -> int:
                             _rmtree(work / f"job-{idx:02d}")
                     show_ready()
             except BaseException:
-                # 後片付けの途中に届いた次の合図で、 止めるのと消すのを途中でやめない
-                signal.signal(signal.SIGTERM, signal.SIG_IGN)
-                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                hold()                  # 後片付けの途中に届いた次の合図で、 止めるのと消すのを途中でやめない
                 _stop_all()
                 raise
     except KeyboardInterrupt:
         print("\n止めました", file=sys.stderr)
         return 128 + signals.get("got", signal.SIGINT)
     finally:
-        signal.signal(signal.SIGTERM, old_term)
-        signal.signal(signal.SIGINT, old_int)
+        hold()                          # 消し終えるまで、 合図で途中でやめない
         if not a.keep:
             for p in work.glob("job-*"):
                 _rmtree(p)
+        if not signals:                 # 止められたときは、 終わるまで次の合図を受けない
+            signal.signal(signal.SIGTERM, old_term)
+            signal.signal(signal.SIGINT, old_int)
     results = {key: (label, res) for key, label, res in (done_jobs[i] for i in sorted(done_jobs))}
     ran = [s for _, r in results.values() for s in r["steps"] if s["result"] != "skipped"]
     n_tests = sum(s["ran"] for s in ran)

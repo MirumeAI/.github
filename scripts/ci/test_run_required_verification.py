@@ -938,8 +938,9 @@ class Backlog121Test(E2E):
                 # mock の job は job の場所を作らないので、 片付けも止めて、 入れた誤りが起きるようにする
                 with mock.patch.object(R, "_run_job", side_effect=effects), mock.patch.object(R, "_rmtree"), \
                         contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    # 1 つずつ流す（mock の返す値の順は、 job を流す順に頼る）
                     rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t),
-                                 "--canonical-ref", "main", "--work", str(self.root / f"work-{name}")])
+                                 "--canonical-ref", "main", "--jobs", "1", "--work", str(self.root / f"work-{name}")])
                 text = out.getvalue() + err.getvalue()
                 self.assertEqual(rc, 1, text)
                 self.assertRegex(text, r"(?m)^結果: FAIL（job を流し始めた後に道具の中の誤りで止めました: RuntimeError: 壊れた")
@@ -1040,6 +1041,27 @@ class ParallelJobsTest(E2E):
         self.assertIn("の job b: 前の job が落ちたので流さない", p.stdout)
         self.assertIn("の job c: PASS", p.stdout)
 
+    def test_job_concurrency_runs_one_at_a_time(self):
+        """job ごとの concurrency があれば、 GitHub が同じ組を同時に流さないので、 1 つずつ流す（#149 の B）。"""
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                concurrency: one
+                steps:
+                  - run: {_meet("a", "b", self.root, 5)}
+              b:
+                runs-on: ubuntu-latest
+                concurrency: one
+                steps:
+                  - run: {_meet("b", "a", self.root, 5)}
+            """), {})
+        p = self.run_it(t, "--jobs", "3")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("job ごとの concurrency があるので", p.stdout)
+        self.assertEqual((self.root / "a.result").read_text().strip(), "alone")
+
     def test_jobs_must_be_positive(self):
         t = _repo(self.root, self.wf("""\
             on: pull_request
@@ -1103,6 +1125,83 @@ class StoppedTest(E2E):
             self.assertFalse((at / f"{n}.after").exists(), "止めた後に次の段を始めた")
         self.assertEqual(sorted(x.name for x in self.work.iterdir() if x.name.startswith("job-")), [],
                          "job の作業の場所を消していない")
+
+    def test_a_previous_stop_does_not_carry_over(self):
+        """同じ process で前に止めても、 次の main() は段を流す（止めた印を持ち越さない）。"""
+        import contextlib
+        import io
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+        R._stop_all()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t), "--canonical-ref", "main",
+                         "--work", str(self.root / "work-again")])
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn(R.RECORD_PASS, out.getvalue())
+
+    def test_a_second_signal_does_not_cut_the_cleanup_short(self):
+        """1 回目の合図の後に、 すぐ 2 回目（SIGTERM・SIGINT）が届いても、 段を止めて作業の場所を消し終える。"""
+        for second in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(second=second.name):
+                at = self.root / second.name
+                at.mkdir()
+                # 作業の場所を大きくして、 消している間に 2 回目が届くようにする
+                t = _repo(at, self.wf(f"""\
+                    on: pull_request
+                    jobs:
+                      a:
+                        runs-on: ubuntu-latest
+                        steps:
+                          - run: |
+                              mkdir -p "$HOME/many" && cd "$HOME/many" && seq 20000 | xargs touch
+                              sleep 300 & echo $! > "{at}/a.pid"; wait
+                    """), {})
+                self.work = at / "work"
+                proc = subprocess.Popen([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main",
+                                         "--canonical", str(t), "--canonical-ref", "main", "--work", str(self.work)],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    pid = None
+                    for _ in range(1200):
+                        f = at / "a.pid"
+                        if f.exists() and f.read_text().strip():
+                            pid = int(f.read_text())
+                            break
+                        if proc.poll() is not None:
+                            break
+                        time.sleep(0.1)
+                    self.assertIsNotNone(pid, "段が始まらない")
+                    proc.send_signal(signal.SIGTERM)
+                    # 片付けの間（job の作業の場所が残っている間）、 2 回目を送り続ける。 どこで届いても、
+                    # 途中でやめないこと。 消し終えたら送るのをやめる（道具の終わりの処理の中で届かせない）
+                    for _ in range(12000):
+                        if proc.poll() is not None or not any(self.work.glob("job-*")):
+                            break
+                        proc.send_signal(second)
+                        time.sleep(0.01)
+                    out, err = proc.communicate(timeout=120)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.communicate()
+                # 2 つの合図が Python に渡る前に重なると、 番号の小さい SIGINT を先に受ける（どちらで止めても正しい）
+                self.assertIn(proc.returncode, {128 + signal.SIGTERM, 128 + second}, out + err)
+                self.assertIn("止めました", err)
+                self.assertNotIn("Traceback", err)
+                for _ in range(50):
+                    if not _alive(pid):
+                        break
+                    time.sleep(0.1)
+                self.assertFalse(_alive(pid), "段の process が残った")
+                self.assertEqual([x.name for x in self.work.iterdir() if x.name.startswith("job-")], [],
+                                 "2 回目の合図で、 job の作業の場所を消すのを途中でやめた")
 
 
 class ExprAndGlobTest(unittest.TestCase):

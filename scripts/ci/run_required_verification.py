@@ -20,7 +20,9 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
   ・`needs` を満たした job は、 `--jobs`（既定 3）まで同時に流す（GitHub も、 待ち合わせの無い job は
     別の機械で同時に流す。 1 つずつ流すと、 変異の表を分けた job の時間が足し算になった。 #149）。
     結果は plan の順に出す。 `--jobs 1` は 1 つずつ。 job ごとの `concurrency` がある workflow も、 1 つずつ
-    流す（GitHub は同じ組の job を同時に流さない。 組は照らさない）
+    流す（GitHub は同じ組の job を同時に流さない。 組は照らさない）。 同時に流すときは、 計算の部品の
+    スレッドの数を「CPU の数 ÷ 同時に流す数」に絞る（どの job も CPU の数だけスレッドを立てて取り合い、
+    job の時間が上限に近づいた。 workflow に同じ変数を書いてあれば、 そちらを使う）
   ・止められたとき（Ctrl-C・SIGTERM）は、 流している段の process の組を止め、 次の段を始めず、
     作業の場所を消して止まる（段は別の session で動くので、 道具だけが止まると残っていた。 #149）
   ・再利用 workflow（`MirumeAI/.github/...@main`）と正本の道具は、 この道具を
@@ -72,6 +74,9 @@ TOOL_REL = "scripts/ci/run_required_verification.py"
 CANONICAL_SLUG = "MirumeAI/.github"
 EVENT = "pull_request"
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
+#: job を同時に流すときに絞る、 計算の部品のスレッドの数の環境変数（#149）
+THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+              "OPENCV_FOR_THREADS_NUM")
 
 #: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
 #: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
@@ -832,6 +837,7 @@ def _run_job(job: dict, ctx_base: dict, a: argparse.Namespace, jobdir: Path, log
     event = temp / "event.json"
     event.write_text(json.dumps({"pull_request": ctx_base["github"]["event"]["pull_request"]}))
     env = _base_env(real_cache)
+    env.update(a.thread_env)        # 下の workflow・job の env に同じ名前があれば、 そちらを使う
     env.update({"HOME": str(home), "TMPDIR": str(temp), "RUNNER_TEMP": str(temp),
                 "GITHUB_WORKSPACE": str(ws), "GITHUB_EVENT_NAME": EVENT,
                 "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": ctx_base["github"]["repository"],
@@ -1085,6 +1091,11 @@ def _main(argv: list | None, state: dict) -> int:
         # GitHub は同じ組（concurrency）の job を同時に流さない。 組を照らさずに、 全部を 1 つずつ流す（#149 の B）
         a.jobs = 1
         print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
+    together = min(a.jobs, len(jobs))
+    per_job = max(1, len(os.sched_getaffinity(0)) // together)
+    a.thread_env = {name: str(per_job) for name in THREAD_ENV} if together > 1 else {}
+    if a.thread_env:
+        print(f"job を同時に {together} つまで流すので、 計算の部品のスレッドを job ごとに {per_job} に絞ります")
     if not has_base:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")

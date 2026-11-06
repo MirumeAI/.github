@@ -1062,6 +1062,51 @@ class ParallelJobsTest(E2E):
         self.assertIn("job ごとの concurrency があるので", p.stdout)
         self.assertEqual((self.root / "a.result").read_text().strip(), "alone")
 
+    def threads(self, env: str = "") -> Path:
+        at = self.root
+        step = f"""- run: echo "${{OMP_NUM_THREADS:-none}} ${{OPENCV_FOR_THREADS_NUM:-none}}" > "{at}/$NAME.threads\""""
+        return _repo(self.root, self.wf(f"""\
+            on: pull_request
+            {env}
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                env: {{NAME: a}}
+                steps:
+                  {step}
+              b:
+                runs-on: ubuntu-latest
+                env: {{NAME: b}}
+                steps:
+                  {step}
+            """), {})
+
+    def test_threads_are_limited_when_jobs_run_together(self):
+        """同時に流すときは、 計算の部品のスレッドを「CPU の数 ÷ 同時に流す数」に絞る。"""
+        p = self.run_it(self.threads(), "--jobs", "2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        want = str(max(1, len(os.sched_getaffinity(0)) // 2))
+        self.assertEqual((self.root / "a.threads").read_text().split(), [want, want])
+        self.assertIn(f"job ごとに {want} に絞ります", p.stdout)
+
+    def test_threads_use_the_number_of_jobs_that_can_run_together(self):
+        """--jobs が job の数より多いときは、 同時に流れる数（job の数）で割る。"""
+        p = self.run_it(self.threads(), "--jobs", "8")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        want = str(max(1, len(os.sched_getaffinity(0)) // 2))
+        self.assertEqual((self.root / "b.threads").read_text().split(), [want, want])
+
+    def test_threads_are_not_limited_one_at_a_time(self):
+        p = self.run_it(self.threads(), "--jobs", "1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.root / "a.threads").read_text().split(), ["none", "none"])
+        self.assertNotIn("に絞ります", p.stdout)
+
+    def test_the_workflow_env_wins_over_the_limit(self):
+        p = self.run_it(self.threads('env: {OMP_NUM_THREADS: "1"}'), "--jobs", "2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.root / "a.threads").read_text().split()[0], "1")
+
     def test_jobs_must_be_positive(self):
         t = _repo(self.root, self.wf("""\
             on: pull_request

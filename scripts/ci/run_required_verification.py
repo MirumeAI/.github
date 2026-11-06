@@ -808,6 +808,13 @@ def _stop_all() -> None:
         _kill_group(g)
 
 
+def _cpus() -> int:
+    """使える CPU の数（`sched_getaffinity` は Linux だけ）。"""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _kill_group(pgid: int) -> None:
     """段の process の組を止める。 **段が終わった後も、 後ろで動く子を残さない**
     （GitHub の runner も job の終わりに止める）。 setsid で抜けたものは止められない。"""
@@ -1092,9 +1099,10 @@ def _main(argv: list | None, state: dict) -> int:
         a.jobs = 1
         print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
     together = min(a.jobs, len(jobs))
-    per_job = max(1, len(os.sched_getaffinity(0)) // together)
-    a.thread_env = {name: str(per_job) for name in THREAD_ENV} if together > 1 else {}
-    if a.thread_env:
+    a.thread_env = {}
+    if together > 1:
+        per_job = max(1, _cpus() // together)
+        a.thread_env = {name: str(per_job) for name in THREAD_ENV}
         print(f"job を同時に {together} つまで流すので、 計算の部品のスレッドを job ごとに {per_job} に絞ります")
     if not has_base:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"

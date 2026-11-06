@@ -1107,6 +1107,30 @@ class ParallelJobsTest(E2E):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual((self.root / "a.threads").read_text().split()[0], "1")
 
+    def test_cpus_without_sched_getaffinity(self):
+        """`sched_getaffinity` の無い OS（macOS など）でも、 CPU の数を読める。"""
+        from unittest import mock
+        real = os.sched_getaffinity
+        del os.sched_getaffinity
+        self.addCleanup(setattr, os, "sched_getaffinity", real)
+        with mock.patch.object(os, "cpu_count", return_value=7):
+            self.assertEqual(R._cpus(), 7)
+        with mock.patch.object(os, "cpu_count", return_value=None):
+            self.assertEqual(R._cpus(), 1)
+
+    def test_one_at_a_time_does_not_read_the_cpus(self):
+        """1 つずつ流すときは、 CPU の数を読まない（読めなくても流せる）。"""
+        import contextlib
+        import io
+        from unittest import mock
+        t = self.threads()
+        out = io.StringIO()
+        with mock.patch.object(R, "_cpus", side_effect=RuntimeError("読まない")), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t), "--canonical-ref", "main",
+                         "--jobs", "1", "--list"])
+        self.assertEqual(rc, 0, out.getvalue())
+
     def test_jobs_must_be_positive(self):
         t = _repo(self.root, self.wf("""\
             on: pull_request

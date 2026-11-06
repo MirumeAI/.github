@@ -19,7 +19,8 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     残りは `if: always()` などの段だけを流す（CI と同じ）
   ・`needs` を満たした job は、 `--jobs`（既定 3）まで同時に流す（GitHub も、 待ち合わせの無い job は
     別の機械で同時に流す。 1 つずつ流すと、 変異の表を分けた job の時間が足し算になった。 #149）。
-    結果は plan の順に出す。 `--jobs 1` は 1 つずつ
+    結果は plan の順に出す。 `--jobs 1` は 1 つずつ。 job ごとの `concurrency` がある workflow も、 1 つずつ
+    流す（GitHub は同じ組の job を同時に流さない。 組は照らさない）
   ・止められたとき（Ctrl-C・SIGTERM）は、 流している段の process の組を止め、 次の段を始めず、
     作業の場所を消して止まる（段は別の session で動くので、 道具だけが止まると残っていた。 #149）
   ・再利用 workflow（`MirumeAI/.github/...@main`）と正本の道具は、 この道具を

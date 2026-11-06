@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -945,6 +946,163 @@ class Backlog121Test(E2E):
                 self.assertNotRegex(text, rf"(?m)^\s*{re.escape(R.RECORD_PASS)}")
                 self.assertNotIn("Traceback", text)
                 self.assertNotIn("cret", text, "URL の資格情報を出さない")
+
+
+def _meet(me: str, other: str, at: Path, wait_s: int = 20) -> str:
+    """job の段: 自分が始まった印を置き、 相手の印を待つ（来れば together、 来なければ alone）。
+    待ち合わせで重なりを確かめる（短い待ちの時間で確かめない）。"""
+    return (f'touch "{at}/{me}.started"; r=alone; for i in $(seq {wait_s * 10}); do '
+            f'if [ -e "{at}/{other}.started" ]; then r=together; break; fi; sleep 0.1; done; '
+            f'echo $r > "{at}/{me}.result"')
+
+
+class ParallelJobsTest(E2E):
+    """待ち合わせの無い job は `--jobs` まで同時に流す（#149）。 `needs` の順と結果の表示の順は変えない。"""
+
+    def two(self) -> Path:
+        return _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {_meet("a", "b", self.root)}
+              b:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {_meet("b", "a", self.root)}
+            """), {})
+
+    def test_independent_jobs_run_at_the_same_time(self):
+        p = self.run_it(self.two(), "--jobs", "2")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.root / "a.result").read_text().strip(), "together")
+        self.assertEqual((self.root / "b.result").read_text().strip(), "together")
+
+    def test_the_default_runs_jobs_at_the_same_time(self):
+        p = self.run_it(self.two())
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.root / "a.result").read_text().strip(), "together")
+
+    def test_jobs_1_runs_one_at_a_time(self):
+        p = self.run_it(self.two(), "--jobs", "1")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((self.root / "a.result").read_text().strip(), "alone",
+                         "1 つずつなら、 a が終わるまで b は始まらない")
+
+    def test_needs_and_the_order_of_the_output_are_kept(self):
+        """b は a の後（needs）。 c は a と同時に流れ、 先に終わっても、 表示は plan の順（a・b・c）。"""
+        at = self.root
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {_meet("a", "c", at)}; for i in $(seq 200); do [ -e "{at}/c.done" ] && break; sleep 0.1; done; touch "{at}/a.done"
+              b:
+                runs-on: ubuntu-latest
+                needs: a
+                steps:
+                  - run: test -e "{at}/a.done"
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {_meet("c", "a", at)}; touch "{at}/c.done"
+            """), {})
+        p = self.run_it(t, "--jobs", "3")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((at / "a.result").read_text().strip(), "together")
+        out = p.stdout
+        self.assertLess(out.index("の job a: PASS"), out.index("の job b: PASS"))
+        self.assertLess(out.index("の job b: PASS"), out.index("の job c: PASS"))
+
+    def test_a_failed_job_still_stops_its_dependents(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: exit 1
+              b:
+                runs-on: ubuntu-latest
+                needs: a
+                steps:
+                  - run: echo b
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo c
+            """), {})
+        p = self.run_it(t, "--jobs", "3")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("の job b: 前の job が落ちたので流さない", p.stdout)
+        self.assertIn("の job c: PASS", p.stdout)
+
+    def test_jobs_must_be_positive(self):
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo a
+            """), {})
+        self.work = self.root / "work-0"
+        p = subprocess.run([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main",
+                            "--canonical", str(t), "--canonical-ref", "main", "--jobs", "0",
+                            "--work", str(self.work)], capture_output=True, text=True, timeout=120)
+        self.assertRefused(p, "--jobs は 1 以上")
+
+
+class StoppedTest(E2E):
+    """SIGTERM で止めると、 流している段の process を止め、 次の段を始めず、 作業の場所を消す（#149）。"""
+
+    def test_sigterm_stops_the_running_steps_and_cleans_up(self):
+        at = self.root
+        body = "\n".join(f"""\
+              {n}:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: sleep 300 & echo $! > "{at}/{n}.pid"; wait
+                  - if: always()
+                    run: touch "{at}/{n}.after"
+            """ for n in ("a", "b"))
+        t = _repo(self.root, self.wf("on: pull_request\njobs:\n" + textwrap.indent(textwrap.dedent(body), "  ")), {})
+        self.work = self.root / "work-term"
+        proc = subprocess.Popen([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main",
+                                 "--canonical", str(t), "--canonical-ref", "main", "--jobs", "2",
+                                 "--work", str(self.work)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            pids = {}
+            for _ in range(1200):         # 2 つの段が始まるまで（始まらなければ、 下で落ちる）
+                for n in ("a", "b"):
+                    f = at / f"{n}.pid"
+                    if n not in pids and f.exists() and f.read_text().strip():
+                        pids[n] = int(f.read_text())
+                if len(pids) == 2 or proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(sorted(pids), ["a", "b"], "2 つの job の段が同時に始まらない")
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=120)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+        self.assertEqual(proc.returncode, 128 + signal.SIGTERM, out + err)
+        self.assertIn("止めました", err)
+        self.assertNotIn(R.RECORD_PASS, out)
+        for n, pid in pids.items():
+            for _ in range(50):
+                if not _alive(pid):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(_alive(pid), f"{n} の段の process が残った")
+            self.assertFalse((at / f"{n}.after").exists(), "止めた後に次の段を始めた")
+        self.assertEqual(sorted(x.name for x in self.work.iterdir() if x.name.startswith("job-")), [],
+                         "job の作業の場所を消していない")
 
 
 class ExprAndGlobTest(unittest.TestCase):

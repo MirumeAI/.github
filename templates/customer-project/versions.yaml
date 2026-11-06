@@ -8,6 +8,9 @@
 # - 使う Core を決めるまでは、 tag と commit の両方を null（未選択）にする
 # - pdm の行は、 撮像側のタグの commit にある pdm.lock.json と同じにする（組合せの
 #   正本は撮像側の lock で、 ここは写し）。 撮像側を選ばずに pdm だけを選ばない
+# - 開発中に Core の commit を固定するときは、 任意の節 development に Core ごとの
+#   40 桁の commit を書く（image_acquisition_pdm・pdm）。 タグの要らない開発用の固定で、
+#   System Release と配置には使えない
 # - 確かめる道具は MirumeAI/.github の scripts/ci/release_record_check.py
 schema_version: 2
 

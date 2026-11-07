@@ -23,6 +23,12 @@
                       tag と commit の片方だけ・形の違う値（未選択は両方 null）
                       撮像側を選ばずに PDM だけを選んでいる
 
+根の `versions.dev.yaml`（任意。開発中に使う Core の commit）も見る（#153）。
+**System Release は参照しない**ので、 開発の版は配置に流れない。
+
+    versions.dev.yaml Core ごとの 40 桁の commit のほかの項目・形の違う値がある
+    release/          software.versions_ref が versions.yaml でない
+
 Core の写しの道を `CORE_ROOT_IMAGE_ACQUISITION_PDM`・`CORE_ROOT_PDM` に渡した
 ときだけ、タグが注釈つきで書いた commit を指すことと、PDM の行が撮像側のタグの
 commit にある `pdm.lock.json` と同じことも照らす（CI は Private の Core を読めない
@@ -94,9 +100,13 @@ VERSIONS_CORES = {
     "image_acquisition_pdm": "MirumeAI/Image-Acquisition-PDM",
     "pdm": "MirumeAI/PDM",
 }
-#: 開発中に使う Core の commit の節（任意）。 **選択ではない。** System Release と
-#: 配置は tag と commit の行だけを見るので、 ここに書いた版は機体に配置できない。
-VERSIONS_DEVELOPMENT = "development"
+#: 開発中に使う Core の commit を置くファイル（任意。#153）。 **System Release は
+#: versions.yaml だけを参照する**（下の `VERSIONS_REF`）ので、 ここの版は配置に流れない。
+VERSIONS_DEV = "versions.dev.yaml"
+#: System Release が参照してよい Core の組合せのファイル
+VERSIONS_REF = "versions.yaml"
+#: `versions.dev.yaml` の知っている形式
+VERSIONS_DEV_SCHEMAS = (1,)
 #: 手元の確かめで Core の写しの道を渡す環境の変数。
 CORE_ROOT_ENV = {
     "image_acquisition_pdm": "CORE_ROOT_IMAGE_ACQUISITION_PDM",
@@ -269,20 +279,24 @@ def _verify_cores(chosen: dict, roots: dict, errors: list) -> None:
                       f"（{lock.get('tag')}）と違います")
 
 
-def _check_development(node, errors: list, notes: list) -> None:
-    """開発中の固定。 Core ごとの 40 桁の commit だけを持つ。"""
-    if not isinstance(node, dict) or not node:
-        errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} は Core ごとの commit を書きます")
+def _check_versions_dev(p: Path, errors: list, notes: list, yaml) -> None:
+    """開発中の固定。 Core ごとの 40 桁の commit だけを持つ（#153）。"""
+    d = _load(p, errors, yaml)
+    if d is None:
         return
-    unknown = sorted(str(k) for k in node if k not in VERSIONS_CORES)
+    if d.get("schema_version") not in VERSIONS_DEV_SCHEMAS:
+        errors.append(f"{VERSIONS_DEV}: schema_version は"
+                      f" {', '.join(map(str, VERSIONS_DEV_SCHEMAS))} です")
+    unknown = sorted(str(k) for k in d if k not in ("schema_version", *VERSIONS_CORES))
     if unknown:
-        errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} に知らない項目があります"
-                      f"（{', '.join(unknown)}）")
-    for key in VERSIONS_CORES:
-        if key in node and not (isinstance(node[key], str) and SHA_RE.fullmatch(node[key])):
-            errors.append(f"versions.yaml: {VERSIONS_DEVELOPMENT}.{key} は 40 桁の commit SHA にします")
-    notes.append(f"versions.yaml: {VERSIONS_DEVELOPMENT} あり（開発中の固定。"
-                 " System Release と配置には使えません）")
+        errors.append(f"{VERSIONS_DEV}: Core の commit のほかの項目があります（{', '.join(unknown)}）")
+    cores = [k for k in VERSIONS_CORES if k in d]
+    if not cores:
+        errors.append(f"{VERSIONS_DEV}: Core の commit がありません")
+    for key in cores:
+        if not (isinstance(d[key], str) and SHA_RE.fullmatch(d[key])):
+            errors.append(f"{VERSIONS_DEV}: {key} は 40 桁の commit SHA にします")
+    notes.append(f"{VERSIONS_DEV}: 開発中の固定（System Release と配置には使えません）")
 
 
 def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
@@ -297,8 +311,7 @@ def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
         errors.append(f"versions.yaml: schema_version の {v!r} は知らない形式です"
                       f"（知っているのは {', '.join(map(str, VERSIONS_SCHEMAS))}）")
         return
-    extra = sorted(str(k) for k in d
-                   if k not in ("schema_version", VERSIONS_DEVELOPMENT, *VERSIONS_CORES))
+    extra = sorted(str(k) for k in d if k not in ("schema_version", *VERSIONS_CORES))
     if extra:
         errors.append(f"versions.yaml: 選択のほかの項目があります（{', '.join(extra)}）。"
                       " 配置・検証・移行の経緯は書きません")
@@ -325,8 +338,6 @@ def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
                           "（未選択なら tag と commit の両方を null）")
         else:
             chosen[key] = (tag, commit)
-    if VERSIONS_DEVELOPMENT in d:
-        _check_development(d[VERSIONS_DEVELOPMENT], errors, notes)
     if "pdm" in chosen and "image_acquisition_pdm" not in chosen:
         errors.append("versions.yaml: 撮像側を選ばずに PDM だけを選べません"
                       "（PDM は撮像側のタグの pdm.lock.json に従います）")
@@ -536,12 +547,13 @@ def main() -> int:
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     rel_dir, dep_dir = root / "release", root / "deployment"
     versions = root / "versions.yaml"
+    versions_dev = root / VERSIONS_DEV
     val_dir = root / "validation"
     releases, deployments = _records(rel_dir), _records(dep_dir)
     verifications = _records(val_dir)
 
     if (not rel_dir.is_dir() and not dep_dir.is_dir() and not val_dir.is_dir()
-            and not versions.is_file()):
+            and not versions.is_file() and not versions_dev.is_file()):
         print("release/・deployment/・validation/・versions.yaml が無いので何もしません。")
         return 0
 
@@ -551,7 +563,8 @@ def main() -> int:
     try:
         import yaml
     except ImportError:
-        if not releases and not deployments and not verifications and not versions.is_file():
+        if (not releases and not deployments and not verifications and not versions.is_file()
+                and not versions_dev.is_file()):
             print("記録がまだありません。")
             return 0
         print("PyYAML が無いので記録を検査できません。"
@@ -565,6 +578,8 @@ def main() -> int:
 
     if versions.is_file():
         _check_versions(versions, errors, notes, yaml)
+    if versions_dev.is_file():
+        _check_versions_dev(versions_dev, errors, notes, yaml)
 
     for p in releases:
         d = _load(p, errors, yaml)
@@ -573,6 +588,12 @@ def main() -> int:
         _check_schema(p.name, d, errors)
         _check_fields(p.name, d, RELEASE_FIELDS, errors)
         _check_release_data(p.name, d, errors)
+        # **System Release は versions.yaml だけを参照する**（#153）。 開発中の固定
+        # （versions.dev.yaml）や別のファイルを指すと、 タグの無い版が配置に流れる。
+        sw = d.get("software")
+        ref = sw.get("versions_ref") if isinstance(sw, dict) else None
+        if ref not in (None, "") and ref != VERSIONS_REF:
+            errors.append(f"{p.name}: software.versions_ref は {VERSIONS_REF} です")
         rid = d.get("release_id")
         if rid:
             known_ids.add(str(rid))

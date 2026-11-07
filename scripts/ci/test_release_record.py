@@ -369,6 +369,84 @@ class VersionsYamlTest(unittest.TestCase):
                 self.assertIn(needle, out)
 
 
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class VersionsDevFileTest(unittest.TestCase):
+    """開発中の固定の `versions.dev.yaml`（#153）。 **System Release は参照しない。**"""
+
+    A40, B40 = "a" * 40, "b" * 40
+
+    def _run(self, dev: "str | None", versions: str = VERSIONS_UNSELECTED) -> tuple:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.yaml").write_text(versions, encoding="utf-8")
+            if dev is not None:
+                (Path(td) / "versions.dev.yaml").write_text(dev, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=td)
+            for k in ("CORE_ROOT_IMAGE_ACQUISITION_PDM", "CORE_ROOT_PDM"):
+                env.pop(k, None)
+            r = subprocess.run([sys.executable, str(CHECKER)],
+                               capture_output=True, text=True, env=env)
+            return r.returncode, r.stdout + r.stderr
+
+    def test_commits_pass_and_are_told_as_not_deployable(self) -> None:
+        code, out = self._run(f"schema_version: 1\nimage_acquisition_pdm: {self.A40}\n"
+                              f"pdm: {self.B40}\n")
+        self.assertEqual(code, 0, out)
+        self.assertIn("System Release と配置には使えません", out)
+
+    def test_it_is_not_a_selection(self) -> None:
+        code, out = self._run(f"schema_version: 1\npdm: {self.B40}\n")
+        self.assertEqual(code, 0, out)
+        self.assertIn("versions.yaml: 未選択", out)
+
+    def test_alone_it_is_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.dev.yaml").write_text("schema_version: 1\npdm: main\n",
+                                                        encoding="utf-8")
+            r = subprocess.run([sys.executable, str(CHECKER)], capture_output=True, text=True,
+                               env=dict(os.environ, CI_ROOT=td))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_bad_forms_are_refused(self) -> None:
+        cases = {
+            "知らない Core": f"schema_version: 1\nother: {self.A40}\n",
+            "Core と一緒の知らない項目": f"schema_version: 1\npdm: {self.B40}\nmachine: M01\n",
+            "Branch の名前": "schema_version: 1\npdm: main\n",
+            "短い commit": "schema_version: 1\npdm: abc1234\n",
+            "大文字": f"schema_version: 1\npdm: {'A' * 40}\n",
+            "null": "schema_version: 1\npdm: null\n",
+            "タグ": "schema_version: 1\ntag: v1.0.0\n",
+            "Core が無い": "schema_version: 1\n",
+            "schema が無い": f"pdm: {self.B40}\n",
+            "知らない schema": f"schema_version: 2\npdm: {self.B40}\n",
+            "空": "",
+            "list": "[]\n",
+        }
+        for label, text in cases.items():
+            code, out = self._run(text)
+            self.assertEqual(code, 1, (label, out))
+
+    def test_the_section_in_versions_yaml_stays_refused(self) -> None:
+        code, out = self._run(None, _versions(extra=f"development: {{pdm: {self.B40}}}\n"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("選択のほかの項目", out)
+
+
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class SystemReleaseRefersOnlyToVersionsTest(_Records):
+    """System Release は versions.yaml だけを参照する（#153）。"""
+
+    def test_the_dev_file_is_refused(self) -> None:
+        self.new.write_text(RELEASE_NEW.replace("versions_ref: versions.yaml",
+                                                "versions_ref: versions.dev.yaml"), encoding="utf-8")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("software.versions_ref は versions.yaml です", out)
+
+    def test_versions_yaml_passes(self) -> None:
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+
+
 @unittest.skipIf(_needs_yaml() or shutil.which("git") is None, "PyYAML か git が無い")
 class VersionsAgainstCoreCopiesTest(unittest.TestCase):
     """Core の写しを渡したとき、 タグ・commit と、 PDM の行と撮像側の lock を照らす。"""

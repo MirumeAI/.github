@@ -1,5 +1,6 @@
-# Core の作業コピー。 **追跡しない。**
+# 今ある機体（LEGACY）の Core の作業コピー。 **追跡しない。**
 # 案件 Repository に Core の Source を置かない（`versions.yaml` で固定する）。
+# 開発では Core の clone をこの Repository の隣に置く（README.md の「Core の置き方」）。
 /PDM/
 /Image-Acquisition-PDM/
 

@@ -10,9 +10,11 @@
 
 **Core の script を複製しないでください。**
 
-機体上には Core の作業コピーがあり、そこに同じものがあります。複製すると drift する場所を増やすだけです。実際に、ある案件で `check_pdm_link.sh` などが複製されており、片方が古くなっていました。
+機体上には Core があり、そこに同じものがあります。複製すると drift する場所を増やすだけです。実際に、ある案件で `check_pdm_link.sh` などが複製されており、片方が古くなっていました。
 
-Core の script は Core 作業コピーの `scripts/` から使います。systemd unit も `WorkingDirectory` を Core 作業コピーに向け、`scripts/...` を相対で呼びます。
+Core の script は Core の `scripts/` から使います。systemd unit も `WorkingDirectory` を Core に向け、`scripts/...` を相対で呼びます。
+
+今ある機体（LEGACY）では、Core の作業コピーがこの Repository の根の `PDM/`・`Image-Acquisition-PDM/` にあります（`.gitignore` 済み）。新しい配置はこの形に頼りません（`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）。開発では Core の clone をこの Repository の隣に置きます（根の `README.md` の「Core の置き方」）。
 
 ## 機体の記号
 

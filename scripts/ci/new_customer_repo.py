@@ -24,8 +24,8 @@
   5. Dependabot Alerts を有効にする
   6. 最初の中身を **Pull Request** にする（main へ直接入れない）
 
-CI が通り、 作成者と別の人が宣言（`customer-profile.yaml`）が雛形の値の無い
-初期形のままであることを確かめたら、 人が Squash and merge し、 そのあと
+Required Verification（正本の検査を手元で流す）が PASS し、 作成者と別の人が
+宣言（`customer-profile.yaml`）が雛形の値の無い初期形のままであることを確かめたら、 人が Squash and merge し、 そのあと
 `--check` を実行する（読み取りだけ。 この Repository について Organization
 監査も行う）。
 途中で止まったら、 原因を直して `--apply --resume` で続きから実行する。
@@ -77,7 +77,7 @@ NAME_RE = re.compile(r"^customer-[a-z0-9]+(?:-[a-z0-9]+)+$")
 
 #: 正本から写すもの。 **雛形に複製を置かない。** 置くと正本と雛形の 2 つに
 #: なり、 片方だけが直る。 すべて照合の対象（`copy_sync_check.SHARED`）
-#: なので、 写した後のずれは新しい Repository の CI が見つける。
+#: なので、 写した後のずれは新しい Repository の正本の検査（Required Verification）が見つける。
 FROM_CANONICAL = (
     ".claude/hooks/guard-main.sh",
     ".claude/scripts/issue-form.sh",
@@ -437,7 +437,7 @@ def preflight(api: Api, plan: Plan, resume: bool) -> tuple:
         return res, None                 # これより先は確かめられない
 
     # 照合（byte の比較）は main の正本と比べる。 古い clone から写すと、
-    # 最初の Pull Request の CI で必ず落ちる
+    # 最初の Pull Request の Required Verification で必ず落ちる
     try:
         _, ref = api.get(f"/repos/{ORG}/.github/git/ref/heads/main")
         latest = ((ref or {}).get("object") or {}).get("sha") or ""
@@ -588,20 +588,20 @@ def pr_body(plan: Plan) -> str:
 
 ## 変更目的
 
-顧客案件の雛形と Claude Code 一式を入れ、標準のフロー（Issue → Branch → Pull Request → CI）で開発を始められるようにする。
+顧客案件の雛形と Claude Code 一式を入れ、標準のフロー（Issue → Branch → Required Verification → Pull Request → Review）で開発を始められるようにする。
 
 ## 変更内容
 
 `MirumeAI/.github` の `{plan.commit[:12]}` から、`scripts/ci/new_customer_repo.py` で作った。
 
 - 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の名前は「{plan.title}」
-- Claude Code 一式と、手元で実行する検査 {plan.count("正本")} ファイル。正本から写した（照合の対象なので、ずれると CI が止まる）
+- Claude Code 一式と、手元で実行する検査 {plan.count("正本")} ファイル。正本から写した（照合の対象なので、ずれると正本の検査が止まる）
 - `{SETTINGS}`。正本に `*.lic` の拒否を足して作った
 - `{PROFILE}`（顧客の間の混入の検査の宣言）は値の無い初期形で、状態は人の確認待ち。混入の照合はまだ動かない（`run-isolation-check: false`）。始め方は `README.md` の「顧客の間の混入の検査を始める」
 
 ## 確認結果
 
-- [ ] CI（basic-checks）が通っている
+- [ ] Required Verification（`MirumeAI/.github` の `scripts/ci/run_required_verification.py` を手元で流す）が PASS した（記録の行を書く）
 - [ ] `{PROFILE}` が雛形の値の無い初期形のままである（作成者と別の人が確かめる。値を足さない）
 - [ ] merge した後に `python3 scripts/ci/new_customer_repo.py {plan.name} --check` を実行し、NG が無い
 
@@ -623,8 +623,8 @@ def pr_body(plan: Plan) -> str:
 def open_pull_request(api: Api, plan: Plan, base: str, sleep) -> tuple:
     """最初の中身を Pull Request にする。 `(説明, URL)`。
 
-    **main へ直接入れない。** Branch を作って Pull Request にし、 CI を
-    通してから人が merge する。
+    **main へ直接入れない。** Branch を作って Pull Request にし、 Required
+    Verification を通してから人が merge する。
     """
     name = plan.name
     st, _ = api.get(f"/repos/{ORG}/{name}/contents/CLAUDE.md?ref={base}")
@@ -724,7 +724,7 @@ def apply(api: Api, plan: Plan, repo, resume: bool, sleep=time.sleep) -> int:
     print()
     if state["url"]:
         print(f"Pull Request: {state['url']}")
-    print(f"CI が通り、 作成者と別の人が {PROFILE} が雛形の値の無い初期形のままで"
+    print(f"Required Verification が PASS し、 作成者と別の人が {PROFILE} が雛形の値の無い初期形のままで"
           "あることを確かめたら Squash and merge し、 次を実行してください（読み取りだけ）:")
     print(f"    python3 scripts/ci/new_customer_repo.py {name} --check")
     return 0
@@ -808,9 +808,9 @@ def check(api: Api, plan: Plan, audit=audit_one) -> int:
              if e.get("type") == "blob"}
     missing = [p for p in MUST_HAVE if p not in paths]
     if not missing:
-        add(OK, f"Claude Code 一式と CI が {base} にある（{len(MUST_HAVE)} ファイル）")
+        add(OK, f"Claude Code 一式と検査の workflow が {base} にある（{len(MUST_HAVE)} ファイル）")
     elif "CLAUDE.md" in missing:
-        add(NG, f"Claude Code 一式と CI が {base} に無い"
+        add(NG, f"Claude Code 一式と検査の workflow が {base} に無い"
                 "（最初の Pull Request がまだ merge されていない）")
     else:
         add(NG, f"{base} に無い: {', '.join(missing)}")

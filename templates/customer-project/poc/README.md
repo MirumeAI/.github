@@ -8,7 +8,7 @@
 
 ## 置かないもの
 
-- **本番のコード。** PoC で必要性が確認できた共通機能は、Core の Issue → Pull Request → CI → Review → Release で正式化します
+- **本番のコード。** PoC で必要性が確認できた共通機能は、Core の Issue → Branch → Required Verification → Pull Request → Review → Release で正式化します
 - Core の `main` へ PoC のコードを直接ためること
 
 **PoC は本番ではありません。** ここで動いたことは、本番で動くことを意味しません。

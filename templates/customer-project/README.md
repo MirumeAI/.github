@@ -8,7 +8,14 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 ## 使う Core の版
 
-`versions.yaml` が Core を **commit SHA で固定**します。浮動 Branch 名や `latest` で本番構成を管理しません。どの版で動いているかが分からないと、不具合の再現も切り戻しもできません。
+`versions.yaml` が出荷に使う Core を **commit SHA で固定**します。浮動 Branch 名や `latest` で本番構成を管理しません。どの版で動いているかが分からないと、不具合の再現も切り戻しもできません。
+
+開発中に Core の直しを試すときは、根の `versions.dev.yaml`（任意）に Core ごとの 40 桁の commit を書けます。**開発の版は機体に配置しません**（System Release が参照するのは `versions.yaml` だけです）。
+
+## Core の置き方
+
+- **開発**: Core の clone は、この Repository の下でなく隣に置きます（同じ親のフォルダに `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository のコードが Core の内部を誤って参照しえます
+- **今ある機体（LEGACY）**: 機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み）。新しい配置はこの形に頼りません
 
 ## 構造
 
@@ -25,13 +32,14 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `release/` | System Release の manifest |
 | `deployment/` | 配置した事実の記録 |
 | `deploy/` | この機体固有の起動・配置設定 |
-| `plugins/` | この案件固有の拡張（差し込む Core の入口ができてから） |
+| `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） |
+| `plugins/` | Core に差し込む、この案件固有の拡張（差し込む Core の入口ができてから） |
 | `recipes/` | 製品・検査条件 |
 | `tests/` | この案件の組合せの検証 |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
 
-この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録と回帰の試験から。コードは Core の入口ができてから）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」）。
+この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
 
 ## 置かないもの
 
@@ -54,19 +62,19 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 根の `customer-profile.yaml` は、この案件にあってよい識別子の宣言です。作ったときは**値の無い初期形**で、状態は人の確認待ちです。初期形のままでは検査が照らせずに止まり、合格になりません。そのため、混入の照合（`.github/workflows/basic-checks.yml` の `run-isolation-check`）は `false` で始まります。運用の決まりの正本は `MirumeAI/development-docs` の `03_customer_development/customer_isolation_check.md` です。
 
 1. `config/` に案件の設定を書く（`config/image-acquisition/config.json` が無いと、検査は照らせない）
-2. 同じ Pull Request で `customer-profile.yaml` の下書きを書く。書き方は `MirumeAI/.github` の README「顧客の間の混入の検査」。状態の行は確認待ちのまま。今の設定にあることは、この案件の値である根拠にならない。値を Issue・Pull Request の本文・CI の記録に書かない
+2. 同じ Pull Request で `customer-profile.yaml` の下書きを書く。書き方は `MirumeAI/.github` の README「顧客の間の混入の検査」。状態の行は確認待ちのまま。今の設定にあることは、この案件の値である根拠にならない。値を Issue・Pull Request の本文・検査の記録に書かない
 3. 報告だけの形で流す（PyYAML が要る。`MirumeAI/.github` の clone は main の最新にしてから流す）。終了コードではなく、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して黙らせない。`参考` の行の数（値なし）はこの Repository の Issue に記録し、`注意` の行は人が読む
 
    ```bash
    python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only
    ```
 
-4. 人が宣言の値を案件の資料と 1 つずつ照らして確かめ、自分で Pull Request に記録する（記録の形は上の正本の「人の確認」。Agent は確かめた扱いにしない）
+4. 作成者と別の人が、宣言の値を案件の資料と 1 つずつ照らして確かめ、自分で Pull Request に記録する（記録の形は上の正本の「人の確認」。Agent は確かめた扱いにしない）
 5. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す（値は変えない。YAML として読んだ値が確かめた版と同じことを Pull Request に書く）
-6. `--report-only` を付けずに流して `結果: PASS` になったら、`run-isolation-check` を `true` にする
-7. Pull Request の CI で、混入の照合の段が動いて `結果: PASS` になることを確かめ、Merge の門に従って merge する
+6. `--report-only` を付けずに流して `結果: PASS`（`NG` と `ERROR` の行が無い）になったら、`run-isolation-check` を `true` にする
+7. Pull Request の Required Verification（`MirumeAI/.github` の `scripts/ci/run_required_verification.py` を手元で流す）で、混入の照合の段が動いて `結果: PASS` になることを確かめ、Merge の門に従って merge する
 
-初めて値を書く Pull Request では、基準（初期形）が今の決まりでは読めないので、CI の宣言の増減は空の宣言と比べて、すべてを増えたものとして数え、`PROFILE EXPANSION DETECTED` を出します。宣言を変えた Pull Request は、知らせが出ても出なくても、人が確かめるまで merge しません。
+初めて値を書く Pull Request では、基準（初期形）が今の決まりでは読めないので、検査の宣言の増減は空の宣言と比べて、すべてを増えたものとして数え、`PROFILE EXPANSION DETECTED` を出します。宣言を変えた Pull Request は、知らせが出ても出なくても、人が確かめるまで merge しません。
 
 ## 参照
 

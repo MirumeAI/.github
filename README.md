@@ -71,6 +71,8 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
   - head の新しい clone
   - workflow が求める版の Python の新しい venv（`python3.10` などを PATH から探します。無ければ `--python 3.10=<道>` で渡します）
   - 仮の HOME
+- 待ち合わせの無い job（`needs` を満たしたもの）は、`--jobs`（既定 3）まで同時に流します。GitHub も別の機械で同時に流すので、1 つずつ流すと変異の表を分けた job の時間が足し算になっていました（#149）。結果は plan の順に出し、job が終わるたびに書き出します。`--jobs 1` なら 1 つずつ流します。job ごとの `concurrency` がある workflow も、1 つずつ流します（GitHub は同じ組の job を同時に流さないため。組は照らしません）。同時に流すときは、計算の部品のスレッドの数（`OMP_NUM_THREADS` など）を「CPU の数 ÷ 同時に流す数」に絞ります（どの job も CPU の数だけスレッドを立てて取り合い、job の時間が上限に近づいたため。workflow に同じ変数を書いてあれば、そちらを使います）。CPU の少ない機械で job が時間の上限を超えるときは、`--jobs 1` で流します。同時に流すのは 1 本の検査の中だけで、ほかのセッションの検査と重ねない取り決めは変えません
+- Ctrl-C・SIGTERM で止めると、流している段の process の組を止め、次の段を始めずに、作業の場所（clone・venv・仮の HOME）を消して止まります（終了コード 130・143。PASS の記録の行は出ません。#149）
 - 元の clone と HOME は変えません。環境変数は決めた名前（`PATH`・`LANG` など）だけを渡し、token・ssh の agent・git の設定などは渡しません。段が終わったら、後ろで動き続ける子の process も止めます（`setsid` で抜けたものは止められません）。pip で依存を入れるので、network が要ります
 - 知らない書き方（action・式・matrix・`defaults`・`pull_request_target`・再利用 workflow の入力の式など）があれば、何も流さずに止まります（終了コード 2）。同じ鍵が 2 回ある workflow（同じ job の id を 2 回書いたもの・`on:` と `"on":` を両方書いたものなど。GitHub は受け付けず、黙って後の値で読むと先の job が消える）、合わせる鍵（`<<`。明示の鍵で中身を黙って上書きできる。node 全体の alias は読む）、明示の YAML 1.1 の型（`!!omap`・`!!pairs`・`!!set`・`!!binary`）、YAML として読めない workflow も同じく止まります。道具の中で思わぬ誤りが起きたときも、traceback でなく 1 行の知らせで止まります（PASS の記録の行は出ません。job を流し始める前なら終了コード 2、流し始めた後なら `結果: FAIL` の行を出して終了コード 1。例外の文にある URL の資格情報は伏せます）。落ちた段があれば FAIL です（終了コード 1）
 - PASS のときに出る「記録の行」（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。記録の行には、次のものが入ります

@@ -8,7 +8,7 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 これまでの検査は一時の script で組んでいて、 共有されないまま消えた。
 
     python3 <.github の clone>/scripts/ci/run_required_verification.py <検査する Repository の clone>
-        [--head <commit>] [--base origin/main] [--python 3.10=<道>] [--list] [--keep]
+        [--head <commit>] [--base origin/main] [--python 3.10=<道>] [--jobs 3] [--list] [--keep]
 
 すること:
 
@@ -17,6 +17,14 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     変更のファイルは、 `--base` と head の merge-base からの差）
   ・job を `needs` の順に、 段を書いた順に流す。 段が落ちたら、 その job の
     残りは `if: always()` などの段だけを流す（CI と同じ）
+  ・`needs` を満たした job は、 `--jobs`（既定 3）まで同時に流す（GitHub も、 待ち合わせの無い job は
+    別の機械で同時に流す。 1 つずつ流すと、 変異の表を分けた job の時間が足し算になった。 #149）。
+    結果は plan の順に出す。 `--jobs 1` は 1 つずつ。 job ごとの `concurrency` がある workflow も、 1 つずつ
+    流す（GitHub は同じ組の job を同時に流さない。 組は照らさない）。 同時に流すときは、 計算の部品の
+    スレッドの数を「CPU の数 ÷ 同時に流す数」に絞る（どの job も CPU の数だけスレッドを立てて取り合い、
+    job の時間が上限に近づいた。 workflow に同じ変数を書いてあれば、 そちらを使う）
+  ・止められたとき（Ctrl-C・SIGTERM）は、 流している段の process の組を止め、 次の段を始めず、
+    作業の場所を消して止まる（段は別の session で動くので、 道具だけが止まると残っていた。 #149）
   ・再利用 workflow（`MirumeAI/.github/...@main`）と正本の道具は、 この道具を
     置いた clone の `--canonical-ref`（既定 origin/main）から取る。
     `actions/checkout` は、 head か正本の新しい clone に置き換える
@@ -50,8 +58,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 try:
@@ -64,6 +74,9 @@ TOOL_REL = "scripts/ci/run_required_verification.py"
 CANONICAL_SLUG = "MirumeAI/.github"
 EVENT = "pull_request"
 RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
+#: job を同時に流すときに絞る、 計算の部品のスレッドの数の環境変数（#149）
+THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+              "OPENCV_FOR_THREADS_NUM")
 
 #: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
 #: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
@@ -769,6 +782,39 @@ def _apply_github_files(env: dict, defined: dict, files: dict) -> None:
     files["GITHUB_PATH"].write_text("")
 
 
+#: 流している段の process の組（job を同時に流すので、 止めるときに全部を止める。 #149）
+_LOCK = threading.Lock()
+_GROUPS: set[int] = set()
+_STOP = threading.Event()
+
+
+def _start(cmd: list, **kw):
+    """段の process を始める。 止めた後なら始めない（None）。 錠の中で確かめるので、 止めるのと始めるのが
+    重なっても、 止めた後に始めた段が残らない。"""
+    with _LOCK:
+        if _STOP.is_set():
+            return None
+        proc = subprocess.Popen(cmd, start_new_session=True, **kw)
+        _GROUPS.add(proc.pid)
+    return proc
+
+
+def _stop_all() -> None:
+    """これから段を始めないようにし、 流している段の process の組をすべて止める。"""
+    with _LOCK:
+        _STOP.set()
+        groups = list(_GROUPS)
+    for g in groups:
+        _kill_group(g)
+
+
+def _cpus() -> int:
+    """使える CPU の数（`sched_getaffinity` は Linux だけ）。"""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
 def _kill_group(pgid: int) -> None:
     """段の process の組を止める。 **段が終わった後も、 後ろで動く子を残さない**
     （GitHub の runner も job の終わりに止める）。 setsid で抜けたものは止められない。"""
@@ -798,6 +844,7 @@ def _run_job(job: dict, ctx_base: dict, a: argparse.Namespace, jobdir: Path, log
     event = temp / "event.json"
     event.write_text(json.dumps({"pull_request": ctx_base["github"]["event"]["pull_request"]}))
     env = _base_env(real_cache)
+    env.update(a.thread_env)        # 下の workflow・job の env に同じ名前があれば、 そちらを使う
     env.update({"HOME": str(home), "TMPDIR": str(temp), "RUNNER_TEMP": str(temp),
                 "GITHUB_WORKSPACE": str(ws), "GITHUB_EVENT_NAME": EVENT,
                 "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": ctx_base["github"]["repository"],
@@ -883,8 +930,10 @@ def _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline, 
         log.write_text("job の時間の上限を過ぎました\n", encoding="utf-8")
         return False
     with open(log, "wb") as fh:
-        proc = subprocess.Popen(cmd, cwd=str(cwd), env=senv, stdout=fh, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+        proc = _start(cmd, cwd=str(cwd), env=senv, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        if proc is None:
+            fh.write("止めたので流しません\n".encode())
+            return False
         try:
             rc = proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
@@ -892,11 +941,10 @@ def _run_step(step, ex, senv, ws, temp, log, a, pythons, jobdir, env, deadline, 
             proc.wait()
             fh.write(f"\n時間の上限（{limit:.0f} 秒）を過ぎたので止めました\n".encode())
             return False
-        except KeyboardInterrupt:
-            _kill_group(proc.pid)
-            raise
         finally:
             _kill_group(proc.pid)
+            with _LOCK:
+                _GROUPS.discard(proc.pid)
     return rc == 0
 
 
@@ -990,9 +1038,15 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--python", action="append", default=[], metavar="版=道",
                     help="workflow の Python の版の interpreter（既定は PATH の python<版>）")
     ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir）")
+    ap.add_argument("--jobs", type=int, default=3, metavar="N",
+                    help="needs を満たした job を同時に流す数の上限（既定 3。 1 なら 1 つずつ）")
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
+    _STOP.clear()
+    if a.jobs < 1:
+        print("流せません: --jobs は 1 以上にしてください", file=sys.stderr)
+        return 2
     _bootstrap_yaml()
     try:
         a.target = Path(_git(Path(a.repo), "rev-parse", "--show-toplevel"))
@@ -1040,6 +1094,16 @@ def _main(argv: list | None, state: dict) -> int:
     print(f"head: {a.head_sha}（{base_note}）")
     print(f"{canon_note}・{tool_note}")
     print(f"変更のファイル: {len(changed)}（merge-base {merge_base[:12]}）")
+    if a.jobs > 1 and any("concurrency" in j["spec"] for j in jobs):
+        # GitHub は同じ組（concurrency）の job を同時に流さない。 組を照らさずに、 全部を 1 つずつ流す（#149 の B）
+        a.jobs = 1
+        print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
+    together = min(a.jobs, len(jobs))
+    a.thread_env = {}
+    if together > 1:
+        per_job = max(1, _cpus() // together)
+        a.thread_env = {name: str(per_job) for name in THREAD_ENV}
+        print(f"job を同時に {together} つまで流すので、 計算の部品のスレッドを job ごとに {per_job} に絞ります")
     if not has_base:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")
@@ -1058,43 +1122,104 @@ def _main(argv: list | None, state: dict) -> int:
     work.mkdir(parents=True, exist_ok=True)
     logs = work / "logs"
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
-    results, outcome = {}, {}
+    done_jobs, outcome, blocks = {}, {}, {}
     t_all = time.monotonic()
     state["running"] = True             # ここから先の思わぬ誤りは FAIL（main）
+    signals = {}
+
+    def ignored(_signum, _frame):
+        """止め始めた後の合図は、 何もしない（SIG_IGN に替えると、 替える間に届いた合図で Python が
+        「race condition」の traceback を出す）。"""
+
+    def hold() -> None:
+        signal.signal(signal.SIGTERM, ignored)
+        signal.signal(signal.SIGINT, ignored)
+
+    def interrupted(signum, _frame):
+        hold()                          # 次の合図で、 止めるのと消すのを途中でやめない
+        signals["got"] = signum
+        raise KeyboardInterrupt
+
+    old_term, old_int = signal.signal(signal.SIGTERM, interrupted), signal.signal(signal.SIGINT, interrupted)
+    shown = [0]
+    sys.stdout.flush()                  # 見出しを先に書き出す（出力をファイルに向けたときも、 終わりまで空にしない）
+
+    def show_ready() -> None:
+        """終わった job の結果を、 plan の順に出す（前の job を出し終えたものから）。"""
+        while shown[0] < len(jobs) and shown[0] + 1 in blocks:
+            shown[0] += 1
+            print(blocks.pop(shown[0]), flush=True)
+
     try:
-        for idx, j in enumerate(jobs, 1):
-            key = (j["workflow"], j["name"])
-            got = [outcome.get((j["workflow"], n)) for n in j["needs"]]
-            status = "failure" if "failure" in got else ("skipped" if "skipped" in got else "success")
-            ex = Expr({**probe, "inputs": j["inputs"], "env": {}}, status)
-            run_it = _cond(j.get("caller_if"), ex) and _cond(j["spec"].get("if"), ex)
-            label = f"{_show(j['workflow'])} の job {_show(j['name'])}"
-            if not run_it:
-                outcome[key] = "skipped"
-                why = {"success": "条件で流さない", "skipped": "前の job が流れなかったので流さない",
-                       "failure": "前の job が落ちたので流さない"}[status]
-                print(f"\n{label}: {why}")
-                continue
-            t0 = time.monotonic()
-            jlog = logs / f"{idx:02d}-{Path(j['workflow']).stem}-{j['name'].replace('/', '-')}"
-            jlog.mkdir(parents=True)
-            res = _run_job(j, probe, a, work / f"job-{idx:02d}", jlog, pythons, real_cache)
-            outcome[key] = res["status"]
-            results[key] = (label, res)            # 鍵は元の名前（表示の見出しは escape して重なりうる）
-            print(f"\n{label}: {'PASS' if res['status'] == 'success' else 'FAIL'}（{time.monotonic() - t0:.0f} 秒）")
-            for r in res["steps"]:
-                tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）" if r["skipped_tests"] else "")
-                         if r["ran"] else "")
-                print(f"  {r['n']:02d} {r['result']:<8} {_show(r['name'])}（{r['secs']} 秒{tests}）")
-            if not a.keep:
-                _rmtree(work / f"job-{idx:02d}")
+        with ThreadPoolExecutor(max_workers=a.jobs) as pool:
+            try:
+                pending = dict(enumerate(jobs, 1))
+                running = {}
+                while pending or running:
+                    progressed = True
+                    while progressed and len(running) < a.jobs:
+                        progressed = False
+                        for idx in sorted(pending):
+                            if len(running) >= a.jobs:
+                                break
+                            j = pending[idx]
+                            if not all((j["workflow"], n) in outcome for n in j["needs"]):
+                                continue
+                            del pending[idx]
+                            progressed = True
+                            key = (j["workflow"], j["name"])
+                            got = [outcome[(j["workflow"], n)] for n in j["needs"]]
+                            status = "failure" if "failure" in got else ("skipped" if "skipped" in got else "success")
+                            ex = Expr({**probe, "inputs": j["inputs"], "env": {}}, status)
+                            run_it = _cond(j.get("caller_if"), ex) and _cond(j["spec"].get("if"), ex)
+                            label = f"{_show(j['workflow'])} の job {_show(j['name'])}"
+                            if not run_it:
+                                outcome[key] = "skipped"
+                                why = {"success": "条件で流さない", "skipped": "前の job が流れなかったので流さない",
+                                       "failure": "前の job が落ちたので流さない"}[status]
+                                blocks[idx] = f"\n{label}: {why}"
+                                continue
+                            jlog = logs / f"{idx:02d}-{Path(j['workflow']).stem}-{j['name'].replace('/', '-')}"
+                            jlog.mkdir(parents=True)
+                            fut = pool.submit(_run_job, j, probe, a, work / f"job-{idx:02d}", jlog, pythons, real_cache)
+                            running[fut] = (idx, key, label, time.monotonic())
+                    show_ready()
+                    if not running:
+                        if pending:
+                            raise RuntimeError("流せる job がありません（needs が満たされない）")
+                        break
+                    for fut in wait(running, return_when=FIRST_COMPLETED)[0]:
+                        idx, key, label, t0 = running.pop(fut)
+                        res = fut.result()
+                        outcome[key] = res["status"]
+                        done_jobs[idx] = (key, label, res)  # 鍵は元の名前（表示の見出しは escape して重なりうる）
+                        verdict = "PASS" if res["status"] == "success" else "FAIL"
+                        lines = [f"\n{label}: {verdict}（{time.monotonic() - t0:.0f} 秒）"]
+                        for r in res["steps"]:
+                            tests = (f"・試験 {r['ran']}" + (f"（飛ばした {r['skipped_tests']}）"
+                                                            if r["skipped_tests"] else "")
+                                     if r["ran"] else "")
+                            lines.append(f"  {r['n']:02d} {r['result']:<8} {_show(r['name'])}（{r['secs']} 秒{tests}）")
+                        blocks[idx] = "\n".join(lines)
+                        if not a.keep:
+                            _rmtree(work / f"job-{idx:02d}")
+                    show_ready()
+            except BaseException:
+                hold()                  # 後片付けの途中に届いた次の合図で、 止めるのと消すのを途中でやめない
+                _stop_all()
+                raise
     except KeyboardInterrupt:
         print("\n止めました", file=sys.stderr)
-        return 130
+        return 128 + signals.get("got", signal.SIGINT)
     finally:
+        hold()                          # 消し終えるまで、 合図で途中でやめない
         if not a.keep:
             for p in work.glob("job-*"):
                 _rmtree(p)
+        if not signals:                 # 止められたときは、 終わるまで次の合図を受けない
+            signal.signal(signal.SIGTERM, old_term)
+            signal.signal(signal.SIGINT, old_int)
+    results = {key: (label, res) for key, label, res in (done_jobs[i] for i in sorted(done_jobs))}
     ran = [s for _, r in results.values() for s in r["steps"] if s["result"] != "skipped"]
     n_tests = sum(s["ran"] for s in ran)
     n_skip = sum(s["skipped_tests"] for s in ran)

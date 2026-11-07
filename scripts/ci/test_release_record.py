@@ -409,6 +409,7 @@ class VersionsDevFileTest(unittest.TestCase):
     def test_bad_forms_are_refused(self) -> None:
         cases = {
             "知らない Core": f"schema_version: 1\nother: {self.A40}\n",
+            "Core と一緒の知らない項目": f"schema_version: 1\npdm: {self.B40}\nmachine: M01\n",
             "Branch の名前": "schema_version: 1\npdm: main\n",
             "短い commit": "schema_version: 1\npdm: abc1234\n",
             "大文字": f"schema_version: 1\npdm: {'A' * 40}\n",

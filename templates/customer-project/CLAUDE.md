@@ -36,7 +36,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> �
 
 ## Core の置き方
 
-- **開発**: Core の clone は、この Repository の下でなく隣に置く（例: 同じ親のフォルダに
+- **開発**: Core の clone は、この Repository の下でなく隣に置く（同じ親のフォルダに
   `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository の
   コードが Core の内部を誤って参照しうる。使う commit は `versions.yaml`（出荷の組合せ）、
   開発中に Core の直しを試すときは根の `versions.dev.yaml`（任意。Core ごとの 40 桁の commit
@@ -64,7 +64,7 @@ Architecture Review としてチームに相談する。
 - 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
 - 製品アプリ（`app/`。起動・製品画面・API・Adapter）: Core の公開の面（各 Core の `docs/public_api.md`）ができた範囲から。公開の面と入口だけを使い、Core の内部は import しない。認証とライセンスの門番を外さず、迂回しない（PDM 側の製品の API と画面は門番の内側に置く）。製品アプリのコードは混入の検査の範囲の外なので、Pull Request で Reviewer B が、ほかの案件の値・秘密・資格情報・Core の写し・Core の内部の使用・門番の迂回を見る
 - 差し込みの入口のコード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る
-- 公開の面に無いものが要るときは、Core の内部を使わずに、Core の Issue（改善依頼）を作る（`MirumeAI/development-docs` の `03_customer_development/platform_evolution.md` の 4 章）
+- 公開の面に無いものが要るときは、Core の内部を使わずに、この Repository に改善依頼を書く（顧客の名前と値を書かない形で）。共通プラットフォームの側が分類し、Core の共通の不具合・機能の不足・入口の不足は Core の Issue にする（`MirumeAI/development-docs` の `03_customer_development/platform_evolution.md` の 4 章）
 
 次のどれかに当たったら、Core の Issue を作って還元する（同じ文書の「Coreへの還元」）: 2 件目の案件でも要る・Core の内部を使わないと作れない・System Release を作るときの見直しで上げられると分かった。
 

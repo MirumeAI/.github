@@ -39,7 +39,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
 
-この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、Core の Issue（改善依頼）を作ります。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
+この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
 
 ## 置かないもの
 

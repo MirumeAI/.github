@@ -588,7 +588,7 @@ def pr_body(plan: Plan) -> str:
 
 ## 変更目的
 
-顧客案件の雛形と Claude Code 一式を入れ、標準のフロー（Issue → Branch → Pull Request → Required Verification）で開発を始められるようにする。
+顧客案件の雛形と Claude Code 一式を入れ、標準のフロー（Issue → Branch → Required Verification → Pull Request → Review）で開発を始められるようにする。
 
 ## 変更内容
 

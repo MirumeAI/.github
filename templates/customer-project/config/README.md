@@ -9,6 +9,7 @@ config/pdm/                 学習・評価側
 
 ## 置かないもの
 
+- 開発の機体だけの設定（保存済み画像のカメラなど）。ここに置くと機体へ配られるので、`dev/` に置きます（`dev/README.md`）
 - Core の Source（`PDM` と `Image-Acquisition-PDM` の中身）
 - Credential、ライセンスファイル、パスワード
 

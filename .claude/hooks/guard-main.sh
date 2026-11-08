@@ -191,7 +191,10 @@ def _value(raw):
 
 
 def words(c):
-    """命令 c を語に分け、 向け先を外した語の並びを返す。 読めなければ None。"""
+    """c を引用の外の `;`・`|`・`&` で命令に分け（向け先の一部の `>&`・`&>`・`>|` は除く）、
+    命令ごとに、 向け先を外した語の並びを返す（並びの並び）。 読めなければ None。
+    注釈（#）は特別に読まない（前の読み方と同じ。 引用が閉じなければ None になり、 前の読み方に戻る）。"""
+    segs = []
     out = []
     n = len(c)
     i = 0
@@ -199,7 +202,7 @@ def words(c):
     cur_plain = True    # 今の語に引用・\\ が無いか
 
     def flush():
-        nonlocal cur, cur_plain
+        nonlocal cur, cur_plain, out
         if cur is not None:
             out.append(_value(cur) if not cur_plain else cur)
         cur, cur_plain = None, True
@@ -225,8 +228,12 @@ def words(c):
         ch = c[i]
         if ch in ' \t\n':
             flush(); i += 1; continue
-        if ch == '#' and cur is None:
-            break    # 注釈（語の始まりの #）。 bash は流さない
+        if ch in ';|&' and not (ch == '&' and c.startswith('>', i + 1)):
+            # 引用の外の区切り（向け先の一部の & と | は、 下の向け先の読みで先に食べる）
+            flush()
+            segs.append(out)
+            out = []
+            i += 1; continue
         if ch in '\'"' or c.startswith("$'", i) or c.startswith('$"', i):
             k = _quoted(c, i, n)
             if k is None:
@@ -242,7 +249,7 @@ def words(c):
             i += 2; continue
         if ch in '<>' or (ch == '&' and c.startswith('>', i + 1)):
             # 向け先。 前の語が 0〜9 の数字だけ（引用なし）ならファイルの番号として一緒に外す
-            if cur is not None and cur_plain and cur and all(x in DIGITS for x in cur):
+            if ch in '<>' and cur is not None and cur_plain and cur and all(x in DIGITS for x in cur):
                 cur, cur_plain = None, True
             else:
                 flush()
@@ -266,7 +273,8 @@ def words(c):
         cur = (cur or '') + ch
         i += 1
     flush()
-    return out
+    segs.append(out)
+    return [s for s in segs if s]
 
 
 # bash -c '...' / sh -c "..." / eval '...' の中身を取り出す (入れ子も追う)
@@ -279,7 +287,8 @@ def unwrap(text, depth=0):
     if m:
         inner = m.group(1) or m.group(2)
         # 中身の前の向け先（`bash -c 2>&1 '…'`・`eval 2>&1 '…'`）は語に数えない（#162）
-        parts = words(inner)
+        segs = words(inner)
+        parts = segs[0] if segs else (None if segs is None else [])
         if parts is None:
             try:
                 parts = shlex.split(inner)
@@ -293,24 +302,7 @@ def unwrap(text, depth=0):
         return out
     return [text]
 
-chunks = []
-for t in unwrap(raw):
-    # 括弧・波括弧を外す
-    t = re.sub(r'[(){}]', ' ', t)
-    # 区切りで分解
-    # 区切りで分解。 `>&`・`<&`・`&>` の & と `>|` の | は向け先の一部なので区切らない（#162）
-    chunks.extend(re.split(r'\s*(?:\|\||&&|;|(?<!>)\||(?<![<>])&(?!>)|\n)\s*', t))
-
-for c in chunks:
-    c = c.strip()
-    if not c:
-        continue
-    toks = words(c)    # 向け先を外す（#162）。 読めなければ前と同じ読み方
-    if toks is None:
-        try:
-            toks = shlex.split(c)
-        except ValueError:
-            toks = c.split()
+def emit(toks):
     # 先頭の飾りを剥がす: VAR=val / env / command / builtin / \ / 絶対パス / sudo / nohup / time / xargs
     i = 0
     while i < len(toks):
@@ -331,9 +323,31 @@ for c in chunks:
         break
     toks = toks[i:]
     if not toks:
-        continue
+        return
     toks[0] = toks[0].lstrip('\\').rsplit('/', 1)[-1]
     print('\x1f'.join(toks))
+
+
+chunks = []
+for t in unwrap(raw):
+    # 括弧・波括弧を外す
+    t = re.sub(r'[(){}]', ' ', t)
+    # 区切りで分解
+    # 区切りで分解。 `>&`・`<&`・`&>` の & と `>|` の | は向け先の一部なので区切らない（#162）
+    chunks.extend(re.split(r'\s*(?:\|\||&&|;|(?<!>)\||(?<![<>])&(?!>)|\n)\s*', t))
+
+for c in chunks:
+    c = c.strip()
+    if not c:
+        continue
+    segs = words(c)    # 向け先を外し、 引用の外の区切りで分ける（#162）。 読めなければ前と同じ読み方
+    if segs is None:
+        try:
+            segs = [shlex.split(c)]
+        except ValueError:
+            segs = [c.split()]
+    for toks in segs:
+        emit(toks)
 PY
 )" || deny "python3 で命令を分けられない" "python3 -c 'print(1)' が動くかを確かめてください。"
 

@@ -138,6 +138,13 @@ t DENY  "git push origin ２>x"
 # 注釈・ヒアドキュメントの中の引用符で読み方がずれても、 後ろの命令を見落とさない
 t DENY  $'# it\'s ok\nawk \'$1 > 0\' f\ngit push origin main'
 t DENY  $'cat <<EOF\nit\'s\nEOF\njq \'.n > 1\' f\ngit push origin main'
+# 逃がした・引用した < > の後ろの | & は区切り。 数字の語は < > の直前だけファイルの番号。 {#x} は注釈でない
+t DENY  'echo \>|git push origin main'
+t DENY  'echo \>&git push origin main'
+t DENY  'echo \<&git push origin main'
+t DENY  "echo '>'|git push origin main"
+t DENY  "git push origin 2024&>/dev/null"
+t DENY  "git push origin {#x} main"
 t ALLOW "git push origin 2>&1 feature/1-x"
 t ALLOW "git push origin feature/1-x >& /dev/null"
 t ALLOW "git push -q >&/dev/null origin feature/1-x"

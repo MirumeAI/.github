@@ -459,12 +459,18 @@ class DevConfigIsNotReferencedTest(_Records):
                 "report: r.md", f"report: dev/config/image-acquisition/{self.PLACE}.json")),
             "inspection.calibration": (self.new, RELEASE_NEW.replace(
                 "calibration: 良品100枚", f"calibration: ./dev/{self.PLACE}.md")),
-            "target.device": (self.dep, DEPLOYMENT.replace(
-                "device: dev-1", f"device: /srv/{self.PLACE}/dev/config/x.json")),
+            "target.line": (self.dep, DEPLOYMENT.replace(
+                "line: line-1", f"line: /srv/{self.PLACE}/dev/config/x.json")),
             "smoke_test.checked[1]": (self.dep, DEPLOYMENT.replace(
                 "PLCへ判定が返る", f"MIRUME_DEV_CONFIG={self.PLACE}")),
             "target の鍵": (self.dep, DEPLOYMENT.replace(
-                "device: dev-1", f"dev/{self.PLACE}: 1")),
+                "device: dev-1", f"dev/{self.PLACE}: {{x: dev/config/{self.PLACE}}}")),
+            "target.<*>": (self.dep, DEPLOYMENT.replace(
+                "device: dev-1", f"{self.PLACE}: /srv/x/dev/config")),
+            "target.site": (self.dep, DEPLOYMENT.replace(
+                "site: site-a", "site: cp -r ./dev /srv/x")),
+            "validation.acceptance": (self.new, RELEASE_NEW.replace(
+                "acceptance: a.md", "acceptance: ../dev/x.md")),
         }
         for needle, (path, text) in cases.items():
             with self.subTest(needle=needle):
@@ -485,12 +491,12 @@ class DevConfigIsNotReferencedTest(_Records):
              "observed": {"note": "MIRUME_DEV_CONFIG"}}), encoding="utf-8")
         code, out = self.run_check()
         self.assertEqual(code, 1, out)
-        self.assertIn("observed.note が、開発の機体だけの設定", out)
+        self.assertIn("observed.<*> が、開発の機体だけの設定", out)
 
     def test_device_paths_and_similar_names_pass(self) -> None:
         self.dep.write_text(DEPLOYMENT.replace(
             "device: dev-1", "device: /dev/video0, note: my-dev/config/ devconfig mydev/x "
-            "X_MIRUME_DEV_CONFIG_Y ../dev/x"), encoding="utf-8")
+            "X_MIRUME_DEV_CONFIG_Y https://example.dev/config/x /srv/dev/x"), encoding="utf-8")
         code, out = self.run_check()
         self.assertEqual(code, 0, out)
 

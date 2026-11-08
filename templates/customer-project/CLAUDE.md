@@ -63,7 +63,7 @@ Architecture Review としてチームに相談する。
 - 今から: この案件で値を選んだ記録（形と置き場は `MirumeAI/development-docs#273` で決める。決まるまでの仮の置き場は `evaluation/`。混入の検査が照らさないので、記録の Pull Request では Reviewer B が混入を見る）
 - 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
 - 製品アプリ（`app/`。起動・製品画面・API・Adapter）: Core の公開の面（各 Core の `docs/public_api.md`）ができた範囲から。公開の面と入口だけを使い、Core の内部は import しない。認証とライセンスの門番を外さず、迂回しない（PDM 側の製品の API と画面は門番の内側に置く）。製品アプリのコードは混入の検査の範囲の外なので、Pull Request で Reviewer B が、ほかの案件の値・秘密・資格情報・Core の写し・Core の内部の使用・門番の迂回を見る
-- 開発の機体だけの設定（`dev/config/image-acquisition/<名前>.json`）: 今から。`MIRUME_DEV_CONFIG` に渡す。機体へ配らず、`deploy/`・`versions.yaml`・`release/`・`deployment/` から指さない。混入の検査が `config/` と同じに照らす（`dev/README.md`）
+- 開発の機体だけの設定（`dev/config/image-acquisition/<名前>.json`）: 今から。`MIRUME_DEV_CONFIG` に渡す。機体へ配らず、`deploy/`・`versions.yaml`・`release/`・`deployment/` から指さない。混入の検査が `config/` と同じに照らす（`dev/README.md`）。`dev/config/` の外の `dev/` は混入の検査の範囲の外なので、Pull Request で Reviewer B が混入を見る
 - 差し込みの入口のコード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る
 - 公開の面に無いものが要るときは、Core の内部を使わずに、この Repository に改善依頼を書く（顧客の名前と値を書かない形で）。共通プラットフォームの側が分類し、Core の共通の不具合・機能の不足・入口の不足は Core の Issue にする（`MirumeAI/development-docs` の `03_customer_development/platform_evolution.md` の 4 章）
 

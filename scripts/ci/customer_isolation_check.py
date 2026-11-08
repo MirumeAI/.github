@@ -44,9 +44,9 @@
           宣言の中か
     S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道。 `./`・
           `../` で始まるものも含む。 それと `config` で始まる `.json` の名前）が、
-          実在して許されているか。 開発の機体だけの設定（`dev/config/` の道と
-          `MIRUME_DEV_CONFIG`）を指していないか（**機体へ届かない設定を据え付けに
-          使わせない**。 #156）。 deploy/ の
+          実在して許されているか。 開発の機体だけの設定（この Repository の `dev/` の道・
+          `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG`）を指していないか
+          （**機体へ届かない設定を据え付けに使わせない**。 #156）。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
     S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
@@ -61,7 +61,8 @@
           `dev/config/image-acquisition/<名前>.json` と、 説明の .md と空の .gitkeep だけ。
           機体へは配らないが、 案件の値が入るので、 撮像側の設定と同じに照らす（層 1・S2・
           S3）。 ただし S2 は、 宣言で使うものを開発の機体で切る（`enabled: false`）のは
-          許す。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
+          許す。 開発の機体では主の設定として読まれるので、 書いた plc・nas・ai の enabled は
+          true か false だけ。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
 Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）は除かない。**
@@ -201,6 +202,7 @@ WHAT = {
     "S4-dev": "deploy/ か versions.yaml が、 開発の機体だけの設定（dev/config/・MIRUME_DEV_CONFIG）を指している",
     "S6-file": "dev/config/ の決まりの外のファイル（置けるのは dev/config/image-acquisition/<名前>.json だけ）",
     "S6-link": "dev/ か dev/config/ の下のリンク（読まずに断る）",
+    "S6-enabled": "開発の機体だけの設定の plc・nas・ai の enabled が true か false ではない（開発の機体では主の設定として読まれる）",
     "S5-endpoint": "記録（deployment/・validation/）の中の、 宣言に無い IP（記録には値を書かない）",
     "S5-name": "記録（deployment/・validation/）の中の、 宣言に無いトリガ・面の名前らしき語",
     "S5-link": "deployment/ か validation/ の下のリンク（読まずに断る）",
@@ -234,9 +236,12 @@ _REF_PATH = re.compile(
     rf"(?![{_A}-]|\.[{_A}])")
 _REF_NAME = re.compile(
     rf"(?<![{_A}./-])config(?:\.[\w-]{{1,64}}){{0,8}}\.json(?![{_A}-]|\.[{_A}])")
-#: deploy/ と versions.yaml の中の、 開発の機体だけの設定（S4。 #156）。 道は、 前に
-#: ほかの道があっても（配置先の絶対の道でも）拾う。
-_DEV_REF = re.compile(rf"(?<![{_A}-])dev/config/|(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
+#: deploy/ と versions.yaml の中の、 開発の機体だけの設定（S4。 #156）。 記録の検査
+#: （`release_record_check._DEV_REF`）と同じ形: この Repository の `dev/` の道（`./`・`../` で
+#: 始まるものも）・`./dev` そのもの・前にほかの道がある `dev/config`（配置先の絶対の道。 末尾の
+#: `/` が無くても）・`MIRUME_DEV_CONFIG`。 `/dev/video0` のような機器の道は拾わない。
+_DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.?/dev(?![{_A}./-])"
+                      rf"|(?<![{_A}.-])dev/config(?![{_A}-])|(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _HEX_REF = re.compile(r"[0-9a-f]{7,40}")
@@ -917,6 +922,10 @@ class Checker:
             sec = d.get(cap)
             enabled = sec.get("enabled") if isinstance(sec, dict) else None
             line = doc.line("key", (cap,))
+            if dev and not isinstance(enabled, bool):
+                # 開発の機体では主の設定として読まれる。 真偽でない値を照らさずに通さない
+                self.add("S6-enabled", rel, doc.line("value", (cap, "enabled")) or line, (cap, "enabled"))
+                continue
             if main and cap not in d:
                 raise Stop("config-field", f"{cap} の節がありません（Core の配る道具も止める形です）", rel)
             if main and cap != "nas" and not isinstance(enabled, bool):

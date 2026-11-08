@@ -704,6 +704,8 @@ def scenarios() -> "list[Scenario]":
         dev + B_TRIGGERS[0] + ".json": a_dev()}), 1, {"L1-name"})
     add("S6m. 開発の設定の中の、 宣言に無い trig_ の語も補いで照らす", a_with(**{
         dev + "example.json": a_dev(note=f"from {B_TRIGGERS[1]}")}), 1, {"L1-name"})
+    add("S6o. 開発の設定の enabled が真偽でなければ不合格（主の設定として読まれる）", a_with(**{
+        dev + "example.json": a_dev(ai={"enabled": 1})}), 1, {"S6-enabled"})
     add("S6n. 決まりの外のファイルの中の値も照らす", a_with(**{
         "dev__config__example.yaml": f"camera: {B_IPS[3]}\n"}), 1, {"S6-file", "L1-endpoint"})
 
@@ -720,7 +722,13 @@ def scenarios() -> "list[Scenario]":
     add("S4-dev d. 機器の道や似た名前は開発の設定とみなさない", a_with(**{
         SERVICE.replace("/", "__"): a_files()[SERVICE]
         + "Environment=CAMERA=/dev/video0\nEnvironment=X_MIRUME_DEV_CONFIG_Y=1\n"
-        "# my-dev/config/ devconfig/\n"}), 0)
+        "# my-dev/config/ devconfig/ https://example.dev/config/x /srv/dev/x\n"}), 0)
+    for tag, line in (("e", "ExecStartPre=/bin/cp -r ./dev /srv/example\n"),
+                      ("f", "ExecStartPre=/bin/cp -r /srv/example/dev/config /srv/x\n"),
+                      ("g", "Environment=INSPECTION_CONFIG=dev/x.json\n"),
+                      ("h", "ExecStartPre=/bin/cp ../dev/x.json /srv/x\n")):
+        add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
+            SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
     return s
 
 
@@ -995,7 +1003,7 @@ MUTATIONS = [
     ("S4: versions.yaml を読まない",
      'S4_FILES = ("versions.yaml",)', "S4_FILES = ()"),
     ("S4: 配置先の絶対の道を、 この Repository の参照とみなす",
-     'rf"(?<![{_A}./-])(?:', 'rf"(?<![{_A}.-])(?:'),
+     'rf"(?<![{_A}./-])(?:\\.\\.?/){{0,16}}(config/', 'rf"(?<![{_A}.-])(?:\\.\\.?/){{0,16}}(config/'),
     ("網: 宣言した網の外の IP を通す",
      "hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]",
      "hit = list(self.prof.networks)"),
@@ -1109,8 +1117,16 @@ MUTATIONS = [
      '            elif False:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"'),
     ("S4: 開発の機体だけの設定を指すのを見ない（#156）",
      "            if _DEV_REF.search(ln):\n", "            if False:\n"),
-    ("S4: 前にほかの道がある dev/config/ を見ない",
-     'rf"(?<![{_A}-])dev/config/', 'rf"(?<![{_A}/-])dev/config/'),
+    ("S4: 前にほかの道がある dev/config を見ない",
+     'rf"|(?<![{_A}.-])dev/config(?![{_A}-])', 'rf"|(?<![{_A}./-])dev/config(?![{_A}-])'),
+    ("S4: 末尾の / の無い dev/config を見ない",
+     "dev/config(?![{_A}-])", "dev/config/(?![{_A}-])"),
+    ("S4: この Repository の dev/ の道を見ない",
+     r"(?:\.\.?/){{0,16}}dev/|", r"(?:\.\.?/){{0,16}}dev/NEVER|"),
+    ("S4: ./dev そのものを見ない",
+     r'\.\.?/dev(?![{_A}./-])"', r'\.\.?/devNEVER(?![{_A}./-])"'),
+    ("S6: 開発の設定の enabled が真偽でなくても通す",
+     "            if dev and not isinstance(enabled, bool):\n", "            if False:\n"),
     ("S4: MIRUME_DEV_CONFIG を見ない",
      "|(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])", ""),
 ]

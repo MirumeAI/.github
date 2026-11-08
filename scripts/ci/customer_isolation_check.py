@@ -45,8 +45,9 @@
     S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道。 `./`・
           `../` で始まるものも含む。 それと `config` で始まる `.json` の名前）が、
           実在して許されているか。 開発の機体だけの設定（この Repository の `dev/` の道・
-          `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG`）を指していないか
-          （**機体へ届かない設定を据え付けに使わせない**。 #156）。 deploy/ の
+          `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG` の名前）を指して
+          いないか（**機体へ届かない設定を据え付けに使わせない**。 #156。 名前は、 環境から
+          外す形〔`env -u`・`unset` など〕のほかはどこに書いても断る）。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
     S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
@@ -236,12 +237,27 @@ _REF_PATH = re.compile(
     rf"(?![{_A}-]|\.[{_A}])")
 _REF_NAME = re.compile(
     rf"(?<![{_A}./-])config(?:\.[\w-]{{1,64}}){{0,8}}\.json(?![{_A}-]|\.[{_A}])")
-#: deploy/ と versions.yaml の中の、 開発の機体だけの設定（S4。 #156）。 記録の検査
+#: deploy/ と versions.yaml の中の、 開発の機体だけの設定（S4。 #156）。 道は記録の検査
 #: （`release_record_check._DEV_REF`）と同じ形: この Repository の `dev/` の道（`./`・`../` で
 #: 始まるものも）・`./dev` そのもの・前にほかの道がある `dev/config`（配置先の絶対の道。 末尾の
-#: `/` が無くても）・`MIRUME_DEV_CONFIG`。 `/dev/video0` のような機器の道は拾わない。
+#: `/` が無くても）。 `/dev/video0` のような機器の道は拾わない。
 _DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.?/dev(?![{_A}./-])"
-                      rf"|(?<![{_A}.-])dev/config(?![{_A}-])|(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
+                      rf"|(?<![{_A}.-])dev/config(?![{_A}-])")
+#: `MIRUME_DEV_CONFIG` の名前。 **どこに書いても拾い、 環境から外す形（下）だけを拾わない**
+#: （渡す形は systemd・compose・docker・シェル・Python と多く、 一覧で拾うと抜ける）。
+_DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
+#: 環境から外す形の、 名前の前（`env -u`・`env --unset=`・`unset`・`UnsetEnvironment=`・`.pop(`・
+#: `del ... environ[`）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない。
+_DEV_UNSET = re.compile(rf"(?:(?<![{_A}-])-u[ \t]+|(?<![{_A}-])--unset[= \t]"
+                        rf"|(?<![{_A}])unset[ \t]+(?:-?[{_A}]+[ \t]+)*|UnsetEnvironment=[^\n]*?"
+                        rf"|\.pop\([ \t]*|(?<![{_A}])del[ \t][^\n]*?environ\[[ \t]*)[\"']?$")
+
+
+def _dev_ref(line: str) -> bool:
+    """1 行が、 開発の機体だけの設定を指すか（S4）。"""
+    if _DEV_REF.search(line):
+        return True
+    return any(not _DEV_UNSET.search(line[:m.start()]) for m in _DEV_NAME.finditer(line))
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _HEX_REF = re.compile(r"[0-9a-f]{7,40}")
@@ -1052,7 +1068,7 @@ class Checker:
                     self.add("S4-missing", rel, i)
                 elif not any(f in self.allowed for f in found):
                     self.add("S4-not-allowed", rel, i)
-            if _DEV_REF.search(ln):
+            if _dev_ref(ln):
                 self.add("S4-dev", rel, i)
 
     def text_lines(self, rel: str, text: str, code_ip: str, code_name: str,

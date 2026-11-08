@@ -726,9 +726,25 @@ def scenarios() -> "list[Scenario]":
     for tag, line in (("e", "ExecStartPre=/bin/cp -r ./dev /srv/example\n"),
                       ("f", "ExecStartPre=/bin/cp -r /srv/example/dev/config /srv/x\n"),
                       ("g", "Environment=INSPECTION_CONFIG=dev/x.json\n"),
-                      ("h", "ExecStartPre=/bin/cp ../dev/x.json /srv/x\n")):
+                      ("h", "ExecStartPre=/bin/cp ../dev/x.json /srv/x\n"),
+                      ("j", "export MIRUME_DEV_CONFIG\n"),
+                      ("k", "ExecStart=/usr/bin/docker run -e MIRUME_DEV_CONFIG example\n"),
+                      ("l", 'ExecStart=/usr/bin/true --config "${MIRUME_DEV_CONFIG}"\n'),
+                      ("m", "Environment=\"MIRUME_DEV_CONFIG=/srv/x.json\"\n"),
+                      ("n", "PassEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"),
+                      ("o", "  - MIRUME_DEV_CONFIG\n"),
+                      ("p", 'os.environ["MIRUME_DEV_CONFIG"] = "x"\n'),
+                      ("q", "# MIRUME_DEV_CONFIG はここで渡す\n")):
         add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
             SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
+    add("S4-dev i. 製品の起動が環境から外す形（env -u・unset）は守りなので断らない", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + "ExecStart=/usr/bin/env -u MIRUME_DEV_CONFIG -u EXAMPLE_X /usr/bin/true\n"
+        "ExecStartPre=/bin/sh -c 'unset -v EXAMPLE_X MIRUME_DEV_CONFIG'\n"
+        "UnsetEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"
+        "ExecStartPre=/usr/bin/env --unset=MIRUME_DEV_CONFIG /usr/bin/true\n"
+        'os.environ.pop("MIRUME_DEV_CONFIG", None)\n'
+        'del os.environ["MIRUME_DEV_CONFIG"]\n'}), 0)
     return s
 
 
@@ -1116,7 +1132,7 @@ MUTATIONS = [
      '            else:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"',
      '            elif False:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"'),
     ("S4: 開発の機体だけの設定を指すのを見ない（#156）",
-     "            if _DEV_REF.search(ln):\n", "            if False:\n"),
+     "            if _dev_ref(ln):\n", "            if False:\n"),
     ("S4: 前にほかの道がある dev/config を見ない",
      'rf"|(?<![{_A}.-])dev/config(?![{_A}-])', 'rf"|(?<![{_A}./-])dev/config(?![{_A}-])'),
     ("S4: 末尾の / の無い dev/config を見ない",
@@ -1127,8 +1143,15 @@ MUTATIONS = [
      r'\.\.?/dev(?![{_A}./-])"', r'\.\.?/devNEVER(?![{_A}./-])"'),
     ("S6: 開発の設定の enabled が真偽でなくても通す",
      "            if dev and not isinstance(enabled, bool):\n", "            if False:\n"),
-    ("S4: MIRUME_DEV_CONFIG を見ない",
-     "|(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])", ""),
+    ("S4: MIRUME_DEV_CONFIG の名前を見ない",
+     "    return any(not _DEV_UNSET.search(line[:m.start()]) for m in _DEV_NAME.finditer(line))\n",
+     "    return False\n"),
+    ("S4: 環境から外す形も断る",
+     "any(not _DEV_UNSET.search(line[:m.start()]) for m", "any(True for m"),
+    ("S4: env -u を環境から外す形とみなさない",
+     'rf"(?:(?<![{_A}-])-u[ \\t]+|', 'rf"(?:(?<![{_A}-])-uNEVER[ \\t]+|'),
+    ("S4: unset を環境から外す形とみなさない",
+     "(?<![{_A}])unset[ \\t]+", "(?<![{_A}])unsetNEVER[ \\t]+"),
 ]
 
 

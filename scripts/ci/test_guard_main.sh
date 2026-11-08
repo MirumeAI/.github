@@ -142,6 +142,26 @@ t ALLOW "git push origin feature/1-x 2>/dev/null"
 t ALLOW "git branch -D feature/old >/dev/null"
 t ALLOW "git commit -m \"a > b 2>&1\""
 t ALLOW "git status 2>&1"
+# 先の語を離して書いた向け先（記号だけの語と次の 1 語を外す）
+t ALLOW "git push origin feature/1-x > /dev/null 2>&1"
+t ALLOW "git push origin feature/1-x 2> /dev/null"
+t ALLOW "git push origin feature/1-x >> log 2>&1"
+t ALLOW "git push origin feature/1-x &> /dev/null"
+t ALLOW "git push -u origin HEAD > /dev/null 2>&1"
+t ALLOW "git push >/dev/null origin feature/1-x"
+t ALLOW "git push 2>/dev/null origin feature/1-x"
+t ALLOW "git branch -D feature/old > /dev/null 2>&1"
+t DENY  "git push origin main > /dev/null 2>&1"
+t DENY  "git push > /dev/null origin main"
+# 引用・逃がした「向け先の形の名前」は名前として読む（外さない）
+t DENY  "git push origin '>legacy'"
+t DENY  'git push origin \>main'
+t DENY  "git branch -D '>legacy'"
+t DENY  "git branch -m '>x'" "$WORK/on_main"
+# 2 つの読み方の間で cd を持ち越さない
+t DENY  "2>&1 git push; cd $WORK/on_feature" "$WORK/on_main"
+t DENY  "git 2>&1 commit -m x; cd $WORK/on_feature" "$WORK/on_main"
+t ALLOW "2>&1 git push; cd $WORK/on_main"
 
 echo "== 検証で実証された回避 =="
 t DENY  "git push origin HEAD:refs/heads/main"

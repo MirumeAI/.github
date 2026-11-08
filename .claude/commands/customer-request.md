@@ -35,7 +35,11 @@ argument-hint: [顧客要求の内容]
 
 `Plugin・Adapter` 候補でも、Core 側の拡張 Interface は**今は無い**（2026-11-04 に確かめた）。要るときは、具体の要求で Architecture Review をして入口を 1 つずつ作る。
 
-製品アプリ（起動・製品画面・API・Adapter）は顧客 Repository に置き、両 Core の `docs/public_api.md` の公開の面と入口だけを使う。Core の内部は、公開の面や入口ができた後も直に import しない。認証とライセンスの門番を外さず、迂回しない。公開の面に無いものが要るときは、Core の Issue を作る（development-docs の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Core の入口」）。
+製品アプリ（起動・製品画面・API・Adapter）は顧客 Repository に置き、両 Core の `docs/public_api.md` の公開の面と入口だけを使う。Core の内部は、公開の面や入口ができた後も直に import しない（development-docs の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Core の入口」）。
+
+認証とライセンスの門番を外さず、迂回しない。PDM 側の製品の API と画面は門番の内側に置く。門番の入口を開く・`allow_ports` を広げる変更は、守りの境として人の判断が要る（development-docs の `03_customer_development/platform_evolution.md` の 2 章・3 章）。
+
+公開の面に無いものが要るときは、Core の内部を使わずに、顧客 Repository に改善依頼を書く（顧客の名前と値を書かない形で）。共通プラットフォームの側が分類し、Core の共通の不具合・機能の不足・入口の不足は Core の Issue にする（入口の不足は Architecture Review の後。同じ文書の 4 章）。
 
 ## 出力
 
@@ -50,7 +54,7 @@ argument-hint: [顧客要求の内容]
 
 - Core Source 全体のコピー
 - Core 内の顧客名による `if` 分岐
-- Core Repository に顧客別の長期 Branch を新しく作ること（今ある長期 Branch は LEGACY として移行まで残す）
+- Core Repository に顧客別の長期 Branch を新しく作ること（今ある長期 Branch は LEGACY として移行まで残す。入れてよいのは動いている機体の不具合と安全の直しだけで、新しい機能は `main` に入れる。名前の変更・削除・作り直しはしない。同じ文書の「今ある長期Branch（LEGACY）」）
 - 顧客 Repository のコードから Core の内部を直に import すること
 - 製品アプリが認証とライセンスの門番を外す・迂回すること
 - 顧客固有 Patch を恒久的に放置すること

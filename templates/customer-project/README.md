@@ -32,7 +32,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `release/` | System Release の manifest |
 | `deployment/` | 配置した事実の記録 |
 | `deploy/` | この機体固有の起動・配置設定 |
-| `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<名前>.json` を `MIRUME_DEV_CONFIG` に渡す） |
+| `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<案件の名前>.json` を `MIRUME_DEV_CONFIG` に渡す） |
 | `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） |
 | `plugins/` | Core に差し込む、この案件固有の拡張（差し込む Core の入口ができてから） |
 | `recipes/` | 製品・検査条件 |

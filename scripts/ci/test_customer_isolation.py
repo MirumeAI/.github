@@ -737,7 +737,11 @@ def scenarios() -> "list[Scenario]":
                       ("q", "# MIRUME_DEV_CONFIG はここで渡す\n"),
                       ("r", "del x; os.environ['MIRUME_DEV_CONFIG'] = '/x'\n"),
                       ("s", "echo UnsetEnvironment= ; export MIRUME_DEV_CONFIG=/x\n"),
-                      ("t", "unset EXAMPLE_X && export MIRUME_DEV_CONFIG=/x\n")):
+                      ("t", "unset EXAMPLE_X && export MIRUME_DEV_CONFIG=/x\n"),
+                      ("u", "Environment=X=-u MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("v", "ExecStart=/usr/bin/example --unset MIRUME_DEV_CONFIG\n"),
+                      ("w", "p = os.environ.pop('MIRUME_DEV_CONFIG')\n"),
+                      ("x", "ExecStart=/usr/bin/env -u EXAMPLE_X MIRUME_DEV_CONFIG=/x /usr/bin/true\n")):
         add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
             SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
     add("S4-dev i. 製品の起動が環境から外す形（env -u・unset）は守りなので断らない", a_with(**{
@@ -747,7 +751,9 @@ def scenarios() -> "list[Scenario]":
         "UnsetEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"
         "ExecStartPre=/usr/bin/env --unset=MIRUME_DEV_CONFIG /usr/bin/true\n"
         'os.environ.pop("MIRUME_DEV_CONFIG", None)\n'
-        'del os.environ["MIRUME_DEV_CONFIG"]\n'}), 0)
+        'del os.environ["MIRUME_DEV_CONFIG"]\n'
+        'env = dict(os.environ); env.pop("MIRUME_DEV_CONFIG", None)\n'
+        "del env['MIRUME_DEV_CONFIG']\n"}), 0)
     return s
 
 
@@ -1154,17 +1160,20 @@ MUTATIONS = [
     ("S6: 開発の設定の enabled が真偽でなくても通す",
      "            if dev and not isinstance(enabled, bool):\n", "            if False:\n"),
     ("S4: MIRUME_DEV_CONFIG の名前を見ない",
-     "    return any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n",
-     "    return False and any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n"),
+     "    return any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n",
+     "    return False and any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n"),
     ("S4: 環境から外す形も断る",
-     "any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])",
-     "any(True or _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])"),
-    ("S4: 外す形が区切り（;）を越える",
-     "UnsetEnvironment=(?:[{_A}]{{1,64}}[ \\t]+){{0,32}}", "UnsetEnvironment=[^\\n]*?"),
+     "    return any(rx.search(seg) for rx in _DEV_UNSET)\n", "    return False\n"),
     ("S4: env -u を環境から外す形とみなさない",
-     'rf"(?:(?<![{_A}-])-u[ \\t]+|', 'rf"(?:(?<![{_A}-])-uNEVER[ \\t]+|'),
+     '(?:-u[ \\t]+|--unset[= \\t])', '(?:-uNEVER[ \\t]+|--unset[= \\t])'),
+    ("S4: env の無い -u も外す形とみなす",
+     'rf"(?<![{_A}.-])env(?:[ \\t][^;&|]*)?[ \\t](?:-u', 'rf"(?:-u'),
     ("S4: unset を環境から外す形とみなさない",
-     "(?<![{_A}])unset[ \\t]+", "(?<![{_A}])unsetNEVER[ \\t]+"),
+     "(?<![{_A}-])unset[ \\t]+", "(?<![{_A}-])unsetNEVER[ \\t]+"),
+    ("S4: 外す形が区切り（;）を越える",
+     '    i = max(before.rfind(c) for c in ";&|")\n', "    i = -1\n"),
+    ("S4: 値を使う .pop( も外す形とみなす",
+     'rf"^[ \\t]*[{_A}.]{{1,128}}\\.pop\\(', 'rf"[{_A}.]{{1,128}}\\.pop\\('),
 ]
 
 

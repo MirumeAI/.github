@@ -46,8 +46,9 @@
           `../` で始まるものも含む。 それと `config` で始まる `.json` の名前）が、
           実在して許されているか。 開発の機体だけの設定（この Repository の `dev/` の道・
           `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG` の名前）を指して
-          いないか（**機体へ届かない設定を据え付けに使わせない**。 #156。 名前は、 環境から
-          外す形〔`env -u`・`unset` など〕のほかはどこに書いても断る）。 deploy/ の
+          いないか（**機体へ届かない設定を据え付けに使わせない**。 #156。 名前は、 直前が
+          環境から外す形〔`env` の `-u`・`unset` など〕のときのほかは、 どこに書いても断る。
+          deploy/ の説明の .md は照らさない）。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
     S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
@@ -243,26 +244,36 @@ _REF_NAME = re.compile(
 #: `/` が無くても）。 `/dev/video0` のような機器の道は拾わない。
 _DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.?/dev(?![{_A}./-])"
                       rf"|(?<![{_A}.-])dev/config(?![{_A}-])")
-#: `MIRUME_DEV_CONFIG` の名前。 **どこに書いても拾い、 環境から外す形（下）だけを拾わない**
+#: `MIRUME_DEV_CONFIG` の名前。 **どこに書いても拾い、 直前が環境から外す形（下）のときだけ拾わない**
 #: （渡す形は systemd・compose・docker・シェル・Python と多く、 一覧で拾うと抜ける）。
 _DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
-#: 環境から外す形の、 名前の前（`env -u`・`env --unset=`・`unset`・`UnsetEnvironment=`・`.pop(`・
-#: `del ... environ[`）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない。
-#: **区切り（`;`・`&`・`|`）を越えない**（`del x; os.environ[...] = ...` を外す形とみなさない）。
-#: 見る長さにも上限を置く（長い行で時間が 2 乗で増えないように）。
-_DEV_UNSET = re.compile(rf"(?:(?<![{_A}-])-u[ \t]+|(?<![{_A}-])--unset[= \t]"
-                        rf"|(?<![{_A}])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}"
-                        rf"|UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}"
-                        rf"|\.pop\([ \t]*|(?<![{_A}])del[ \t]+[{_A}.]{{1,64}}\[[ \t]*)[\"']?$")
-#: 外す形を探す、 名前の前の長さ。
+#: 環境から外す形（名前の直前）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない:
+#: `env` コマンドの `-u`・`--unset`（`env` の無い `-u` はみなさない）・`unset`・`UnsetEnvironment=`・
+#: 文の始めの `<辞書>.pop(`（値を使う `x = d.pop(` はみなさない）・`del <辞書>[`。 名前の前の、
+#: **最後の区切り（`;`・`&`・`|`）の後ろだけ**を見る（`del x; os.environ[...] = ...` を外す形とみなさない）。
+_DEV_UNSET = (
+    re.compile(rf"(?<![{_A}.-])env(?:[ \t][^;&|]*)?[ \t](?:-u[ \t]+|--unset[= \t])[\"']?$"),
+    re.compile(rf"(?<![{_A}-])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"(?<![{_A}])UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"^[ \t]*[{_A}.]{{1,128}}\.pop\([ \t]*[\"']?$"),
+    re.compile(rf"(?<![{_A}])del[ \t]+[{_A}.]{{1,64}}\[[ \t]*[\"']?$"),
+)
+#: 外す形を探す、 名前の前の長さ（長い行で時間が増えすぎないように）。
 _DEV_UNSET_SPAN = 2400
+
+
+def _dev_unset(before: str) -> bool:
+    """名前の直前が、 環境から外す形か。"""
+    i = max(before.rfind(c) for c in ";&|")
+    seg = before[i + 1:]
+    return any(rx.search(seg) for rx in _DEV_UNSET)
 
 
 def _dev_ref(line: str) -> bool:
     """1 行が、 開発の機体だけの設定を指すか（S4）。"""
     if _DEV_REF.search(line):
         return True
-    return any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])
+    return any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])
                for m in _DEV_NAME.finditer(line))
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")

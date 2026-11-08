@@ -29,6 +29,14 @@
     versions.dev.yaml Core ごとの 40 桁の commit のほかの項目・形の違う値がある
     release/          software.versions_ref が versions.yaml でない
 
+開発の機体だけの設定（根の `dev/`。 撮像側の `MIRUME_DEV_CONFIG` に渡す `dev/config/`）も、
+System Release と配置の記録から指さない（#156）。 配る道具は `config/` だけを配るので、
+指すと、 機体に無い設定を据え付けに使うことになる。
+
+    release/・deployment/  この Repository の `dev/` の道・`./dev`・前にほかの道がある `dev/config`・
+                          `MIRUME_DEV_CONFIG` を、 鍵か値に書いている（`/dev/video0` のような
+                          機器の道は見ない。 出すのは欄だけで、 値と決まりの外の鍵は出さない）
+
 Core の写しの道を `CORE_ROOT_IMAGE_ACQUISITION_PDM`・`CORE_ROOT_PDM` に渡した
 ときだけ、タグが注釈つきで書いた commit を指すことと、PDM の行が撮像側のタグの
 commit にある `pdm.lock.json` と同じことも照らす（CI は Private の Core を読めない
@@ -107,6 +115,12 @@ VERSIONS_DEV = "versions.dev.yaml"
 VERSIONS_REF = "versions.yaml"
 #: `versions.dev.yaml` の知っている形式
 VERSIONS_DEV_SCHEMAS = (1,)
+#: 開発の機体だけの設定への参照（#156）。 混入の検査の S4（`customer_isolation_check._DEV_REF`）と同じ形:
+#: この Repository の `dev/` の道（`./`・`../` で始まるものも）・`./dev` そのもの・前にほかの道がある
+#: `dev/config`（配置先の絶対の道。 末尾の `/` が無くても）・`MIRUME_DEV_CONFIG`。
+_DEV_REF = re.compile(r"(?<![A-Za-z0-9_./-])(?:\.\.?/){0,16}dev/|(?<![A-Za-z0-9_./-])\.\.?/dev(?![A-Za-z0-9_./-])"
+                      r"|(?<![A-Za-z0-9_.-])dev/config(?![A-Za-z0-9_-])"
+                      r"|(?<![A-Za-z0-9_])MIRUME_DEV_CONFIG(?![A-Za-z0-9_])")
 #: 手元の確かめで Core の写しの道を渡す環境の変数。
 CORE_ROOT_ENV = {
     "image_acquisition_pdm": "CORE_ROOT_IMAGE_ACQUISITION_PDM",
@@ -132,6 +146,14 @@ MODEL_VERSION_RE = re.compile(r"([A-Z0-9]+)-M[0-9]{4}\.[0-9]{2}\.[0-9]+")
 DATASET_ID_RE = {"training": re.compile(r"DS-([A-Z0-9]+)-v[0-9]+"),
                  "evaluation": re.compile(r"DS-([A-Z0-9]+)-eval-v[0-9]+")}
 DATASET_FIELDS = ("id", "files", "bytes", "manifest_sha256")
+#: 出力にそのまま出す欄の名前（記録の決まった鍵）。 ほかは `<*>`（記録に書いた任意の名前を出さない。 #156）。
+_SHOWN_KEYS = frozenset(
+    {k for spec in (RELEASE_FIELDS, DEPLOYMENT_FIELDS) for sec, keys in spec.items()
+     for k in ((sec,) if sec else ()) + keys}
+    | set(DATASET_FIELDS)
+    | {"record_id", "machine", "sequence", "supersedes", "status", "recorded_by", "role", "account",
+       "observed", "deployed_release", "rollback_to", "rolled_back_from", "config_commit", "artifacts",
+       "name", "version", "sha256", "model_sha256", "release_hash_matches_manifest", "operator"})
 #: 知らせの文で言う決まった形（**値は出さない**。 欄に道などを書いても、 出力に出さない）。
 FORMS = {"release_id": "<案件の記号>-R<年>.<月 2 桁>.<番号>",
          "inspection.version": "<案件の記号>-M<年>.<月 2 桁>.<番号>",
@@ -234,6 +256,28 @@ def _check_release_data(name: str, d: dict, errors: list) -> None:
                 errors.append(f"{name}: dataset.{k}.{f} は {least} 以上の整数にしてください")
         if node.get("manifest_sha256") not in (None, "") and not _sha256_ok(node.get("manifest_sha256")):
             errors.append(f"{name}: dataset.{k}.manifest_sha256 は 64 桁の小文字の 16 進を引用符で囲んで書いてください")
+
+
+def _dev_refs(name: str, node, errors: list, at: str = "") -> None:
+    """System Release と配置の記録が、 開発の機体だけの設定を指していないか（#156）。
+
+    鍵も値も見る。 **値は出さない**（どの欄かだけ。 決まった鍵のほかは `<*>`）。 当たった鍵の
+    下は見ない（鍵が出力に出ないように）。
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(k, str) and _DEV_REF.search(k):
+                errors.append(f"{name}: {at or '根'} の鍵が、開発の機体だけの設定"
+                              "（dev/・MIRUME_DEV_CONFIG）を指しています（機体へ配る設定だけを指す）")
+                continue
+            shown = str(k) if k in _SHOWN_KEYS else "<*>"
+            _dev_refs(name, v, errors, f"{at}.{shown}" if at else shown)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            _dev_refs(name, v, errors, f"{at}[{i}]")
+    elif isinstance(node, str) and _DEV_REF.search(node):
+        errors.append(f"{name}: {at or '根'} が、開発の機体だけの設定"
+                      "（dev/・MIRUME_DEV_CONFIG）を指しています（機体へ配る設定だけを指す）")
 
 
 def _check_schema(name: str, data: dict, errors: list) -> None:
@@ -588,6 +632,7 @@ def main() -> int:
         _check_schema(p.name, d, errors)
         _check_fields(p.name, d, RELEASE_FIELDS, errors)
         _check_release_data(p.name, d, errors)
+        _dev_refs(p.name, d, errors)
         # **System Release は versions.yaml だけを参照する**（#153）。 開発中の固定
         # （versions.dev.yaml）や別のファイルを指すと、 タグの無い版が配置に流れる。
         sw = d.get("software")
@@ -608,6 +653,7 @@ def main() -> int:
         d = _load(p, errors, yaml)
         if d is None:
             continue
+        _dev_refs(p.name, d, errors)
         if d.get("schema_version") == 2:
             # **schema 2（P1-05）は機体ごとの記録の並びで見る**（下でまとめて）
             dep2.append((p, d))

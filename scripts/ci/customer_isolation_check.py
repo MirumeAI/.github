@@ -44,7 +44,11 @@
           宣言の中か
     S4    deploy/ と versions.yaml が触れる設定のファイル（`config/...` の道。 `./`・
           `../` で始まるものも含む。 それと `config` で始まる `.json` の名前）が、
-          実在して許されているか。 deploy/ の
+          実在して許されているか。 開発の機体だけの設定（この Repository の `dev/` の道・
+          `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG` の名前）を指して
+          いないか（**機体へ届かない設定を据え付けに使わせない**。 #156。 名前は、 直前が
+          環境から外す形〔`env` の `-u`・`unset` など〕のときのほかは、 どこに書いても断る。
+          行を `\\` で続けた命令は 1 つにつないで照らす。 deploy/ の説明の .md は照らさない）。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
     S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
@@ -55,6 +59,12 @@
           ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、 記録どうしと、
           `release/` の System Release の ID の記号（`<記号>-R<年>.<月>.<番号>.yaml`）と同じか
           （宣言には案件の記号の欄が無いので、 同じ Repository の記録どうしで照らす）
+    S6    開発の機体だけの設定（`dev/config/`。 #156）。 置けるのは撮像側の
+          `dev/config/image-acquisition/<名前>.json` と、 説明の .md と空の .gitkeep だけ。
+          機体へは配らないが、 案件の値が入るので、 撮像側の設定と同じに照らす（層 1・S2・
+          S3）。 ただし S2 は、 宣言で使うものを開発の機体で切る（`enabled: false`）のは
+          許す。 開発の機体では主の設定として読まれるので、 plc・nas・ai の節を書いたら、
+          enabled を true か false で書く（無いのも断る）。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
 Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）は除かない。**
@@ -136,6 +146,10 @@ PDM_SUFFIXES = (".json", ".txt")
 PDM_FACE_DIRS = ("adaptive_mask", "align", "bbox_acquire", "good_pool", "region_split")
 #: PDM の置き場の根にある、 決まった名前（基準のロット）。
 PDM_FIXED = ("align_reference.txt",)
+#: S6 の、 開発の機体だけの設定の置き場（#156）。 撮像側の `MIRUME_DEV_CONFIG` に渡す。
+#: 配る道具（`setup_customer.sh`）は `config/` だけを配るので、 機体へ届かない。
+DEV_DIR = "dev/config/"
+DEV_IA_DIR = DEV_DIR + "image-acquisition/"
 
 #: S4 で読む、 根の決まった名前（deploy/ の下のほかに）。
 S4_FILES = ("versions.yaml",)
@@ -165,7 +179,7 @@ SHOWN_KEYS = frozenset({
     "triggers", "shot_request", "data", "start", "end", "bit", *CORE_TRIG_KEYS})
 #: 出力にそのまま出すファイルの道の部品。 ほかは `<伏せ#n>`。
 SHOWN_PARTS = frozenset({
-    "config", "image-acquisition", "pdm", "deploy", "defaults", "versions.yaml",
+    "config", "image-acquisition", "pdm", "deploy", "defaults", "versions.yaml", "dev",
     PROFILE, "README.md", ".gitkeep", *IA_FIXED, *PDM_FACE_DIRS, *PDM_FIXED})
 SHOWN_SUFFIXES = (".json", ".txt", ".md", ".yaml", ".yml", ".service", ".sh",
                   ".py", ".conf", ".ini", ".toml", ".cfg", ".env")
@@ -187,6 +201,10 @@ WHAT = {
     "S4-missing": "参照している設定のファイルが無い",
     "S4-not-allowed": "参照している設定のファイルが、 許されていない",
     "S4-link": "deploy/ か versions.yaml がリンク（読まずに断る）",
+    "S4-dev": "deploy/ か versions.yaml が、 開発の機体だけの設定（dev/config/・MIRUME_DEV_CONFIG）を指している",
+    "S6-file": "dev/config/ の決まりの外のファイル（置けるのは dev/config/image-acquisition/<名前>.json だけ）",
+    "S6-link": "dev/ か dev/config/ の下のリンク（読まずに断る）",
+    "S6-enabled": "開発の機体だけの設定の plc・nas・ai の節の enabled が true か false で書かれていない（開発の機体では主の設定として読まれる）",
     "S5-endpoint": "記録（deployment/・validation/）の中の、 宣言に無い IP（記録には値を書かない）",
     "S5-name": "記録（deployment/・validation/）の中の、 宣言に無いトリガ・面の名前らしき語",
     "S5-link": "deployment/ か validation/ の下のリンク（読まずに断る）",
@@ -220,6 +238,49 @@ _REF_PATH = re.compile(
     rf"(?![{_A}-]|\.[{_A}])")
 _REF_NAME = re.compile(
     rf"(?<![{_A}./-])config(?:\.[\w-]{{1,64}}){{0,8}}\.json(?![{_A}-]|\.[{_A}])")
+#: deploy/ と versions.yaml の中の、 開発の機体だけの設定（S4。 #156）。 道は記録の検査
+#: （`release_record_check._DEV_REF`）と同じ形: この Repository の `dev/` の道（`./`・`../` で
+#: 始まるものも）・`./dev` そのもの・前にほかの道がある `dev/config`（配置先の絶対の道。 末尾の
+#: `/` が無くても）。 `/dev/video0` のような機器の道は拾わない。
+_DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.?/dev(?![{_A}./-])"
+                      rf"|(?<![{_A}.-])dev/config(?![{_A}-])")
+#: `MIRUME_DEV_CONFIG` の名前。 **どこに書いても拾い、 直前が環境から外す形（下）のときだけ拾わない**
+#: （渡す形は systemd・compose・docker・シェル・Python と多く、 一覧で拾うと抜ける）。
+_DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
+#: 環境から外す形（名前の直前）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない:
+#: `env` コマンドの `-u`・`--unset`（`env` に渡す `-u` だけを並べた行も。 `env` の無いほかの `-u`・別の `-u` の
+#: 引数の `-u` はみなさない）・`unset`・`UnsetEnvironment=`
+#: （どれも `=` の値の中のものはみなさない）・
+#: 文の始めの `<辞書>.pop(`（値を使う `x = d.pop(` はみなさない）・`del <辞書>[`。 名前の前の、
+#: **最後の区切り（`;`・`&`・`|`）の後ろだけ**を見る（`del x; os.environ[...] = ...` を外す形とみなさない）。
+_DEV_UNSET = (
+    re.compile(rf"(?<![{_A}.=-])env(?:[ \t][^;&|]*)?[ \t](?<!-u[ \t])(?<!--unset[ \t])"
+               rf"(?:-u[ \t]+|--unset[= \t])[\"']?$"),
+    # `env` に渡す `-u` だけを並べた行（配列や、 行を分けた引数の並び）
+    re.compile(rf"^[ \t]*(?:[\"']?(?:-u|--unset)[\"']?(?:=|[ \t]+)[\"']?[{_A}]{{1,64}}[\"']?[ \t]+){{0,64}}"
+               rf"[\"']?(?:-u|--unset)[\"']?(?:=|[ \t]+)[\"']?$"),
+    re.compile(rf"(?<![{_A}=-])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"(?<![{_A}=])UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"^[ \t]*[{_A}.]{{1,128}}\.pop\([ \t]*[\"']?$"),
+    re.compile(rf"(?<![{_A}])del[ \t]+[{_A}.]{{1,64}}\[[ \t]*[\"']?$"),
+)
+#: 外す形を探す、 名前の前の長さ（長い行で時間が増えすぎないように）。
+_DEV_UNSET_SPAN = 2400
+
+
+def _dev_unset(before: str) -> bool:
+    """名前の直前が、 環境から外す形か。"""
+    i = max(before.rfind(c) for c in ";&|")
+    seg = before[i + 1:]
+    return any(rx.search(seg) for rx in _DEV_UNSET)
+
+
+def _dev_ref(line: str) -> bool:
+    """1 行が、 開発の機体だけの設定を指すか（S4）。"""
+    if _DEV_REF.search(line):
+        return True
+    return any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])
+               for m in _DEV_NAME.finditer(line))
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _HEX_REF = re.compile(r"[0-9a-f]{7,40}")
@@ -588,11 +649,11 @@ def _schema_path(path: tuple) -> str:
 
 
 def list_files(root: Path) -> "list[str]":
-    """config/・deploy/・deployment/・validation/・versions.yaml の、 追跡しているもの + まだ add していない新しいもの。
+    """config/・deploy/・deployment/・validation/・dev/・versions.yaml の、 追跡しているもの + まだ add していない新しいもの。
 
     git のリポジトリでなければ、 フォルダをたどる（リンクはたどらず、 一覧に載せて断る）。
     """
-    specs = ("config", "deploy", "deployment", "validation", "versions.yaml")
+    specs = ("config", "deploy", "deployment", "validation", "dev", "versions.yaml")
     if (root / ".git").exists():
         seen: "set[bytes]" = set()
         for extra in ((), ("--others", "--exclude-standard")):
@@ -603,7 +664,7 @@ def list_files(root: Path) -> "list[str]":
             seen.update(raw for raw in r.stdout.split(b"\0") if raw)
         return sorted(os.fsdecode(raw) for raw in seen)
     out = ["versions.yaml"] if os.path.lexists(root / "versions.yaml") else []
-    for top in ("config", "deploy", "deployment", "validation"):
+    for top in ("config", "deploy", "deployment", "validation", "dev"):
         if os.path.islink(root / top):
             out.append(top)                  # 根の外を読まない
             continue
@@ -694,9 +755,10 @@ _IA_ONLY_KEYS = ("_profile", "face_dict", "plc")
 def _is_ia_config(rel: str, data) -> bool:
     """撮像側の案件の設定らしいもの（決まった場所の照合と S2・S3 を当てる）。
 
-    撮像側の置き場の外へ写した構成も見る（PDM の置き場に置いたものも）。
+    撮像側の置き場の外へ写した構成も見る（PDM の置き場に置いたものも）。 開発の機体だけの
+    設定（S6）は、 撮像側の案件の設定そのもの（対応表でなければ照らせないので止める）。
     """
-    if rel == IA_MAIN:
+    if rel == IA_MAIN or rel.startswith(DEV_IA_DIR):
         return True
     if not isinstance(data, dict):
         return False
@@ -748,7 +810,7 @@ class Checker:
         self.used: "dict[str, set]" = {k: set() for k in CATEGORIES}
         self.files: "list[str]" = []
         self.allowed: "set[str]" = set()
-        self.counts = {"config": 0, "refs": 0, "records": 0}
+        self.counts = {"config": 0, "refs": 0, "records": 0, "dev": 0}
         self._endpoints = prof.endpoints()
         self._names = prof.names()
         self._faces = prof.face_names()
@@ -866,12 +928,30 @@ class Checker:
         self.used["faces"].update(x for x in self.prof["faces"] if nm in (x, _base(x)))
         return True
 
+    # ---- S6: dev/config/ の下のファイル（#156）
+
+    def s6(self, rel: str) -> "str | None":
+        """許されないなら所見の符号。 許されるなら None。 **知らないものは黙って通さない。**"""
+        name = rel.rsplit("/", 1)[-1]
+        if os.path.islink(self.root / rel):
+            return "S6-link"
+        if name == ".gitkeep":
+            return None if (self.root / rel).stat().st_size == 0 else "S6-file"
+        if name.endswith(".md"):
+            return None
+        rest = rel[len(DEV_IA_DIR):] if rel.startswith(DEV_IA_DIR) else "/"
+        if "/" not in rest and name.endswith(".json") and not name.startswith("."):
+            return None
+        return "S6-file"
+
     # ---- S2・S3（撮像側の案件の設定）
 
     def ia_config(self, rel: str, doc: JsonDoc, main: bool) -> None:
         d, prof = doc.data, self.prof
         if not isinstance(d, dict):
             raise Stop("config-field", "設定の全体が対応表ではありません", rel)
+        # 開発の機体だけの設定（S6）は、 宣言で使うものを切ってよい（PLC・NAS の無い開発の機体）
+        dev = rel.startswith(DEV_IA_DIR)
 
         # S2: 使うかどうか。 **書いていないものを推測しない。** 主の設定で、 Core の
         # 配る道具も止める形（節が無い、 plc.enabled・ai.enabled が真偽でない）は 2 で止める。
@@ -881,6 +961,10 @@ class Checker:
             sec = d.get(cap)
             enabled = sec.get("enabled") if isinstance(sec, dict) else None
             line = doc.line("key", (cap,))
+            if dev and not isinstance(enabled, bool):
+                # 開発の機体では主の設定として読まれる。 真偽でない値を照らさずに通さない
+                self.add("S6-enabled", rel, doc.line("value", (cap, "enabled")) or line, (cap, "enabled"))
+                continue
             if main and cap not in d:
                 raise Stop("config-field", f"{cap} の節がありません（Core の配る道具も止める形です）", rel)
             if main and cap != "nas" and not isinstance(enabled, bool):
@@ -896,7 +980,7 @@ class Checker:
                     self.add("S2-plc-enabled", rel, line, ("plc", "enabled"))
             elif not isinstance(enabled, bool):
                 self.skipped.append((cap, rel))          # 照らさずに、 そう言う
-            elif enabled is not prof.caps[cap]:
+            elif enabled is not prof.caps[cap] and not (dev and enabled is False):
                 self.add(f"S2-{cap}", rel, doc.line("value", (cap, "enabled")) or line,
                          (cap, "enabled"))
 
@@ -1007,6 +1091,19 @@ class Checker:
                     self.add("S4-missing", rel, i)
                 elif not any(f in self.allowed for f in found):
                     self.add("S4-not-allowed", rel, i)
+        # 開発の機体だけの設定は、 行を `\` で続けた命令を 1 つにつないで照らす（`env \` の続きの
+        # 行の `-u` を、 `env` の無い `-u` とみなさない）。 所見の行は命令の始めの行
+        cmd, start = "", 0
+        for i, ln in enumerate(text.splitlines(), 1):
+            start = start or i
+            if ln.rstrip().endswith("\\"):
+                cmd += ln.rstrip()[:-1] + " "
+                continue
+            if _dev_ref(cmd + ln):
+                self.add("S4-dev", rel, start)
+            cmd, start = "", 0
+        if cmd and _dev_ref(cmd):
+            self.add("S4-dev", rel, start)
 
     def text_lines(self, rel: str, text: str, code_ip: str, code_name: str,
                    sink: "list[Finding]") -> None:
@@ -1053,6 +1150,29 @@ class Checker:
                 docs[rel] = JsonDoc(rel, _read(root, rel))
             elif name.endswith(".txt") or rel in self.prof["config_files.extra"]:
                 # NUL を含んでも読む（NUL で中身を照らさせないようにしない）
+                self.text_lines(rel, _read(root, rel), "L1-endpoint", "L1-name", self.findings)
+        # ---- S6: 開発の機体だけの設定（#156）。 機体へ配らないが、 案件の値が入るので照らす。
+        # dev/ そのもの・dev/config そのもののリンクも見る（根の外を読まない）
+        for rel in self.files:
+            if rel not in ("dev", DEV_DIR[:-1]) and not rel.startswith(DEV_DIR):
+                continue
+            code = self.s6(rel)
+            if code is not None:
+                self.add(code, rel)
+            name = rel.rsplit("/", 1)[-1]
+            if code == "S6-link" or not (root / rel).is_file() or name == ".gitkeep":
+                continue
+            if name.endswith(".md"):
+                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)
+                continue
+            self.counts["dev"] += 1
+            # 層 1（補い）: ファイルの名前の中の `trig_` で始まる語（名前は案件が決める）
+            for part in rel.split("/")[2:]:
+                if any(not self.name_ok(m.group(0)) for m in _TRIG.finditer(part)):
+                    self.add("L1-name", rel)
+            if name.endswith(".json"):
+                docs[rel] = JsonDoc(rel, _read(root, rel))
+            else:
                 self.text_lines(rel, _read(root, rel), "L1-endpoint", "L1-name", self.findings)
         for rel, doc in docs.items():
             if _is_ia_config(rel, doc.data):
@@ -1314,7 +1434,8 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
     found, notes = _unique(ck.findings), _unique(ck.notes)
     print(f"検査: config/ の設定のファイル {ck.counts['config']}"
           f"・deploy/ と versions.yaml の中の設定のファイルへの参照 {ck.counts['refs']}"
-          f"・記録（deployment/・validation/）のファイル {ck.counts['records']}")
+          f"・記録（deployment/・validation/）のファイル {ck.counts['records']}"
+          f"・開発の機体だけの設定（dev/config/）のファイル {ck.counts['dev']}")
     for f in found[:MAX_SHOWN]:
         print(_show(f, masks, "NG", WHAT))
     if len(found) > MAX_SHOWN:

@@ -654,6 +654,124 @@ def scenarios() -> "list[Scenario]":
         "validation__VR-PJ001-2026-001.yaml": "x: 1\n",
         "release__PJ001-R2026.10.1.yaml": "x: 1\n",
         "release__PJ002-R2026.10.1.yaml": "x: 1\n"}), 1, {"S5-project-code"})
+
+    # ---- S6: 開発の機体だけの設定（dev/config/。 #156）。 機体へ配らないが、 同じに照らす
+    dev = "dev__config__image-acquisition__"
+
+    def a_dev(**changes) -> str:
+        """A の開発の機体の設定（保存済み画像のカメラ・AI を切る）。"""
+        d = a_config()
+        d["camera"] = {"camera1": {"camera_type": "area", "sdk": "file",
+                                   "image_dir": "../samples"}}
+        d["ai"] = {"enabled": False}
+        d.update(changes)
+        return _json(d)
+
+    add("S6a. 開発の設定と説明だけなら通る（宣言で使うものを切ってよい）", a_with(**{
+        "dev__README.md": "# dev\n", "dev__config__image-acquisition__.gitkeep": "",
+        dev + "example.json": a_dev()}), 0, texts=("dev/config/）のファイル 1",))
+    add("S6b. 開発の設定に B の構成をまるごと置く", a_with(**{
+        dev + "example.json": _json(b_config())}), 1,
+        {"S2-plc", "S2-nas", "S3-profile", "S3-flow", "S3-camera", "S3-face",
+         "L1-endpoint", "L1-serial", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
+    add("S6c. 開発の設定の中の、 宣言に無いカメラの IP は不合格", a_with(**{
+        dev + "example.json": a_dev(camera={"camera1": {"ip_address": B_IPS[0]}})}), 1,
+        {"L1-endpoint"})
+    add("S6d. 宣言で使わないものを開発の設定で使うのは不合格", a_with(**{
+        dev + "example.json": a_dev(nas={"enabled": True})}), 1, {"S2-nas"})
+    for tag, rel, body in (("1", "dev__config__pdm__example.json", _json({})),
+                           ("2", dev + "sub__example.json", _json({})),
+                           ("3", "dev__config__example.yaml", "x: 1\n"),
+                           ("4", dev + ".example.json", _json({})),
+                           ("5", dev + ".gitkeep", "x\n"),
+                           ("6", dev + "example.txt", "x\n")):
+        add(f"S6e{tag}. dev/config/ の決まりの外のファイルは不合格", a_with(**{rel: body}), 1,
+            {"S6-file"})
+    add("S6f. dev/config/ の説明の .md の中の値は参考だけ", a_with(**{
+        "dev__config__README.md": f"例 {B_IPS[1]}\n"}), 0, texts=("参考",))
+    add("S6g. dev/config/ の下のリンクは読まずに断る", a_with(**{
+        dev + "example.json": Link("../../../config/image-acquisition/config.json")}), 1,
+        {"S6-link"})
+    add("S6h. dev そのもののリンクは読まずに断る", a_with(**{"dev": Link("config")}), 1,
+        {"S6-link"})
+    add("S6i. dev/config そのもののリンクも読まずに断る", a_with(**{
+        "dev__README.md": "# dev\n", "dev__config": Link("../config")}), 1, {"S6-link"})
+    add("S6j. dev/config/ の外の dev/ は照らさない", a_with(**{
+        "dev__scripts__run.sh": f"{B_IPS[2]} {B_TRIGGERS[0]}\n"}), 0)
+    add("S6k. 対応表でない開発の設定は照らせないので止める", a_with(**{
+        dev + "example.json": "[]\n"}), 2, error="config-field")
+    add("S6l. 開発の設定の名前の中の宣言に無い trig_ の語は不合格", a_with(**{
+        dev + B_TRIGGERS[0] + ".json": a_dev()}), 1, {"L1-name"})
+    add("S6m. 開発の設定の中の、 宣言に無い trig_ の語も補いで照らす", a_with(**{
+        dev + "example.json": a_dev(note=f"from {B_TRIGGERS[1]}")}), 1, {"L1-name"})
+    add("S6o. 開発の設定の enabled が真偽でなければ不合格（主の設定として読まれる）", a_with(**{
+        dev + "example.json": a_dev(ai={"enabled": 1})}), 1, {"S6-enabled"})
+    add("S6n. 決まりの外のファイルの中の値も照らす", a_with(**{
+        "dev__config__example.yaml": f"camera: {B_IPS[3]}\n"}), 1, {"S6-file", "L1-endpoint"})
+
+    # ---- S4: 据え付けの設定が、 開発の機体だけの設定を指さない（#156）
+    add("S4-dev a. deploy/ が MIRUME_DEV_CONFIG を渡すのは不合格", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + "Environment=MIRUME_DEV_CONFIG=/srv/example/x.json\n"}), 1, {"S4-dev"})
+    add("S4-dev b. deploy/ が dev/config/ の道を指すのは不合格（配置先の絶対の道も）", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + "ExecStart=/usr/bin/true /srv/example/dev/config/image-acquisition/x.json\n"}), 1,
+        {"S4-dev"})
+    add("S4-dev c. versions.yaml が ./dev/config/ を指すのも不合格", a_with(**{
+        "versions.yaml": "schema_version: 1\nnote: ./dev/config/x.json\n"}), 1, {"S4-dev"})
+    add("S4-dev d. 機器の道や似た名前は開発の設定とみなさない", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + "Environment=CAMERA=/dev/video0\nEnvironment=X_MIRUME_DEV_CONFIG_Y=1\n"
+        "# my-dev/config/ devconfig/ https://example.dev/config/x /srv/dev/x\n"}), 0)
+    for tag, line in (("e", "ExecStartPre=/bin/cp -r ./dev /srv/example\n"),
+                      ("f", "ExecStartPre=/bin/cp -r /srv/example/dev/config /srv/x\n"),
+                      ("g", "Environment=INSPECTION_CONFIG=dev/x.json\n"),
+                      ("h", "ExecStartPre=/bin/cp ../dev/x.json /srv/x\n"),
+                      ("j", "export MIRUME_DEV_CONFIG\n"),
+                      ("k", "ExecStart=/usr/bin/docker run -e MIRUME_DEV_CONFIG example\n"),
+                      ("l", 'ExecStart=/usr/bin/true --config "${MIRUME_DEV_CONFIG}"\n'),
+                      ("m", "Environment=\"MIRUME_DEV_CONFIG=/srv/x.json\"\n"),
+                      ("n", "PassEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"),
+                      ("o", "  - MIRUME_DEV_CONFIG\n"),
+                      ("p", 'os.environ["MIRUME_DEV_CONFIG"] = "x"\n'),
+                      ("q", "# MIRUME_DEV_CONFIG はここで渡す\n"),
+                      ("r", "del x; os.environ['MIRUME_DEV_CONFIG'] = '/x'\n"),
+                      ("s", "echo UnsetEnvironment= ; export MIRUME_DEV_CONFIG=/x\n"),
+                      ("t", "unset EXAMPLE_X && export MIRUME_DEV_CONFIG=/x\n"),
+                      ("u", "Environment=X=-u MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("v", "ExecStart=/usr/bin/example --unset MIRUME_DEV_CONFIG\n"),
+                      ("w", "p = os.environ.pop('MIRUME_DEV_CONFIG')\n"),
+                      ("x", "ExecStart=/usr/bin/env -u EXAMPLE_X MIRUME_DEV_CONFIG=/x /usr/bin/true\n"),
+                      ("y", "Environment=X=unset MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("z", "ExecStart=/usr/bin/env -u -u MIRUME_DEV_CONFIG=/srv/a.json /usr/bin/true\n"),
+                      ("aa", "Environment=X=env -u MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("ab", "Environment=X=UnsetEnvironment=MIRUME_DEV_CONFIG=/srv/a.json\n")):
+        add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
+            SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
+    add("S4-dev i. 製品の起動が環境から外す形（env -u・unset）は守りなので断らない", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + "ExecStart=/usr/bin/env -u MIRUME_DEV_CONFIG -u EXAMPLE_X /usr/bin/true\n"
+        "ExecStartPre=/bin/sh -c 'unset -v EXAMPLE_X MIRUME_DEV_CONFIG'\n"
+        "UnsetEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"
+        "ExecStartPre=/usr/bin/env --unset=MIRUME_DEV_CONFIG /usr/bin/true\n"
+        'os.environ.pop("MIRUME_DEV_CONFIG", None)\n'
+        'del os.environ["MIRUME_DEV_CONFIG"]\n'
+        'env = dict(os.environ); env.pop("MIRUME_DEV_CONFIG", None)\n'
+        "del env['MIRUME_DEV_CONFIG']\n"}), 0)
+    add("S4-dev i2. 行を \\ で続けた env の続きの行の -u も外す形（起動の script の形）", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env \\\n  -u EXAMPLE_X -u MIRUME_DEV_CONFIG \\\n"
+        "  -u EXAMPLE_Y \\\n  /usr/bin/true\n"}), 0)
+    add("S4-dev i6. 行の終わりの -u の名前を次の行に書いた形も外す形（行を \\ で続けた命令）", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env -u EXAMPLE_X -u \\\n  MIRUME_DEV_CONFIG \\\n  /usr/bin/true\n"}), 0)
+    add("S4-dev i4. env に渡す -u だけを並べた行（配列）も外す形", a_with(**{
+        "deploy__app__run.sh": "#!/bin/bash\nSTRIP=(\n  -u EXAMPLE_X -u MIRUME_DEV_CONFIG -u EXAMPLE_Y\n)\n"
+        'exec env "${STRIP[@]}" /usr/bin/true\n'}), 0)
+    add("S4-dev i5. -u の並びの後ろで渡す形は不合格", a_with(**{
+        "deploy__app__run.sh": "#!/bin/bash\nSTRIP=(\n  -u EXAMPLE_X MIRUME_DEV_CONFIG=/srv/x.json\n)\n"}), 1,
+        {"S4-dev"})
+    add("S4-dev i3. 行を \\ で続けても、 渡す形は不合格", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env -u EXAMPLE_X \\\n  MIRUME_DEV_CONFIG=/srv/x.json \\\n"
+        "  /usr/bin/true\n"}), 1, {"S4-dev"})
     return s
 
 
@@ -842,6 +960,13 @@ class SyntheticScenariosTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("ERROR [config-missing]", out)
 
+    def test_long_unset_lines_stay_fast(self) -> None:
+        """外す形の見分けが、 長い行で時間を 2 乗にしない（#156 の A の MINOR-5）。"""
+        line = "del " * 20000 + "x; " + "UnsetEnvironment= " * 5000 + "MIRUME_DEV_CONFIG=/x"
+        t0 = time.monotonic()
+        self.assertTrue(I._dev_ref(line))
+        self.assertLess(time.monotonic() - t0, 2.0)
+
     def test_long_reference_lines_stay_fast(self) -> None:
         """deploy の長い行でも、 参照の探し方の時間が 2 乗で増えない。"""
         e = chr(0xE9)                                    # Unicode の字（英数字の外）
@@ -894,7 +1019,8 @@ MUTATIONS = [
     ("宣言: 同じ鍵の重複を通す",
      "            if k.value in seen:\n", "            if False:\n"),
     ("S2: NAS・AI の有無を照らさない",
-     "            elif enabled is not prof.caps[cap]:\n", "            elif False:\n"),
+     "            elif enabled is not prof.caps[cap] and not (dev and enabled is False):\n",
+     "            elif False:\n"),
     ("S3: 面ごとの設定のファイルの名前を照らさない",
      'if len(parts) != 4 or not self._face_file_name(parts[3].rsplit(".", 1)[0]):',
      "if False:"),
@@ -927,7 +1053,7 @@ MUTATIONS = [
     ("S4: versions.yaml を読まない",
      'S4_FILES = ("versions.yaml",)', "S4_FILES = ()"),
     ("S4: 配置先の絶対の道を、 この Repository の参照とみなす",
-     'rf"(?<![{_A}./-])(?:', 'rf"(?<![{_A}.-])(?:'),
+     'rf"(?<![{_A}./-])(?:\\.\\.?/){{0,16}}(config/', 'rf"(?<![{_A}.-])(?:\\.\\.?/){{0,16}}(config/'),
     ("網: 宣言した網の外の IP を通す",
      "hit = [n for n in self.prof.networks if ipaddress.IPv4Address(ip) in n]",
      "hit = list(self.prof.networks)"),
@@ -975,8 +1101,13 @@ MUTATIONS = [
     ("S3: flow と inspection の両方・どちらも無い設定を通す",
      "if main and has_flow == has_ins:", "if False:"),
     ("参考: 説明の .md の中の値を照らさない",
+     "                # **参考だけ**: 説明の中の値（別の Repository から写すと、 説明にも値が入る）\n"
      '                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)\n',
      "                pass\n"),
+    ("S6: 説明の .md の中の値を照らさない",
+     '            if name.endswith(".md"):\n'
+     '                self.text_lines(rel, _read(root, rel), "note-endpoint", "note-name", self.notes)\n',
+     '            if name.endswith(".md"):\n'),
     ("PDM の置き場の JSON を、 撮像側の鍵の全部で撮像側の設定とみなす",
      "keys = _IA_ONLY_KEYS if rel.startswith(PDM_DIR) else _IA_KEYS",
      "keys = _IA_KEYS"),
@@ -1008,6 +1139,70 @@ MUTATIONS = [
      "        self.record_codes()\n", ""),
     ("宣言: /24 の網も断る（境。 #115）",
      "if net.prefixlen < MIN_PREFIX:", "if net.prefixlen <= MIN_PREFIX:"),
+    ("S6: dev/config/ を照らさない（#156）",
+     '            if rel not in ("dev", DEV_DIR[:-1]) and not rel.startswith(DEV_DIR):\n',
+     "            if True:\n"),
+    ("S6: dev/config そのもののリンクを見ない",
+     'if rel not in ("dev", DEV_DIR[:-1]) and', 'if rel not in ("dev",) and'),
+    ("S6: ファイルを集めるときに dev/ を見ない",
+     '"validation", "dev", "versions.yaml")', '"validation", "versions.yaml")'),
+    ("S6: 決まりの外のファイルを通す",
+     "            code = self.s6(rel)\n", "            code = None\n"),
+    ("S6: 撮像側の置き場の下のフォルダを通す",
+     'if "/" not in rest and name.endswith(".json")', 'if name.endswith(".json")'),
+    ("S6: . で始まる名前を通す",
+     'name.endswith(".json") and not name.startswith(".")', 'name.endswith(".json")'),
+    ("S6: 中身のある .gitkeep を通す",
+     'return None if (self.root / rel).stat().st_size == 0 else "S6-file"', "return None"),
+    ("S6: 開発の設定を撮像側の設定とみなさない",
+     "if rel == IA_MAIN or rel.startswith(DEV_IA_DIR):", "if rel == IA_MAIN:"),
+    ("S6: 開発の設定で、 宣言で使わないものを使っても通す",
+     "and not (dev and enabled is False):", "and not dev:"),
+    ("S6: 開発の設定で、 宣言で使うものを切るのを断る",
+     "and not (dev and enabled is False):", ":"),
+    ("S6: 開発の設定の名前の trig_ の語を照らさない",
+     '            for part in rel.split("/")[2:]:\n', "            for part in ():\n"),
+    ("S6: 決まりの外のファイルの中の値を照らさない",
+     '            else:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"',
+     '            elif False:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"'),
+    ("S4: 開発の機体だけの設定を指すのを見ない（#156）",
+     "            if _dev_ref(cmd + ln):\n", "            if False:\n"),
+    ("S4: 前にほかの道がある dev/config を見ない",
+     'rf"|(?<![{_A}.-])dev/config(?![{_A}-])', 'rf"|(?<![{_A}./-])dev/config(?![{_A}-])'),
+    ("S4: 末尾の / の無い dev/config を見ない",
+     "dev/config(?![{_A}-])", "dev/config/(?![{_A}-])"),
+    ("S4: この Repository の dev/ の道を見ない",
+     r"(?:\.\.?/){{0,16}}dev/|", r"(?:\.\.?/){{0,16}}dev/NEVER|"),
+    ("S4: ./dev そのものを見ない",
+     r'\.\.?/dev(?![{_A}./-])"', r'\.\.?/devNEVER(?![{_A}./-])"'),
+    ("S6: 開発の設定の enabled が真偽でなくても通す",
+     "            if dev and not isinstance(enabled, bool):\n", "            if False:\n"),
+    ("S4: MIRUME_DEV_CONFIG の名前を見ない",
+     "    return any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n",
+     "    return False and any(not _dev_unset(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n"),
+    ("S4: 環境から外す形も断る",
+     "    return any(rx.search(seg) for rx in _DEV_UNSET)\n", "    return False\n"),
+    ("S4: env -u を環境から外す形とみなさない",
+     '(?:-u[ \\t]+|--unset[= \\t])', '(?:-uNEVER[ \\t]+|--unset[= \\t])'),
+    ("S4: env の無い -u も外す形とみなす",
+     'rf"(?<![{_A}.=-])env(?:[ \\t][^;&|]*)?[ \\t](?<!-u[ \\t])(?<!--unset[ \\t])"\n               rf"(?:-u',
+     'rf"(?:-u'),
+    ("S4: = の値の中の env も外す形とみなす",
+     "(?<![{_A}.=-])env(", "(?<![{_A}.-])env("),
+    ("S4: 別の -u の引数の -u も外す形とみなす",
+     "(?<!-u[ \\t])(?<!--unset[ \\t])", ""),
+    ("S4: = の値の中の unset も外す形とみなす",
+     "(?<![{_A}=-])unset[", "(?<![{_A}-])unset["),
+    ("S4: unset を環境から外す形とみなさない",
+     "(?<![{_A}=-])unset[ \\t]+", "(?<![{_A}=-])unsetNEVER[ \\t]+"),
+    ("S4: env に渡す -u だけを並べた行を外す形とみなさない",
+     'rf"^[ \\t]*(?:[\\"\']?(?:-u|--unset)', 'rf"^NEVER[ \\t]*(?:[\\"\']?(?:-u|--unset)'),
+    ("S4: 行を \\ で続けた命令をつながない",
+     '            if ln.rstrip().endswith("\\\\"):\n', "            if False:\n"),
+    ("S4: 外す形が区切り（;）を越える",
+     '    i = max(before.rfind(c) for c in ";&|")\n', "    i = -1\n"),
+    ("S4: 値を使う .pop( も外す形とみなす",
+     'rf"^[ \\t]*[{_A}.]{{1,128}}\\.pop\\(', 'rf"[{_A}.]{{1,128}}\\.pop\\('),
 ]
 
 

@@ -1,5 +1,5 @@
-# この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 設定（config/・deploy/・
-# versions.yaml）と照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
+# この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 設定（config/・dev/config/・
+# deploy/・versions.yaml）と記録（deployment/・validation/）と照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
 # 運用の手順は MirumeAI/development-docs の 03_customer_development/customer_isolation_check.md。
 #
 # 状態: REQUIRES HUMAN VERIFICATION

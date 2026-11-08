@@ -447,6 +447,60 @@ class SystemReleaseRefersOnlyToVersionsTest(_Records):
         self.assertEqual(code, 0, out)
 
 
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class DevConfigIsNotReferencedTest(_Records):
+    """System Release と配置の記録は、 開発の機体だけの設定（dev/・MIRUME_DEV_CONFIG）を指さない（#156）。"""
+
+    PLACE = "example-" + "hidden-place"
+
+    def test_references_are_refused_without_showing_the_value(self) -> None:
+        cases = {
+            "validation.report": (self.new, RELEASE_NEW.replace(
+                "report: r.md", f"report: dev/config/image-acquisition/{self.PLACE}.json")),
+            "inspection.calibration": (self.new, RELEASE_NEW.replace(
+                "calibration: 良品100枚", f"calibration: ./dev/{self.PLACE}.md")),
+            "target.line": (self.dep, DEPLOYMENT.replace(
+                "line: line-1", f"line: /srv/{self.PLACE}/dev/config/x.json")),
+            "smoke_test.checked[1]": (self.dep, DEPLOYMENT.replace(
+                "PLCへ判定が返る", f"MIRUME_DEV_CONFIG={self.PLACE}")),
+            "target の鍵": (self.dep, DEPLOYMENT.replace(
+                "device: dev-1", f"dev/{self.PLACE}: {{x: dev/config/{self.PLACE}}}")),
+            "target.<*>": (self.dep, DEPLOYMENT.replace(
+                "device: dev-1", f"{self.PLACE}: /srv/x/dev/config")),
+            "target.site": (self.dep, DEPLOYMENT.replace(
+                "site: site-a", "site: cp -r ./dev /srv/x")),
+            "validation.acceptance": (self.new, RELEASE_NEW.replace(
+                "acceptance: a.md", "acceptance: ../dev/x.md")),
+        }
+        for needle, (path, text) in cases.items():
+            with self.subTest(needle=needle):
+                self.new.write_text(RELEASE_NEW, encoding="utf-8")
+                self.dep.write_text(DEPLOYMENT, encoding="utf-8")
+                path.write_text(text, encoding="utf-8")
+                code, out = self.run_check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"{needle}", out)
+                self.assertIn("開発の機体だけの設定", out)
+                self.assertNotIn(self.PLACE, out)
+
+    def test_schema_2_deployment_records_are_also_seen(self) -> None:
+        (self.root / "deployment" / "M01-0001.yaml").write_text(json.dumps(
+            {"schema_version": 2, "record_id": "M01-0001", "machine": "M01", "sequence": 1,
+             "supersedes": None, "status": "LEGACY",
+             "recorded_by": {"role": "Deployment Owner", "account": "someone"},
+             "observed": {"note": "MIRUME_DEV_CONFIG"}}), encoding="utf-8")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("observed.<*> が、開発の機体だけの設定", out)
+
+    def test_device_paths_and_similar_names_pass(self) -> None:
+        self.dep.write_text(DEPLOYMENT.replace(
+            "device: dev-1", "device: /dev/video0, note: my-dev/config/ devconfig mydev/x "
+            "X_MIRUME_DEV_CONFIG_Y https://example.dev/config/x /srv/dev/x"), encoding="utf-8")
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+
+
 @unittest.skipIf(_needs_yaml() or shutil.which("git") is None, "PyYAML か git が無い")
 class VersionsAgainstCoreCopiesTest(unittest.TestCase):
     """Core の写しを渡したとき、 タグ・commit と、 PDM の行と撮像側の lock を照らす。"""

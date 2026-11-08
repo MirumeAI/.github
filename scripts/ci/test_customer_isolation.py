@@ -758,6 +758,20 @@ def scenarios() -> "list[Scenario]":
         'del os.environ["MIRUME_DEV_CONFIG"]\n'
         'env = dict(os.environ); env.pop("MIRUME_DEV_CONFIG", None)\n'
         "del env['MIRUME_DEV_CONFIG']\n"}), 0)
+    add("S4-dev i2. 行を \\ で続けた env の続きの行の -u も外す形（起動の script の形）", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env \\\n  -u EXAMPLE_X -u MIRUME_DEV_CONFIG \\\n"
+        "  -u EXAMPLE_Y \\\n  /usr/bin/true\n"}), 0)
+    add("S4-dev i6. 行の終わりの -u の名前を次の行に書いた形も外す形（行を \\ で続けた命令）", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env -u EXAMPLE_X -u \\\n  MIRUME_DEV_CONFIG \\\n  /usr/bin/true\n"}), 0)
+    add("S4-dev i4. env に渡す -u だけを並べた行（配列）も外す形", a_with(**{
+        "deploy__app__run.sh": "#!/bin/bash\nSTRIP=(\n  -u EXAMPLE_X -u MIRUME_DEV_CONFIG -u EXAMPLE_Y\n)\n"
+        'exec env "${STRIP[@]}" /usr/bin/true\n'}), 0)
+    add("S4-dev i5. -u の並びの後ろで渡す形は不合格", a_with(**{
+        "deploy__app__run.sh": "#!/bin/bash\nSTRIP=(\n  -u EXAMPLE_X MIRUME_DEV_CONFIG=/srv/x.json\n)\n"}), 1,
+        {"S4-dev"})
+    add("S4-dev i3. 行を \\ で続けても、 渡す形は不合格", a_with(**{
+        "deploy__app__run.sh": "#!/bin/sh\nexec env -u EXAMPLE_X \\\n  MIRUME_DEV_CONFIG=/srv/x.json \\\n"
+        "  /usr/bin/true\n"}), 1, {"S4-dev"})
     return s
 
 
@@ -1152,7 +1166,7 @@ MUTATIONS = [
      '            else:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"',
      '            elif False:\n                self.text_lines(rel, _read(root, rel), "L1-endpoint"'),
     ("S4: 開発の機体だけの設定を指すのを見ない（#156）",
-     "            if _dev_ref(ln):\n", "            if False:\n"),
+     "            if _dev_ref(cmd + ln):\n", "            if False:\n"),
     ("S4: 前にほかの道がある dev/config を見ない",
      'rf"|(?<![{_A}.-])dev/config(?![{_A}-])', 'rf"|(?<![{_A}./-])dev/config(?![{_A}-])'),
     ("S4: 末尾の / の無い dev/config を見ない",
@@ -1181,6 +1195,10 @@ MUTATIONS = [
      "(?<![{_A}=-])unset[", "(?<![{_A}-])unset["),
     ("S4: unset を環境から外す形とみなさない",
      "(?<![{_A}=-])unset[ \\t]+", "(?<![{_A}=-])unsetNEVER[ \\t]+"),
+    ("S4: env に渡す -u だけを並べた行を外す形とみなさない",
+     'rf"^[ \\t]*(?:[\\"\']?(?:-u|--unset)', 'rf"^NEVER[ \\t]*(?:[\\"\']?(?:-u|--unset)'),
+    ("S4: 行を \\ で続けた命令をつながない",
+     '            if ln.rstrip().endswith("\\\\"):\n', "            if False:\n"),
     ("S4: 外す形が区切り（;）を越える",
      '    i = max(before.rfind(c) for c in ";&|")\n', "    i = -1\n"),
     ("S4: 値を使う .pop( も外す形とみなす",

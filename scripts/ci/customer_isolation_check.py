@@ -48,7 +48,7 @@
           `./dev`・前にほかの道がある `dev/config`・`MIRUME_DEV_CONFIG` の名前）を指して
           いないか（**機体へ届かない設定を据え付けに使わせない**。 #156。 名前は、 直前が
           環境から外す形〔`env` の `-u`・`unset` など〕のときのほかは、 どこに書いても断る。
-          deploy/ の説明の .md は照らさない）。 deploy/ の
+          行を `\` で続けた命令は 1 つにつないで照らす。 deploy/ の説明の .md は照らさない）。 deploy/ の
           中の値と、 説明の .md の中の値は **参考として出すだけ**（強制するかは、
           既存の案件で報告だけの形で流した結果を見て決める）
     S5    記録（deployment/・validation/。 P1-05 の配置の記録・検証の記録と、 手順と証拠の
@@ -248,13 +248,17 @@ _DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.
 #: （渡す形は systemd・compose・docker・シェル・Python と多く、 一覧で拾うと抜ける）。
 _DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
 #: 環境から外す形（名前の直前）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない:
-#: `env` コマンドの `-u`・`--unset`（`env` の無い `-u`・別の `-u` の引数の `-u` はみなさない）・`unset`・`UnsetEnvironment=`
+#: `env` コマンドの `-u`・`--unset`（`env` に渡す `-u` だけを並べた行も。 `env` の無いほかの `-u`・別の `-u` の
+#: 引数の `-u` はみなさない）・`unset`・`UnsetEnvironment=`
 #: （どれも `=` の値の中のものはみなさない）・
 #: 文の始めの `<辞書>.pop(`（値を使う `x = d.pop(` はみなさない）・`del <辞書>[`。 名前の前の、
 #: **最後の区切り（`;`・`&`・`|`）の後ろだけ**を見る（`del x; os.environ[...] = ...` を外す形とみなさない）。
 _DEV_UNSET = (
     re.compile(rf"(?<![{_A}.=-])env(?:[ \t][^;&|]*)?[ \t](?<!-u[ \t])(?<!--unset[ \t])"
                rf"(?:-u[ \t]+|--unset[= \t])[\"']?$"),
+    # `env` に渡す `-u` だけを並べた行（配列や、 行を分けた引数の並び）
+    re.compile(rf"^[ \t]*(?:[\"']?(?:-u|--unset)[\"']?(?:=|[ \t]+)[\"']?[{_A}]{{1,64}}[\"']?[ \t]+){{0,64}}"
+               rf"[\"']?(?:-u|--unset)[\"']?(?:=|[ \t]+)[\"']?$"),
     re.compile(rf"(?<![{_A}=-])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
     re.compile(rf"(?<![{_A}=])UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
     re.compile(rf"^[ \t]*[{_A}.]{{1,128}}\.pop\([ \t]*[\"']?$"),
@@ -1087,8 +1091,19 @@ class Checker:
                     self.add("S4-missing", rel, i)
                 elif not any(f in self.allowed for f in found):
                     self.add("S4-not-allowed", rel, i)
-            if _dev_ref(ln):
-                self.add("S4-dev", rel, i)
+        # 開発の機体だけの設定は、 行を `\` で続けた命令を 1 つにつないで照らす（`env \` の続きの
+        # 行の `-u` を、 `env` の無い `-u` とみなさない）。 所見の行は命令の始めの行
+        cmd, start = "", 0
+        for i, ln in enumerate(text.splitlines(), 1):
+            start = start or i
+            if ln.rstrip().endswith("\\"):
+                cmd += ln.rstrip()[:-1] + " "
+                continue
+            if _dev_ref(cmd + ln):
+                self.add("S4-dev", rel, start)
+            cmd, start = "", 0
+        if cmd and _dev_ref(cmd):
+            self.add("S4-dev", rel, start)
 
     def text_lines(self, rel: str, text: str, code_ip: str, code_name: str,
                    sink: "list[Finding]") -> None:

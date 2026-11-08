@@ -734,7 +734,10 @@ def scenarios() -> "list[Scenario]":
                       ("n", "PassEnvironment=EXAMPLE_X MIRUME_DEV_CONFIG\n"),
                       ("o", "  - MIRUME_DEV_CONFIG\n"),
                       ("p", 'os.environ["MIRUME_DEV_CONFIG"] = "x"\n'),
-                      ("q", "# MIRUME_DEV_CONFIG はここで渡す\n")):
+                      ("q", "# MIRUME_DEV_CONFIG はここで渡す\n"),
+                      ("r", "del x; os.environ['MIRUME_DEV_CONFIG'] = '/x'\n"),
+                      ("s", "echo UnsetEnvironment= ; export MIRUME_DEV_CONFIG=/x\n"),
+                      ("t", "unset EXAMPLE_X && export MIRUME_DEV_CONFIG=/x\n")):
         add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
             SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
     add("S4-dev i. 製品の起動が環境から外す形（env -u・unset）は守りなので断らない", a_with(**{
@@ -932,6 +935,13 @@ class SyntheticScenariosTest(unittest.TestCase):
             code, out = run_in(I, root)
         self.assertEqual(code, 2)
         self.assertIn("ERROR [config-missing]", out)
+
+    def test_long_unset_lines_stay_fast(self) -> None:
+        """外す形の見分けが、 長い行で時間を 2 乗にしない（#156 の A の MINOR-5）。"""
+        line = "del " * 20000 + "x; " + "UnsetEnvironment= " * 5000 + "MIRUME_DEV_CONFIG=/x"
+        t0 = time.monotonic()
+        self.assertTrue(I._dev_ref(line))
+        self.assertLess(time.monotonic() - t0, 2.0)
 
     def test_long_reference_lines_stay_fast(self) -> None:
         """deploy の長い行でも、 参照の探し方の時間が 2 乗で増えない。"""
@@ -1144,10 +1154,13 @@ MUTATIONS = [
     ("S6: 開発の設定の enabled が真偽でなくても通す",
      "            if dev and not isinstance(enabled, bool):\n", "            if False:\n"),
     ("S4: MIRUME_DEV_CONFIG の名前を見ない",
-     "    return any(not _DEV_UNSET.search(line[:m.start()]) for m in _DEV_NAME.finditer(line))\n",
-     "    return False\n"),
+     "    return any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n",
+     "    return False and any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])\n"),
     ("S4: 環境から外す形も断る",
-     "any(not _DEV_UNSET.search(line[:m.start()]) for m", "any(True for m"),
+     "any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])",
+     "any(True or _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])"),
+    ("S4: 外す形が区切り（;）を越える",
+     "UnsetEnvironment=(?:[{_A}]{{1,64}}[ \\t]+){{0,32}}", "UnsetEnvironment=[^\\n]*?"),
     ("S4: env -u を環境から外す形とみなさない",
      'rf"(?:(?<![{_A}-])-u[ \\t]+|', 'rf"(?:(?<![{_A}-])-uNEVER[ \\t]+|'),
     ("S4: unset を環境から外す形とみなさない",

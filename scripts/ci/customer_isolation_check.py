@@ -62,8 +62,8 @@
           `dev/config/image-acquisition/<名前>.json` と、 説明の .md と空の .gitkeep だけ。
           機体へは配らないが、 案件の値が入るので、 撮像側の設定と同じに照らす（層 1・S2・
           S3）。 ただし S2 は、 宣言で使うものを開発の機体で切る（`enabled: false`）のは
-          許す。 開発の機体では主の設定として読まれるので、 書いた plc・nas・ai の enabled は
-          true か false だけ。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
+          許す。 開発の機体では主の設定として読まれるので、 plc・nas・ai の節を書いたら、
+          enabled を true か false で書く（無いのも断る）。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
 Core の鍵 `trig_bit`・`trig_ready`。 **文書用の網（192.0.2.x など）は除かない。**
@@ -203,7 +203,7 @@ WHAT = {
     "S4-dev": "deploy/ か versions.yaml が、 開発の機体だけの設定（dev/config/・MIRUME_DEV_CONFIG）を指している",
     "S6-file": "dev/config/ の決まりの外のファイル（置けるのは dev/config/image-acquisition/<名前>.json だけ）",
     "S6-link": "dev/ か dev/config/ の下のリンク（読まずに断る）",
-    "S6-enabled": "開発の機体だけの設定の plc・nas・ai の enabled が true か false ではない（開発の機体では主の設定として読まれる）",
+    "S6-enabled": "開発の機体だけの設定の plc・nas・ai の節の enabled が true か false で書かれていない（開発の機体では主の設定として読まれる）",
     "S5-endpoint": "記録（deployment/・validation/）の中の、 宣言に無い IP（記録には値を書かない）",
     "S5-name": "記録（deployment/・validation/）の中の、 宣言に無いトリガ・面の名前らしき語",
     "S5-link": "deployment/ か validation/ の下のリンク（読まずに断る）",
@@ -248,16 +248,22 @@ _DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.
 _DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
 #: 環境から外す形の、 名前の前（`env -u`・`env --unset=`・`unset`・`UnsetEnvironment=`・`.pop(`・
 #: `del ... environ[`）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない。
+#: **区切り（`;`・`&`・`|`）を越えない**（`del x; os.environ[...] = ...` を外す形とみなさない）。
+#: 見る長さにも上限を置く（長い行で時間が 2 乗で増えないように）。
 _DEV_UNSET = re.compile(rf"(?:(?<![{_A}-])-u[ \t]+|(?<![{_A}-])--unset[= \t]"
-                        rf"|(?<![{_A}])unset[ \t]+(?:-?[{_A}]+[ \t]+)*|UnsetEnvironment=[^\n]*?"
-                        rf"|\.pop\([ \t]*|(?<![{_A}])del[ \t][^\n]*?environ\[[ \t]*)[\"']?$")
+                        rf"|(?<![{_A}])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}"
+                        rf"|UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}"
+                        rf"|\.pop\([ \t]*|(?<![{_A}])del[ \t]+[{_A}.]{{1,64}}\[[ \t]*)[\"']?$")
+#: 外す形を探す、 名前の前の長さ。
+_DEV_UNSET_SPAN = 2400
 
 
 def _dev_ref(line: str) -> bool:
     """1 行が、 開発の機体だけの設定を指すか（S4）。"""
     if _DEV_REF.search(line):
         return True
-    return any(not _DEV_UNSET.search(line[:m.start()]) for m in _DEV_NAME.finditer(line))
+    return any(not _DEV_UNSET.search(line[max(0, m.start() - _DEV_UNSET_SPAN):m.start()])
+               for m in _DEV_NAME.finditer(line))
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
 _HEX_REF = re.compile(r"[0-9a-f]{7,40}")

@@ -165,8 +165,85 @@ def unwrap(text, depth=0):
         return out
     return [text]
 
+def skip_word(s, j):
+    """s[j] から始まる 1 語（引用符の中の空白は語の中）の終わりの位置を返す。"""
+    q = None
+    while j < len(s):
+        ch = s[j]
+        if q:
+            if ch == '\\' and q == '"' and j + 1 < len(s):
+                j += 2; continue
+            if ch == q:
+                q = None
+            j += 1; continue
+        if ch in '"\'':
+            q = ch; j += 1; continue
+        if ch == '\\' and j + 1 < len(s):
+            j += 2; continue
+        if ch in ' \t\n;|&()<>':
+            break
+        j += 1
+    return j
+
+
+REDIR_OP = re.compile(r'(?:>>|>\||<>|>|<)(&(?:\d+|-))?')
+
+
+def strip_redirects(s):
+    """引用符の外の出力・入力の向け先を外す（#162）。
+
+    `2>&1`・`>&2`・`>&-`・`>/dev/null`・`> 先`・`&>先`・`>>先`・`<先` と、語の途中の向け先
+    （`main>log` は bash では `main` と向け先 `>log`）。 外さないと、 下の区切りが `>&` の
+    `&` で命令を割り、 向け先の語を命令の引数として読む（向け先の位置で判定が変わる）。
+    ヒアドキュメント（`<<`）とプロセス置換（`<(`・`>(`）は変えない。 外した所は空白にする。
+    """
+    out = []
+    i, n, q = 0, len(s), None
+    while i < n:
+        ch = s[i]
+        if q:
+            out.append(ch)
+            if ch == '\\' and q == '"' and i + 1 < n:
+                out.append(s[i + 1]); i += 2; continue
+            if ch == q:
+                q = None
+            i += 1; continue
+        if ch in '"\'':
+            q = ch; out.append(ch); i += 1; continue
+        if ch == '\\' and i + 1 < n:
+            out.append(s[i:i + 2]); i += 2; continue
+        start = i
+        k = None
+        at_word = (i == 0 or s[i - 1] in ' \t\n;|&(')
+        if at_word and ch.isdigit():
+            d = i
+            while d < n and s[d].isdigit():
+                d += 1
+            if d < n and s[d] in '<>':
+                k = d
+        if k is None and ch == '&' and s[i + 1:i + 2] == '>':
+            k = i + 1
+        if k is None and ch in '<>':
+            k = i
+        if k is not None:
+            if s.startswith('<<', k) or s.startswith('<(', k) or s.startswith('>(', k):
+                out.append(s[start:k + 2]); i = k + 2; continue
+            m = REDIR_OP.match(s, k)
+            j = m.end()
+            if not m.group(1):
+                while j < n and s[j] in ' \t':
+                    j += 1
+                j = skip_word(s, j)
+            out.append(' ')
+            i = j; continue
+        out.append(ch); i += 1
+    return ''.join(out)
+
+
 chunks = []
 for t in unwrap(raw):
+    # 出力・入力の向け先を外す（区切りより先。 `2>&1` の `&` で割らないため）
+    t = strip_redirects(t)
     # 括弧・波括弧を外す
     t = re.sub(r'[(){}]', ' ', t)
     # 区切りで分解

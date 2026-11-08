@@ -147,162 +147,65 @@ print('@@SEG@@')
 
 raw = sys.argv[1]
 
-# ---- 向け先（リダイレクト）を外して語に分ける（#162） ----
-# 向け先の語（`2>&1`・`>/dev/null`・`> 先`・`&>先`・`>&先`・`<先`・語の途中の `>先` など）を、
-# 命令の引数と取り違えないために外す。 **1 つの命令（区切った後）の中だけで読む。** 引用符が
-# 閉じないなど、 bash と同じに読めないときは None を返し、 呼ぶ側は前と同じ読み方（外さない）に
-# 倒す（分からないときに通す側へ外さない）。 ファイルの番号は 0〜9 の数字だけ。
-# 包みの引数の向け先（`bash 2>/dev/null -c …`）を読み飛ばす形
-REDIR_WORD = r'(?:[0-9]*|&)(?:>>|>\||<>|>&|<&|>|<)(?:[0-9]+-?|-|\s*[^\s;|&<>]+)'
-DIGITS = '0123456789'
-
-
-def _quoted(s, i, n):
-    """s[i] から始まる引用（'…'・"…"・$'…'・$"…"）の終わりの次の位置。 閉じなければ None。"""
-    if s.startswith("$'", i):
-        j = i + 2
-        while j < n:
-            if s[j] == '\\':
-                j += 2; continue
-            if s[j] == "'":
-                return j + 1
-            j += 1
-        return None
-    if s.startswith('$"', i):
-        i += 1
-    q = s[i]
-    j = i + 1
-    while j < n:
-        if q == '"' and s[j] == '\\':
-            j += 2; continue
-        if s[j] == q:
-            return j + 1
-        j += 1
-    return None
-
-
-def _value(raw):
-    """1 語の生の文字から、 引用と \\ を外した値を作る（判定に使う値）。"""
-    try:
-        v = shlex.split(raw)
-    except ValueError:
-        return raw
-    return ''.join(v) if v else ''
-
-
-def words(c):
-    """c を引用の外の `;`・`|`・`&` で命令に分け（向け先の一部の `>&`・`&>`・`>|` は除く）、
-    命令ごとに、 向け先を外した語の並びを返す（並びの並び）。 読めなければ None。
-    注釈（#）は特別に読まない（前の読み方と同じ。 引用が閉じなければ None になり、 前の読み方に戻る）。"""
-    segs = []
-    out = []
-    n = len(c)
-    i = 0
-    cur = None          # 今の語の生の文字（無ければ None）
-    cur_plain = True    # 今の語に引用・\\ が無いか
-
-    def flush():
-        nonlocal cur, cur_plain, out
-        if cur is not None:
-            out.append(_value(cur) if not cur_plain else cur)
-        cur, cur_plain = None, True
-
-    def read_word(j):
-        """j から 1 語（向け先の先）を読み、 終わりの次の位置を返す。 読めなければ None。"""
-        while j < n and c[j] in ' \t':
-            j += 1
-        if j >= n or c[j] in ';|&<>\n':
-            return j    # 先が無い（bash は流さない）。 何も外さない
-        while j < n and c[j] not in ' \t\n;|&<>':
-            if c[j] in '\'"' or c.startswith("$'", j) or c.startswith('$"', j):
-                k = _quoted(c, j, n)
-                if k is None:
-                    return None
-                j = k; continue
-            if c[j] == '\\':
-                j += 2; continue
-            j += 1
-        return j
-
-    while i < n:
-        ch = c[i]
-        if ch in ' \t\n':
-            flush(); i += 1; continue
-        if ch in ';|&' and not (ch == '&' and c.startswith('>', i + 1)):
-            # 引用の外の区切り（向け先の一部の & と | は、 下の向け先の読みで先に食べる）
-            flush()
-            segs.append(out)
-            out = []
-            i += 1; continue
-        if ch in '\'"' or c.startswith("$'", i) or c.startswith('$"', i):
-            k = _quoted(c, i, n)
-            if k is None:
-                return None
-            cur = (cur or '') + c[i:k]
-            cur_plain = False
-            i = k; continue
-        if ch == '\\':
-            if i + 1 >= n:
-                return None
-            cur = (cur or '') + c[i:i + 2]
-            cur_plain = False
-            i += 2; continue
-        if ch in '<>' or (ch == '&' and c.startswith('>', i + 1)):
-            # 向け先。 前の語が 0〜9 の数字だけ（引用なし）ならファイルの番号として一緒に外す
-            if ch in '<>' and cur is not None and cur_plain and cur and all(x in DIGITS for x in cur):
-                cur, cur_plain = None, True
-            else:
-                flush()
-            j = i + 1 if ch == '&' else i
-            for op in ('<<<', '<<-', '<<', '>>', '>|', '<>', '>&', '<&', '>', '<'):
-                if c.startswith(op, j):
-                    j += len(op); break
-            if c[j - 1] == '&' and c[j - 2] in '<>':
-                # 複写（`>&1`・`>&-`）。 数字か - なら終わり。 そうでなければ先の語を外す
-                k = j
-                while k < n and c[k] in DIGITS:
-                    k += 1
-                if k < n and c[k] == '-':
-                    k += 1
-                if k > j and (k >= n or c[k] in ' \t\n;|&<>'):
-                    i = k; continue
-            k = read_word(j)
-            if k is None:
-                return None
-            i = k; continue
-        cur = (cur or '') + ch
-        i += 1
-    flush()
-    segs.append(out)
-    return [s for s in segs if s]
-
-
 # bash -c '...' / sh -c "..." / eval '...' の中身を取り出す (入れ子も追う)
 def unwrap(text, depth=0):
     if depth > 4:
         return [text]
     out = []
-    m = re.search(r'\b(?:ba|z|da|k)?sh(?:\s+' + REDIR_WORD + r')*\s+-[a-z]*c\s+(.+)$'
-                  r'|(?<![\w-])eval\s+(.+)$', text)
+    m = re.search(r'\b(?:ba|z|da|k)?sh\s+-[a-z]*c\s+(.+)$|(?<![\w-])eval\s+(.+)$', text)
     if m:
         inner = m.group(1) or m.group(2)
-        # 中身の前の向け先（`bash -c 2>&1 '…'`・`eval 2>&1 '…'`）は語に数えない（#162）
-        segs = words(inner)
-        parts = segs[0] if segs else (None if segs is None else [])
-        if parts is None:
-            try:
-                parts = shlex.split(inner)
-            except ValueError:
-                parts = None
-        if parts:
-            out.extend(unwrap(parts[0], depth + 1))
-        elif parts is None:
+        try:
+            parts = shlex.split(inner)
+            if parts:
+                out.extend(unwrap(parts[0], depth + 1))
+        except ValueError:
             out.append(inner)
         out.append(text[:m.start()])
         return out
     return [text]
 
-def emit(toks):
+# ---- 出力・入力の向け先（#162） ----
+# 前の区切りは `[;|&]` で `2>&1` の & も割るので、 向け先の位置で判定が変わっていた。
+# **前の読み方をそのまま残し、 向け先の `>&`・`<&`・`&>`・`>|` で割らない読み方を足す。** 両方の
+# 命令を下の判定に渡すので、 どちらかが止めれば止まる（前に止めた物は必ず止める）。
+# 足す読み方では、 向け先の形の語（`2>&1`・`>&/dev/null`・`>`・`2>/dev/null` など）を外す。
+# 前の読み方で外すのは、 命令の末尾に残った向け先の形の語だけ（止めすぎの直し）。
+# 外す語は向け先の形（`<`・`>` で始まるか、 数字・`&` の後に `<`・`>`）なので、 守る名前は外れない
+REDIR_TOKEN = re.compile(r'(?:[0-9]*|&)(?:>>|>\||<>|>&|<&|>|<)\S*')
+
+
+def drop_tail_redirects(toks):
+    """末尾の向け先の形の語を外す（前の読み方の止めすぎの直し。 先の語が離れた形は外さない）。"""
+    while toks and REDIR_TOKEN.fullmatch(toks[-1]):
+        toks = toks[:-1]
+    return toks
+
+
+def drop_redirects(toks):
+    """向け先の形の語をすべて外す（足す読み方）。"""
+    return [t for t in toks if not REDIR_TOKEN.fullmatch(t)]
+
+
+chunks = []     # 前の区切り
+chunks2 = []    # 向け先の & | で割らない区切り（足す読み方）
+for t in unwrap(raw):
+    # 括弧・波括弧を外す
+    t = re.sub(r'[(){}]', ' ', t)
+    # 区切りで分解
+    chunks.extend(re.split(r'\s*(?:\|\||&&|[;|&]|\n)\s*', t))
+    chunks2.extend(re.split(r'\s*(?:\|\||&&|;|(?<!>)\||(?<![<>])&(?!>)|\n)\s*', t))
+
+def split_words(c):
+    try:
+        return shlex.split(c)
+    except ValueError:
+        return c.split()
+
+
+lines = [drop_tail_redirects(split_words(c.strip())) for c in chunks if c.strip()]
+lines += [drop_redirects(split_words(c.strip())) for c in chunks2 if c.strip()]
+for toks in lines:
     # 先頭の飾りを剥がす: VAR=val / env / command / builtin / \ / 絶対パス / sudo / nohup / time / xargs
     i = 0
     while i < len(toks):
@@ -323,31 +226,9 @@ def emit(toks):
         break
     toks = toks[i:]
     if not toks:
-        return
+        continue
     toks[0] = toks[0].lstrip('\\').rsplit('/', 1)[-1]
     print('\x1f'.join(toks))
-
-
-chunks = []
-for t in unwrap(raw):
-    # 括弧・波括弧を外す
-    t = re.sub(r'[(){}]', ' ', t)
-    # 区切りで分解
-    # 区切りで分解。 `>&`・`<&`・`&>` の & と `>|` の | は向け先の一部なので区切らない（#162）
-    chunks.extend(re.split(r'\s*(?:\|\||&&|;|(?<!>)\||(?<![<>])&(?!>)|\n)\s*', t))
-
-for c in chunks:
-    c = c.strip()
-    if not c:
-        continue
-    segs = words(c)    # 向け先を外し、 引用の外の区切りで分ける（#162）。 読めなければ前と同じ読み方
-    if segs is None:
-        try:
-            segs = [shlex.split(c)]
-        except ValueError:
-            segs = [c.split()]
-    for toks in segs:
-        emit(toks)
 PY
 )" || deny "python3 で命令を分けられない" "python3 -c 'print(1)' が動くかを確かめてください。"
 

@@ -248,13 +248,15 @@ _DEV_REF = re.compile(rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}dev/|(?<![{_A}./-])\.\.
 #: （渡す形は systemd・compose・docker・シェル・Python と多く、 一覧で拾うと抜ける）。
 _DEV_NAME = re.compile(rf"(?<![{_A}])MIRUME_DEV_CONFIG(?![{_A}])")
 #: 環境から外す形（名前の直前）。 製品の起動が開発の設定を持ち込まないための守りなので、 断らない:
-#: `env` コマンドの `-u`・`--unset`（`env` の無い `-u` はみなさない）・`unset`・`UnsetEnvironment=`・
+#: `env` コマンドの `-u`・`--unset`（`env` の無い `-u`・別の `-u` の引数の `-u` はみなさない）・`unset`・`UnsetEnvironment=`
+#: （どれも `=` の値の中のものはみなさない）・
 #: 文の始めの `<辞書>.pop(`（値を使う `x = d.pop(` はみなさない）・`del <辞書>[`。 名前の前の、
 #: **最後の区切り（`;`・`&`・`|`）の後ろだけ**を見る（`del x; os.environ[...] = ...` を外す形とみなさない）。
 _DEV_UNSET = (
-    re.compile(rf"(?<![{_A}.-])env(?:[ \t][^;&|]*)?[ \t](?:-u[ \t]+|--unset[= \t])[\"']?$"),
-    re.compile(rf"(?<![{_A}-])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
-    re.compile(rf"(?<![{_A}])UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"(?<![{_A}.=-])env(?:[ \t][^;&|]*)?[ \t](?<!-u[ \t])(?<!--unset[ \t])"
+               rf"(?:-u[ \t]+|--unset[= \t])[\"']?$"),
+    re.compile(rf"(?<![{_A}=-])unset[ \t]+(?:-?[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
+    re.compile(rf"(?<![{_A}=])UnsetEnvironment=(?:[{_A}]{{1,64}}[ \t]+){{0,32}}[\"']?$"),
     re.compile(rf"^[ \t]*[{_A}.]{{1,128}}\.pop\([ \t]*[\"']?$"),
     re.compile(rf"(?<![{_A}])del[ \t]+[{_A}.]{{1,64}}\[[ \t]*[\"']?$"),
 )

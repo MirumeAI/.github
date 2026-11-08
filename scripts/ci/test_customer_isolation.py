@@ -741,7 +741,11 @@ def scenarios() -> "list[Scenario]":
                       ("u", "Environment=X=-u MIRUME_DEV_CONFIG=/srv/a.json\n"),
                       ("v", "ExecStart=/usr/bin/example --unset MIRUME_DEV_CONFIG\n"),
                       ("w", "p = os.environ.pop('MIRUME_DEV_CONFIG')\n"),
-                      ("x", "ExecStart=/usr/bin/env -u EXAMPLE_X MIRUME_DEV_CONFIG=/x /usr/bin/true\n")):
+                      ("x", "ExecStart=/usr/bin/env -u EXAMPLE_X MIRUME_DEV_CONFIG=/x /usr/bin/true\n"),
+                      ("y", "Environment=X=unset MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("z", "ExecStart=/usr/bin/env -u -u MIRUME_DEV_CONFIG=/srv/a.json /usr/bin/true\n"),
+                      ("aa", "Environment=X=env -u MIRUME_DEV_CONFIG=/srv/a.json\n"),
+                      ("ab", "Environment=X=UnsetEnvironment=MIRUME_DEV_CONFIG=/srv/a.json\n")):
         add(f"S4-dev {tag}. deploy/ が dev/ を写す・指す形も不合格", a_with(**{
             SERVICE.replace("/", "__"): a_files()[SERVICE] + line}), 1, {"S4-dev"})
     add("S4-dev i. 製品の起動が環境から外す形（env -u・unset）は守りなので断らない", a_with(**{
@@ -1167,9 +1171,16 @@ MUTATIONS = [
     ("S4: env -u を環境から外す形とみなさない",
      '(?:-u[ \\t]+|--unset[= \\t])', '(?:-uNEVER[ \\t]+|--unset[= \\t])'),
     ("S4: env の無い -u も外す形とみなす",
-     'rf"(?<![{_A}.-])env(?:[ \\t][^;&|]*)?[ \\t](?:-u', 'rf"(?:-u'),
+     'rf"(?<![{_A}.=-])env(?:[ \\t][^;&|]*)?[ \\t](?<!-u[ \\t])(?<!--unset[ \\t])"\n               rf"(?:-u',
+     'rf"(?:-u'),
+    ("S4: = の値の中の env も外す形とみなす",
+     "(?<![{_A}.=-])env(", "(?<![{_A}.-])env("),
+    ("S4: 別の -u の引数の -u も外す形とみなす",
+     "(?<!-u[ \\t])(?<!--unset[ \\t])", ""),
+    ("S4: = の値の中の unset も外す形とみなす",
+     "(?<![{_A}=-])unset[", "(?<![{_A}-])unset["),
     ("S4: unset を環境から外す形とみなさない",
-     "(?<![{_A}-])unset[ \\t]+", "(?<![{_A}-])unsetNEVER[ \\t]+"),
+     "(?<![{_A}=-])unset[ \\t]+", "(?<![{_A}=-])unsetNEVER[ \\t]+"),
     ("S4: 外す形が区切り（;）を越える",
      '    i = max(before.rfind(c) for c in ";&|")\n', "    i = -1\n"),
     ("S4: 値を使う .pop( も外す形とみなす",

@@ -87,6 +87,7 @@ FROM_CANONICAL = (
     ".claude/commands/pr.md",
     "scripts/ci/basic_checks.py",
     "scripts/ci/import_check.py",
+    "scripts/ci/release_record_check.py",
     "scripts/ci/test_guard_main.sh",
 )
 

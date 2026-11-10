@@ -29,6 +29,18 @@
     versions.dev.yaml Core ごとの 40 桁の commit のほかの項目・形の違う値がある
     release/          software.versions_ref が versions.yaml でない
 
+`versions.dev.yaml` の 1 ファイルだけを、 同じ決まりで確かめる入口もある（#166）。 顧客案件の
+起動の道具が、 決まりを写さずに呼ぶ（この script は顧客案件へ写し、 写しの照合が正本との
+ずれを止める）。 ほかの記録は見ない。
+
+    python3 release_record_check.py --dev-pin <versions.dev.yaml の道>
+
+    0  形どおり。 標準出力に `<Core の鍵>=<40 桁の commit>` を、 書いてある Core だけ
+       （撮像側・PDM の順に）1 行ずつ出す。 起動の道具はこの値を使い、 自分で読まない
+       （YAML の読み方の違いで、 確かめた値と使う値が分かれないように）
+    1  形が違う・ファイルが無い（標準出力には何も出さない。 理由は標準エラー）
+    2  使い方の違い・PyYAML が無い（確かめられなかった）
+
 開発の機体だけの設定（根の `dev/`。 撮像側の `MIRUME_DEV_CONFIG` に渡す `dev/config/`）も、
 System Release と配置の記録から指さない（#156）。 配る道具は `config/` だけを配るので、
 指すと、 機体に無い設定を据え付けに使うことになる。
@@ -323,11 +335,11 @@ def _verify_cores(chosen: dict, roots: dict, errors: list) -> None:
                       f"（{lock.get('tag')}）と違います")
 
 
-def _check_versions_dev(p: Path, errors: list, notes: list, yaml) -> None:
-    """開発中の固定。 Core ごとの 40 桁の commit だけを持つ（#153）。"""
+def _check_versions_dev(p: Path, errors: list, notes: list, yaml) -> "dict | None":
+    """開発中の固定。 Core ごとの 40 桁の commit だけを持つ（#153）。 読んだ中身を返す（読めなければ None）。"""
     d = _load(p, errors, yaml)
     if d is None:
-        return
+        return None
     if d.get("schema_version") not in VERSIONS_DEV_SCHEMAS:
         errors.append(f"{VERSIONS_DEV}: schema_version は"
                       f" {', '.join(map(str, VERSIONS_DEV_SCHEMAS))} です")
@@ -341,6 +353,7 @@ def _check_versions_dev(p: Path, errors: list, notes: list, yaml) -> None:
         if not (isinstance(d[key], str) and SHA_RE.fullmatch(d[key])):
             errors.append(f"{VERSIONS_DEV}: {key} は 40 桁の commit SHA にします")
     notes.append(f"{VERSIONS_DEV}: 開発中の固定（System Release と配置には使えません）")
+    return d
 
 
 def _check_versions(p: Path, errors: list, notes: list, yaml) -> None:
@@ -587,7 +600,57 @@ def _check_verifications(recs: list, root: Path, known_ids: set, deployments: di
             f"{s} {states.count(s)}" for s in ("VERIFIED", "FAILED", "NOT VERIFIED")))
 
 
-def main() -> int:
+DEV_PIN_USAGE = "使い方: release_record_check.py [--dev-pin <versions.dev.yaml の道>]"
+
+
+def dev_pin(args: list) -> int:
+    """`versions.dev.yaml` の 1 ファイルだけを、 記録の検査と同じ決まり（`_check_versions_dev`）で確かめる（#166）。
+
+    **形どおりのときだけ値を出す。** 違えば標準出力に何も出さないので、 呼ぶ側は
+    終了コードを見ずに読んでも、 確かめていない値を使わない。
+    """
+    if len(args) != 1 or not args[0] or args[0].startswith("-"):
+        print(DEV_PIN_USAGE, file=sys.stderr)
+        return 2
+    p = Path(args[0])
+    if not p.is_file():
+        print(f"NG: {p.name or args[0]} がありません（ファイルの道を渡してください）", file=sys.stderr)
+        return 1
+    try:
+        import yaml
+    except ImportError:
+        print("PyYAML が無いので確かめられません。"
+              " `python -m pip install pyyaml` を実行してください。", file=sys.stderr)
+        return 2
+    errors: list = []
+    notes: list = []
+    d = _check_versions_dev(p, errors, notes, yaml)
+    if errors or d is None:
+        print(f"NG: {len(errors)} 件", file=sys.stderr)
+        for e in errors:
+            print(f"  {e}", file=sys.stderr)
+        print("\n  形式は MirumeAI/development-docs の"
+              " 03_customer_development/release_and_deployment.md を"
+              "参照してください。", file=sys.stderr)
+        return 1
+    # 確かめた中身そのもの（読み直さない）。 決まりを通った値は 40 桁の 16 進だけ（改行や空白を含まない）
+    for key in VERSIONS_CORES:
+        if key in d:
+            print(f"{key}={d[key]}")
+    for n in notes:
+        print(n, file=sys.stderr)
+    print(f"OK: {p.name} は形どおりです", file=sys.stderr)
+    return 0
+
+
+def main(argv: "list | None" = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == "--dev-pin":
+        return dev_pin(args[1:])
+    if args:
+        # **知らない引数で、 黙ってすべての記録の検査へ進まない**
+        print(DEV_PIN_USAGE, file=sys.stderr)
+        return 2
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     rel_dir, dep_dir = root / "release", root / "deployment"
     versions = root / "versions.yaml"

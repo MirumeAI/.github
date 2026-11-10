@@ -369,6 +369,36 @@ class VersionsYamlTest(unittest.TestCase):
                 self.assertIn(needle, out)
 
 
+_A40, _B40 = "a" * 40, "b" * 40
+#: 形の違う `versions.dev.yaml`。 記録の検査と `--dev-pin` の入口の両方が、 この表で断ることを確かめる（#166）。
+BAD_DEV_PINS = {
+    "知らない Core": f"schema_version: 1\nother: {_A40}\n",
+    "Core と一緒の知らない項目": f"schema_version: 1\npdm: {_B40}\nmachine: M01\n",
+    "Branch の名前": "schema_version: 1\npdm: main\n",
+    "短い commit": "schema_version: 1\npdm: abc1234\n",
+    "大文字": f"schema_version: 1\npdm: {'A' * 40}\n",
+    "null": "schema_version: 1\npdm: null\n",
+    "タグ": "schema_version: 1\ntag: v1.0.0\n",
+    "Core が無い": "schema_version: 1\n",
+    "schema が無い": f"pdm: {_B40}\n",
+    "知らない schema": f"schema_version: 2\npdm: {_B40}\n",
+    "空": "",
+    "list": "[]\n",
+    "読めない YAML": "schema_version: 1\npdm: [\n",
+    "数だけの commit": "schema_version: 1\npdm: " + "1" * 40 + "\n",
+}
+#: 形どおりの `versions.dev.yaml` と、 入口が標準出力に出す行。
+GOOD_DEV_PINS = {
+    "両方": (f"schema_version: 1\nimage_acquisition_pdm: {_A40}\npdm: {_B40}\n",
+             f"image_acquisition_pdm={_A40}\npdm={_B40}\n"),
+    "PDM だけ": (f"schema_version: 1\npdm: {_B40}\n", f"pdm={_B40}\n"),
+    "撮像側だけ・引用符・注釈": (f"# 開発の固定\nschema_version: 1\nimage_acquisition_pdm: \"{_A40}\"  # 注釈\n",
+                         f"image_acquisition_pdm={_A40}\n"),
+    "書いた順が逆": (f"pdm: {_B40}\nimage_acquisition_pdm: {_A40}\nschema_version: 1\n",
+                f"image_acquisition_pdm={_A40}\npdm={_B40}\n"),
+}
+
+
 @unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
 class VersionsDevFileTest(unittest.TestCase):
     """開発中の固定の `versions.dev.yaml`（#153）。 **System Release は参照しない。**"""
@@ -407,21 +437,7 @@ class VersionsDevFileTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
 
     def test_bad_forms_are_refused(self) -> None:
-        cases = {
-            "知らない Core": f"schema_version: 1\nother: {self.A40}\n",
-            "Core と一緒の知らない項目": f"schema_version: 1\npdm: {self.B40}\nmachine: M01\n",
-            "Branch の名前": "schema_version: 1\npdm: main\n",
-            "短い commit": "schema_version: 1\npdm: abc1234\n",
-            "大文字": f"schema_version: 1\npdm: {'A' * 40}\n",
-            "null": "schema_version: 1\npdm: null\n",
-            "タグ": "schema_version: 1\ntag: v1.0.0\n",
-            "Core が無い": "schema_version: 1\n",
-            "schema が無い": f"pdm: {self.B40}\n",
-            "知らない schema": f"schema_version: 2\npdm: {self.B40}\n",
-            "空": "",
-            "list": "[]\n",
-        }
-        for label, text in cases.items():
+        for label, text in BAD_DEV_PINS.items():
             code, out = self._run(text)
             self.assertEqual(code, 1, (label, out))
 
@@ -693,6 +709,80 @@ class ItIsWiredIntoTheReusableWorkflowTest(unittest.TestCase):
         wf = (HERE.parents[1] / ".github" / "workflows"
               / "basic-checks-reusable.yml").read_text(encoding="utf-8")
         self.assertIn("release_record_check.py", wf)
+
+
+@unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")
+class DevPinEntryTest(unittest.TestCase):
+    """`--dev-pin` の入口（#166）。 `versions.dev.yaml` の 1 ファイルだけを、 記録の検査と同じ決まりで確かめる。"""
+
+    def setUp(self) -> None:
+        self.td = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.td, ignore_errors=True)
+
+    def _entry(self, *args: str) -> tuple:
+        r = subprocess.run([sys.executable, str(CHECKER), *args], capture_output=True, text=True,
+                           cwd=self.td, env=dict(os.environ, CI_ROOT=str(self.td)))
+        return r.returncode, r.stdout, r.stderr
+
+    def _pin(self, text: str) -> tuple:
+        f = self.td / "versions.dev.yaml"
+        f.write_text(text, encoding="utf-8")
+        return self._entry("--dev-pin", str(f))
+
+    def _whole(self, text: str) -> int:
+        """記録の検査（すべての記録を見る方）の終了コード。 versions.yaml は未選択で置く。"""
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "versions.yaml").write_text(VERSIONS_UNSELECTED, encoding="utf-8")
+            (Path(td) / "versions.dev.yaml").write_text(text, encoding="utf-8")
+            env = dict(os.environ, CI_ROOT=td)
+            for k in ("CORE_ROOT_IMAGE_ACQUISITION_PDM", "CORE_ROOT_PDM"):
+                env.pop(k, None)
+            return subprocess.run([sys.executable, str(CHECKER)], capture_output=True,
+                                  text=True, env=env).returncode
+
+    def test_good_forms_pass_and_give_the_checked_commits(self) -> None:
+        for label, (text, want) in GOOD_DEV_PINS.items():
+            code, out, err = self._pin(text)
+            self.assertEqual((code, out), (0, want), (label, err))
+            self.assertIn("System Release と配置には使えません", err, label)
+
+    def test_bad_forms_are_refused_without_any_value(self) -> None:
+        for label, text in BAD_DEV_PINS.items():
+            code, out, err = self._pin(text)
+            self.assertEqual((code, out), (1, ""), (label, err))
+            self.assertIn("NG:", err, label)
+
+    def test_it_judges_the_same_as_the_record_check(self) -> None:
+        """**決まりを 2 つに分けない。** どの形も、 入口と記録の検査で合否が同じ。"""
+        texts = {**{k: v for k, (v, _) in GOOD_DEV_PINS.items()}, **BAD_DEV_PINS}
+        for label, text in texts.items():
+            self.assertEqual(self._pin(text)[0], self._whole(text), label)
+
+    def test_only_the_given_file_is_read(self) -> None:
+        """ほかの記録（壊れた release/・versions.yaml）があっても、 渡したファイルだけを見る。"""
+        (self.td / "release").mkdir()
+        (self.td / "release" / "X.yaml").write_text("release_id: [\n", encoding="utf-8")
+        (self.td / "versions.yaml").write_text("schema_version: 9\n", encoding="utf-8")
+        text, want = GOOD_DEV_PINS["両方"]
+        code, out, err = self._pin(text)
+        self.assertEqual((code, out), (0, want), err)
+        self.assertNotIn("release", err)
+
+    def test_a_missing_file_is_refused(self) -> None:
+        code, out, err = self._entry("--dev-pin", str(self.td / "versions.dev.yaml"))
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("ありません", err)
+        code, out, err = self._entry("--dev-pin", str(self.td))
+        self.assertEqual((code, out), (1, ""), err)
+
+    def test_wrong_usage_is_not_checked(self) -> None:
+        f = self.td / "versions.dev.yaml"
+        f.write_text(GOOD_DEV_PINS["両方"][0], encoding="utf-8")
+        for args in (["--dev-pin"], ["--dev-pin", ""], ["--dev-pin", str(f), str(f)],
+                     ["--dev-pin", "--x"], ["--devpin", str(f)], ["versions.dev.yaml"]):
+            code, out, err = self._entry(*args)
+            self.assertEqual((code, out), (2, ""), (args, err))
+            self.assertIn("使い方", err, args)
 
 
 if __name__ == "__main__":

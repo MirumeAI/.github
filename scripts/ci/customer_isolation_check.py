@@ -70,7 +70,9 @@
 設定（`machines/`）にも、 同じ照らしを当てる（当て先の正本は development-docs の
 `03_customer_development/recipes_and_machines.md` の「混入の検査と宣言」）。 前の形の撮像側の
 設定 `config/image-acquisition/config.json` は無くてよい（あれば、 前の形と同じに照らす）。
-**前の形（`recipes/case.yaml` が無い）の照らしは変えない**（`recipes/`・`machines/` は照らさない）。
+**前の形（`recipes/case.yaml` が無い）の照らしは変えない**（`recipes/`・`machines/` は照らさない）。 ただし、
+`recipes/case.yaml` が無いのに `machines/`・`recipes/products/` にファイルがある（説明の .md と空の .gitkeep を
+除く）か、 `recipes/case.yml` のような書き違いがあれば、 照らせないので止める（終了コード 2）。
 
     層 1  `machines/<記号>.yaml` の `profile` の、 カメラの IP と製造番号・PLC の宛先。
           `recipes/case.yaml` の `profile` の、 PLC の番地とトリガ・`shot` のトリガ（どちらの
@@ -82,13 +84,18 @@
     S2・S3  `recipes/case.yaml` の `profile`（plc・nas・ai の enabled、 flow か inspection、
           カメラの役、 面）と `case.name`（構成の名前として `project.profiles` と照らす）
     S4    前の形と同じ照らしに加えて、 `versions.dev.yaml`（versions.yaml では注釈の行を除く）・
-          見本 `machines/dev.example.yaml`・Git に無い `machines/<…>.yaml` を指していないか
+          見本 `machines/dev.example.yaml`・Git に無い `machines/<…>.yaml` を指していないか（どれも
+          前にほかの道があっても）
     製品  `recipes/products/` のファイルの名前と `product` が宣言（`products`）の中か
     R     レシピに書かない鍵（`case.yaml` の `profile` の、 機体だけの鍵・開発の機体だけが
-          書ける鍵・組み立て器が組む鍵。 製品の「レシピに書かない鍵」）。 `judge.opt_level` が
-          `auto` なのに、 見本帳づくりが決める照合の型の 6 つがある
-    M     Git にある `machine.kind` が `dev` の機体の設定（見本を除く）。 見本の中の IPv4・
-          製造番号・`/path/to/` で始まらない絶対の道
+          書ける鍵・組み立て器が組む鍵。 `paths`・`plc.address` はそのものを、 値の型によらず。
+          製品の「レシピに書かない鍵」）。 `judge.opt_level` が `auto` なのに、 見本帳づくりが
+          決める照合の型の 6 つがある
+    M     Git にある `machine.kind` が `dev` の機体の設定（見本を除く）。 機体の設定の `profile` の、
+          機体に書けない鍵。 見本の `machine.kind` が `dev` でない。 見本の中の IPv4・製造番号・
+          `/path/to/` で始まらない絶対の道
+    照らす鍵の上の段（`camera` とその役・`nas`、 機体の設定では `plc`・`plc.address`・`paths` も）が
+    対応表でなければ、 照らせないので止める
     YAML は、 宣言と同じく別名（`*`）・`<<`・同じ鍵の重複・文字でない鍵・知らない型を断る
 
 一般の値は宣言しなくてよい: `127.` と `255.` で始まるもの、 `0.0.0.0`、
@@ -193,10 +200,26 @@ EXTRA_DIRS = ("config/", *NEW_PREFIXES)
 #: `recipes/case.yaml` の `profile` に書かない鍵。 カメラの役ごとの、 機体だけの鍵（`serial_number`・
 #: `ip_address`・`device_index`）と、 開発の機体だけが書ける鍵（`folder`・`loop`。 `sdk` は値が `file` のとき）。
 CASE_CAMERA_KEYS = ("serial_number", "ip_address", "device_index", "folder", "loop")
-#: 同じく、 組み立て器が組む鍵（`profile` の根）。 `paths` の下は、 `paths.work`（組み立て器が組む）も含めてすべて書かない。
+#: 同じく、 組み立て器が組む鍵（`profile` の根）。 `paths` は、 下の鍵が `paths.work`（組み立て器が組む）も含めて
+#: すべて書かない鍵なので、 **`paths` そのものを断る**（値の型によらず。 字や一覧で書いても当たる）。
 CASE_ASSEMBLED = ("pdm_dir", "pdm_dir_master")
-#: 同じく、 そのほかの機体だけの鍵（`profile` の下の道）。
-CASE_MACHINE_PATHS = (("plc", "address", "host"), ("plc", "address", "port"), ("nas", "mount_path"))
+#: 同じく、 そのほかの機体だけの鍵（`profile` の下の道）。 PLC の宛先は `plc.address` そのものを断る
+#: （下の `host`・`port` は機体だけの鍵。 字で書いても当たるように、 値の型によらず）。
+CASE_MACHINE_PATHS = (("plc", "address"), ("nas", "mount_path"))
+#: `recipes/case.yaml` の `profile` で、 対応表でなければ止める上の段（字や一覧で書くと、 下の鍵を照らせない）。
+#: `camera` の役ごとの値も対応表（か空）でなければ止める。
+CASE_SHAPES = (("camera",), ("nas",))
+#: 機体の設定（`machines/<記号>.yaml`）の `profile` に書ける鍵（正本の「機体だけの鍵」「機体で上書きできる鍵」）。
+#: 根の鍵・カメラの役ごとの鍵・道の決まった鍵。 `paths` の下は `paths.work` を除くすべて。
+MACHINE_ROOT_KEYS = ("camera", "plc", "nas", "paths", "ai_workers")
+MACHINE_CAMERA_KEYS = ("serial_number", "ip_address", "device_index", "rotate", "exposure_time", "gain",
+                       "apply_settings")
+MACHINE_PATHS = (("plc", "address"), ("plc", "address", "host"), ("plc", "address", "port"),
+                 ("nas", "mount_path"), ("nas", "keep_back_days"))
+#: `kind: dev` の機体の設定（と見本）だけが書ける鍵（「開発の機体だけが書ける鍵」。 `sdk` は値が `file` のとき）。
+DEV_CAMERA_KEYS = ("folder", "loop")
+#: 機体の設定の `profile` で、 対応表でなければ止める上の段。
+MACHINE_SHAPES = (("camera",), ("plc",), ("plc", "address"), ("nas",), ("paths",))
 #: 製品のレシピ（`recipes/products/<製品>.yaml`）に書かない鍵。 作業ルートの撮像の条件のファイルの根の鍵で、
 #: レシピでは根か `capture` の下に来るもの。
 PRODUCT_TOP_KEYS = ("name", "save_name", "verified", "extract_mark", "updated_at", "extract_history",
@@ -292,6 +315,9 @@ WHAT = {
     "R-opt": "judge.opt_level が auto なのに、 見本帳づくりが決める照合の型（match・window_radius・edge_margin・"
              "method・layers・top_percent）がある",
     "M-dev": "Git にある開発の機体の設定（machine.kind が dev。 Git に置けるのは見本 machines/dev.example.yaml だけ）",
+    "M-key": "機体の設定の profile に、 機体に書けない鍵（書けるのは機体だけの鍵・機体で上書きできる鍵と、"
+             " kind: dev のときの開発の機体だけが書ける鍵）",
+    "M-example-kind": "見本 machines/dev.example.yaml の machine.kind が dev でない（machine が無いときも）",
     "M-example-endpoint": "見本 machines/dev.example.yaml の中の IPv4（見本には値を入れない）",
     "M-example-serial": "見本 machines/dev.example.yaml の中の製造番号（見本には値を入れない）",
     "M-example-path": "見本 machines/dev.example.yaml の中の、 /path/to/ で始まらない絶対の道",
@@ -368,12 +394,11 @@ _JSON_SCALAR = re.compile(
     r'"(?:[^"\\]|\\.)*"|-?Infinity|NaN|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
 #: S4（新しい形。 #171）: 開発の固定 `versions.dev.yaml`（前にほかの道があっても）。
 _DEV_PIN = re.compile(rf"(?<![{_A}.-])versions\.dev\.ya?ml(?![{_A}-]|\.[{_A}])")
-#: S4（新しい形）: 開発の機体の設定の見本（前にほかの道があっても）。
-_EXAMPLE_REF = re.compile(rf"(?<![{_A}.-])machines/dev\.example\.ya?ml(?![{_A}-]|\.[{_A}])")
-#: S4（新しい形）: この Repository の機体の設定への参照（`./`・`../` で始まるものも。 前にほかの道がある道は
-#: この Repository の道とみなさない。 `_REF_PATH` と同じ形）。 Git に無ければ、 Git の外の設定を指している。
+#: S4（新しい形）: 機体の設定への参照。 **前にほかの道があっても拾う**（`./`・`../`・`%h/<…>/`・`${REPO}/` など。
+#: 配置先の Repository の道も、 この Repository の `machines/` を指す。 `_DEV_REF` の `dev/config` と同じ）。
+#: Git に無ければ Git の外の設定を、 見本 `machines/dev.example.yaml` なら開発の機体の設定の見本を指している。
 _MACHINE_REF = re.compile(
-    rf"(?<![{_A}./-])(?:\.\.?/){{0,16}}(machines/[\w./-]{{0,256}}?\.ya?ml)(?![{_A}-]|\.[{_A}])")
+    rf"(?<![{_A}.-])(machines/[\w./-]{{0,256}}?\.ya?ml)(?![{_A}-]|\.[{_A}])")
 #: 見本の中の、 絶対の道（POSIX の `/`・Windows のドライブ・`\\` で始まるもの）。
 _ABS_PATH = re.compile(r"/|\\|[A-Za-z]:[\\/]")
 
@@ -934,17 +959,44 @@ class _View:
 
 def _case_forbidden(path: tuple, data) -> bool:
     """`recipes/case.yaml` の鍵が、 `profile` に書かない鍵か（機体だけの鍵・開発の機体だけが書ける鍵・
-    組み立て器が組む鍵）。 **鍵があれば断る**（値が空でも。 値が Git に入る前に止める）。"""
+    組み立て器が組む鍵）。 **鍵があれば断る**（値が空でも、 値の型によらず。 値が Git に入る前に止める）。"""
     if len(path) < 2 or path[0] != "profile":
         return False
     p = path[1:]
     if len(p) == 1:
-        return p[0] in CASE_ASSEMBLED
-    if p[0] == "paths":
-        return len(p) == 2
+        return p[0] in CASE_ASSEMBLED or p[0] == "paths"
     if p[0] == "camera" and len(p) == 3:
         return p[2] in CASE_CAMERA_KEYS or (p[2] == "sdk" and _get(data, path) == "file")
     return p in CASE_MACHINE_PATHS
+
+
+def _machine_allowed(p: tuple, value, dev: bool) -> bool:
+    """機体の設定の `profile` の鍵（`profile` の下の道）が、 機体に書ける鍵か。 **一覧に無い鍵は通さない**。"""
+    if len(p) == 1:
+        return p[0] in MACHINE_ROOT_KEYS
+    if p[0] == "camera":
+        if len(p) == 2:
+            return True                                  # 役（名前は S3 で照らす）
+        if len(p) != 3:
+            return False
+        if p[2] in MACHINE_CAMERA_KEYS:
+            return True
+        return dev and (p[2] in DEV_CAMERA_KEYS or (p[2] == "sdk" and value == "file"))
+    if p[0] == "paths":
+        return len(p) == 2 and p[1] != "work"            # paths.work は組み立て器が組む
+    return p in MACHINE_PATHS
+
+
+def _stray_new_place(root: Path, rel: str) -> bool:
+    """`recipes/case.yaml` が無いのに、 新しい形にしか無いファイルか（`machines/`・`recipes/products/` の中身と、
+    `recipes/case.yml` のような case.yaml の書き違い）。 説明の .md と空の .gitkeep は除く。"""
+    parts, p = rel.split("/"), root / rel
+    if parts[-1].endswith(".md") or (parts[-1] == ".gitkeep" and not os.path.islink(p)
+                                     and p.is_file() and p.stat().st_size == 0):
+        return False
+    if parts[0] == "machines" or parts[:2] == ["recipes", "products"]:
+        return True
+    return len(parts) >= 2 and parts[0] == "recipes" and parts[1].casefold().split(".")[0] == "case"
 
 
 def _product_forbidden(path: tuple) -> bool:
@@ -1420,10 +1472,22 @@ class Checker:
         if (required or v is not None) and not isinstance(v, dict):
             raise Stop("config-field", f"{key} を対応表で書いてください（照らせないので、 合格にしません）", rel)
 
+    def _shape(self, rel: str, prof, keys: tuple) -> None:
+        """照らす鍵の上の段が対応表か（字や一覧で書くと、 下の鍵を照らせない。 照らせないので合格にしない）。
+        カメラの役ごとの値も見る（空はよい）。 欄の決まっていない名前は伏せる。"""
+        bad = [k for k in keys if _get(prof, k) is not None and not isinstance(_get(prof, k), dict)]
+        cams = _get(prof, ("camera",))
+        if isinstance(cams, dict):
+            bad += [("camera", r) for r, v in cams.items() if v is not None and not isinstance(v, dict)]
+        if bad:
+            raise Stop("config-field", f"profile.{_field_text(bad[0])} を対応表で書いてください"
+                       "（照らせないので、 合格にしません）", rel)
+
     def case_doc(self, rel: str, doc: YamlDoc) -> _View:
         """`recipes/case.yaml`: S2・S3（`profile` を撮像側の主の設定と同じに）と、 レシピに書かない鍵。"""
         self._section(rel, doc, "case", True)
         self._section(rel, doc, "profile", True)
+        self._shape(rel, doc.data["profile"], CASE_SHAPES)
         name = doc.data["case"].get("name")
         if not isinstance(name, str) or not name:
             raise Stop("config-field", "case.name を空でない文字で書いてください（照らす相手が無いので、"
@@ -1466,17 +1530,29 @@ class Checker:
                     self.add("R-opt", rel, doc.line("key", ("judge", k)), ("judge", k))
 
     def machine_doc(self, rel: str, doc: YamlDoc) -> _View:
-        """`machines/<記号>.yaml`: Git にある開発の機体の設定と、 見本の値。 PLC の宛先（層 1）。"""
+        """`machines/<記号>.yaml`: Git にある開発の機体の設定・機体に書けない鍵・見本の値。 PLC の宛先（層 1）。"""
         self._section(rel, doc, "profile", False)
-        if rel != DEV_EXAMPLE:
-            m = doc.data.get("machine")
-            kind = m.get("kind") if isinstance(m, dict) else None
+        self._shape(rel, doc.data.get("profile"), MACHINE_SHAPES)
+        m = doc.data.get("machine")
+        kind = m.get("kind") if isinstance(m, dict) else None
+        if rel == DEV_EXAMPLE:
+            if kind != "dev":
+                # 見本は開発の機体の設定の見本（違う kind の見本を写すと、 開発の機体の守りが外れる）
+                self.add("M-example-kind", rel, doc.line("value", ("machine", "kind"))
+                         or doc.line("key", ("machine",)), ("machine", "kind"))
+        else:
             if not isinstance(kind, str) or kind not in MACHINE_KINDS:
                 raise Stop("config-field", "machine.kind を installed・shown・dev のどれかで書いてください"
                            "（照らせないので、 合格にしません）", rel)
             if kind == "dev":
                 # **開発の機体の設定は Git に置かない**（見本を除く。 開発の機体の守り）
                 self.add("M-dev", rel, doc.line("value", ("machine", "kind")), ("machine", "kind"))
+        # 機体に書けるのは、 機体だけの鍵・機体で上書きできる鍵（開発の機体と見本は、 開発の機体だけが書ける鍵も）
+        dev = rel == DEV_EXAMPLE or kind == "dev"
+        for k, path, _, line in doc.entries:
+            if (k == "key" and len(path) > 1 and path[0] == "profile"
+                    and not _machine_allowed(path[1:], _get(doc.data, path), dev)):
+                self.add("M-key", rel, line, path)
         view = _View(doc, ("profile",))
         self._at = ("profile",)
         try:
@@ -1504,7 +1580,7 @@ class Checker:
         for i, ln in enumerate(text.splitlines(), 1):
             if rel in S4_FILES and ln.lstrip().startswith("#"):
                 continue        # versions.yaml の注釈（雛形が、 書かない先として versions.dev.yaml を名指す）
-            bad = bool(_DEV_PIN.search(ln) or _EXAMPLE_REF.search(ln))
+            bad = bool(_DEV_PIN.search(ln))
             for m in _MACHINE_REF.finditer(ln):
                 target = posixpath.normpath(m.group(1))
                 if target.startswith("machines/") and (target == DEV_EXAMPLE or target not in self.files):
@@ -1520,6 +1596,11 @@ class Checker:
         # **新しい形**（#171）: recipes/case.yaml があれば、 レシピと機体の設定を照らす。 前の形の主の設定は
         # 無くてよい（あれば前の形と同じに照らす。 移る間は両方ある）
         self.new_form = CASE in self.files or os.path.lexists(root / CASE)
+        if not self.new_form and any(_stray_new_place(root, f) for f in self.files):
+            # 新しい置き場があるのに case.yaml が無い（書き違い・置き忘れ）。 前の形として照らすと、
+            # recipes/・machines/ を照らさずに通してしまう
+            raise Stop("config-missing", f"{CASE} がありません。 新しい形の置き場（machines/・recipes/products/、"
+                       " または case.yaml の書き違い）にファイルがあるのに照らせないので、 合格にしません")
         case = root / CASE
         if self.new_form and (CASE not in self.files or os.path.islink(root / "recipes")
                               or os.path.islink(case) or not case.is_file()):

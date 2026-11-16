@@ -79,23 +79,36 @@ System Release を配った `ACTIVE` の配置の記録は、 作業ルートの
 `artifacts` にその wheel を持つ。 前の記録と同じ System Release の `ACTIVE` の記録（ずれの確かめ）は、
 配置の欄を前の記録と同じにする。
 
-    product_package   新しい形で足す System Release に無い・前の形で書いた・形が違う
+    product_package   新しい形で足す・書き換える System Release に無い・前の形で書いた・形が違う
     recipe_drift      製品のパッケージのある System Release を配った ACTIVE の記録に無い・ほかの記録にある・形が違う
     artifacts         製品のパッケージの wheel（名前・版・sha256）が無い
     ずれの確かめ      rollback_to・config_commit・artifacts・model_sha256 が前の記録と違う
+    戻した記録        戻す前の記録と同じ System Release を配っている（ずれの確かめの照らしを逃れない）
+    schema 1          製品のパッケージのある System Release を schema 1 の記録で配った
 
 **ずれを残したまま、 次の System Release を作らない。** `--base-ref <基準の commit>` を渡すと、
-基準に無かった `release/` の記録（この Pull Request で足した System Release）ごとに、 製品の
-パッケージのある System Release を配って今 `ACTIVE` の機体のすべてで、 一番新しい記録が、 その
-System Release の `inspection.config_commit` と比べたずれ無し（`products: {}`）かを照らす。 足した
-後の記録を止めない（起きた配置の記録を止めない）ため、 照らすのは足した System Release だけ。
-`--base-ref` が無ければ照らさず、 そう出す。 基準を読めなければ、 合格と言わず 2 を返す。
+新しい形では基準の木と比べて、 次を照らす。
+
+    足した・書き換えた System Release
+                      基準に無かった `release/` の記録と、 製品のパッケージかレシピと機体の設定の commit
+                      （`inspection.config_commit`）を変えた記録ごとに、 製品のパッケージがあり、 製品の
+                      パッケージのある System Release を配って今 ACTIVE の機体のすべてで、 一番新しい記録が、
+                      その commit と比べたずれ無し（`products: {}`）で、 基準にあること（ずれの確かめは、
+                      System Release を足す Pull Request より前に、 配置の記録の Pull Request で入れる）。
+                      配置に使った System Release のこの 2 つは変えない
+    配置の記録        基準にあった記録を書き換えない・消さない（足すだけ）
+    足した記録        `recipe_drift.products` の製品が、 この案件のレシピ（`recipes/products/`）の製品
+
+足した後の記録を止めない（起きた配置の記録を止めない）ため、 照らすのは足した・書き換えた
+System Release だけ。 `--base-ref` が無ければ照らさず、 そう出す。 基準を読めなければ、 合格と言わず
+2 を返す（ほかに誤りがあれば 1）。 前の形（`recipes/case.yaml` が無い）では、 基準を読まない。
 
 どれも無い Repository では何もしない（Core や platform）。
 """
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -610,6 +623,12 @@ def _check_deployments_v2(recs: list, known_ids: set, errors: list, notes: list,
                         if d.get(k) != prev.get(k):
                             errors.append(f"{name}: 前の記録と同じ System Release の記録（ずれの確かめ）は、{k} を前の"
                                           "記録と同じにします（配置を変えたときは、配った記録として書く）")
+                # **戻した記録は、 戻す前と違う System Release を配る。** 同じ System Release への「戻し」で、
+                #   ずれの確かめの照らし（配置を変えない）を逃れない
+                before = by_id.get(str(rb)) if rb is not None else None
+                if isinstance(before, dict) and before.get("deployed_release") == rel:
+                    errors.append(f"{name}: 戻した記録（rolled_back_from）は、戻す前の記録と違う System Release を配ります"
+                                  "（同じ System Release なら、ずれの確かめとして書く）")
                 # 製品のパッケージのある System Release を配った記録は、 組み立て器が見たずれと、 その wheel を持つ
                 if "recipe_drift" not in d:
                     errors.append(f"{name}: 製品のパッケージのある System Release を配った記録には recipe_drift を書きます"
@@ -751,36 +770,120 @@ def _check_verifications(recs: list, root: Path, known_ids: set, deployments: di
             f"{s} {states.count(s)}" for s in ("VERIFIED", "FAILED", "NOT VERIFIED")))
 
 
-def _base_release_names(root: Path, base: str) -> "set | None":
-    """基準の commit にあった `release/` のファイルの名前。 基準を読めなければ None。
+def _base_tree(root: Path, base: str) -> "dict | None":
+    """基準の commit にあった `release/`・`deployment/` の直下のファイル（名前 → blob の id）。 読めなければ None。
 
-    **PR の中身を実行しない。** 読むのは git の中の基準の木の名前だけ（`ls-tree`）。
+    **PR の中身を実行しない。** 読むのは git の中の基準の木だけ（`ls-tree`）。
     """
     try:
         ok = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}^{{commit}}"],
                             capture_output=True)
         if ok.returncode != 0:
             return None
-        r = subprocess.run(["git", "-C", str(root), "ls-tree", "-z", "--name-only", f"{base}^{{commit}}",
-                            "--", "release/"], capture_output=True)
+        r = subprocess.run(["git", "-C", str(root), "ls-tree", "-z", f"{base}^{{commit}}",
+                            "--", "release/", "deployment/"], capture_output=True)
     except OSError:
         return None
     if r.returncode != 0:
         return None
-    return {PurePosixPath(n.decode("utf-8", "surrogateescape")).name for n in r.stdout.split(b"\0") if n}
+    out: dict = {"release": {}, "deployment": {}}
+    for ent in r.stdout.split(b"\0"):
+        meta, _, path = ent.partition(b"\t")
+        parts = meta.split()
+        p = PurePosixPath(path.decode("utf-8", "surrogateescape"))
+        if len(parts) == 3 and parts[1] == b"blob" and len(p.parts) == 2 and p.parts[0] in out:
+            out[p.parts[0]][p.name] = parts[2].decode("ascii")
+    return out
 
 
-def _check_added_releases(added: list, releases: dict, by_id: dict, errors: list) -> None:
-    """足した System Release（新しい形）ごとに、 製品のパッケージと、 機体のずれ無しを照らす（#173）。
+def _blob_id(data: bytes, like: str) -> str:
+    """git の blob の id（基準の id と同じ hash の形で。 sha1 は 40 桁、 sha256 は 64 桁）。"""
+    h = hashlib.sha256() if len(like) == 64 else hashlib.sha1()  # noqa: S324  git の object の id
+    h.update(b"blob %d\0" % len(data) + data)
+    return h.hexdigest()
+
+
+def _base_blob(root: Path, oid: str) -> "bytes | None":
+    try:
+        r = subprocess.run(["git", "-C", str(root), "cat-file", "blob", oid], capture_output=True)
+    except OSError:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _release_key(d) -> tuple:
+    """ずれの照らしが頼る System Release の欄（製品のパッケージと、 レシピと機体の設定の commit）。"""
+    if not isinstance(d, dict):
+        return (None, None)
+    ins = d.get("inspection")
+    return (json.dumps(d.get("product_package"), sort_keys=True, default=str),
+            ins.get("config_commit") if isinstance(ins, dict) else None)
+
+
+def _check_against_base(root: Path, tree: dict, rel_by_file: dict, dep2: list, deployed: set,
+                        releases: dict, by_id: dict, errors: list, notes: list, yaml) -> None:
+    """基準の commit と比べる照らし（新しい形。 #173）。
+
+    - **配置の記録は足すだけ**: 基準にあった記録を書き換えない・消さない（ずれの記録を書き換えて逃れない）
+    - **足した記録の製品の名前**: `recipe_drift.products` の製品は、 この案件のレシピ（`recipes/products/`）の製品
+    - **足した・書き換えた System Release**: 製品のパッケージか、 レシピと機体の設定の commit を変えた System Release も、
+      足した物と同じに照らす（まだ配っていない System Release を作り直して逃れない）。 配置に使った System Release の
+      この 2 つは変えない
+    """
+    dep_dir, base_deps = root / "deployment", tree["deployment"]
+    for name, oid in sorted(base_deps.items()):
+        if PurePosixPath(name).suffix not in (".yaml", ".yml"):
+            continue
+        p = dep_dir / name
+        if p.is_symlink() or not p.is_file() or _blob_id(p.read_bytes(), oid) != oid:
+            errors.append(f"deployment/{name}: 配置の記録は足すだけです（基準にあった記録を書き換えた・消した。"
+                          "新しい出来事は新しい記録にする）")
+    pdir = root / "recipes" / "products"
+    products = {p.stem for p in pdir.iterdir() if p.suffix == ".yaml"} if pdir.is_dir() else set()
+    for p, d in dep2:
+        drift = d.get("recipe_drift")
+        if p.name in base_deps or not isinstance(drift, dict) or not isinstance(drift.get("products"), dict):
+            continue
+        if any(str(n) not in products for n in drift["products"]):
+            errors.append(f"{p.name}: recipe_drift.products に、この案件のレシピ（recipes/products/）に無い製品の名前が"
+                          "あります（名前は出しません）")
+    changed = []
+    for name, d in sorted(rel_by_file.items()):
+        oid = tree["release"].get(name)
+        if oid is None:
+            changed.append((name, d))
+            continue
+        here = root / "release" / name
+        if _blob_id(here.read_bytes(), oid) == oid:
+            continue
+        old_raw = _base_blob(root, oid)
+        try:
+            old = yaml.safe_load(old_raw.decode("utf-8")) if old_raw is not None else None
+        except Exception:                                   # noqa: BLE001  読めない基準は、 変えた物として照らす
+            old = None
+        if _release_key(old) == _release_key(d):
+            continue
+        if str(d.get("release_id")) in deployed:
+            errors.append(f"{name}: 配置に使った System Release の product_package・inspection.config_commit は"
+                          "変えません（変えるなら新しい System Release を作る）")
+        changed.append((name, d))
+    _check_added_releases(changed, releases, by_id, set(base_deps), errors)
+    notes.append(f"足した・書き換えた System Release の照らし: {len(changed)} 件")
+
+
+def _check_added_releases(added: list, releases: dict, by_id: dict, base_deps: set, errors: list) -> None:
+    """足した・書き換えた System Release（新しい形）ごとに、 製品のパッケージと、 機体のずれ無しを照らす（#173）。
 
     **ずれを残したまま、 次の System Release を作らない。** 製品のパッケージのある System Release を
     配って今 ACTIVE の機体のすべてで、 一番新しい記録が、 足す System Release のレシピと機体の設定の
-    commit（`inspection.config_commit`）と比べた、 ずれ無しの記録でなければならない。
+    commit（`inspection.config_commit`）と比べた、 ずれ無しの記録でなければならない。 その記録は、
+    System Release を足す Pull Request より前に入っていること（基準にあること。 配置の記録の
+    Pull Request で人が確かめる）。
     """
     latest = _latest(by_id)
     for name, d in added:
         if _package_of(d) is None:
-            errors.append(f"{name}: 新しい形で足す System Release には product_package（製品のパッケージ）を書きます")
+            errors.append(f"{name}: 新しい形で足す・書き換える System Release には product_package（製品のパッケージ）を書きます")
             continue
         ins = d.get("inspection")
         cc = ins.get("config_commit") if isinstance(ins, dict) else None
@@ -788,11 +891,15 @@ def _check_added_releases(added: list, releases: dict, by_id: dict, errors: list
             if rec.get("status") != "ACTIVE" or _package_of(releases.get(str(rec.get("deployed_release")))) is None:
                 continue                    # 前の形の機体は、 移すときに人が照らす（ここでは見ない）
             drift = rec.get("recipe_drift")
+            rid = rec.get("record_id")
             if not (isinstance(drift, dict) and isinstance(cc, str) and SHA_RE.fullmatch(cc)
                     and drift.get("compared_commit") == cc and drift.get("products") == {}):
-                errors.append(f"{name}: 機体 {m} の一番新しい配置の記録（{rec.get('record_id')}）が、この System Release の"
+                errors.append(f"{name}: 機体 {m} の一番新しい配置の記録（{rid}）が、この System Release の"
                               " inspection.config_commit と比べた、ずれの無い記録ではありません（ずれを書き戻すか、人が"
                               "名指しして上書きし、ずれの確かめの記録を足してから System Release を作る）")
+            elif not ({f"{rid}.yaml", f"{rid}.yml"} & base_deps):
+                errors.append(f"{name}: 機体 {m} の一番新しい配置の記録（{rid}）が、この Pull Request で足した記録です"
+                              "（ずれの確かめは、System Release を足す Pull Request より前に、配置の記録の Pull Request で入れる）")
 
 
 USAGE = ("使い方: release_record_check.py [--base-ref <基準の commit>]\n"
@@ -921,11 +1028,14 @@ def main(argv: "list | None" = None) -> int:
                     f"（ファイル名は {p.stem!r}）")
 
     dep2: list = []
+    deployed: set = set()           # 配置に使った System Release（一度配置に使ったら変えない）
     for p in deployments:
         d = _load(p, errors, yaml)
         if d is None:
             continue
         _dev_refs(p.name, d, errors)
+        if d.get("deployed_release"):
+            deployed.add(str(d.get("deployed_release")))
         if d.get("schema_version") == 2:
             # **schema 2（P1-05）は機体ごとの記録の並びで見る**（下でまとめて）
             dep2.append((p, d))
@@ -934,6 +1044,10 @@ def main(argv: "list | None" = None) -> int:
         _check_fields(p.name, d, DEPLOYMENT_FIELDS, errors)
 
         dep, rb = d.get("deployed_release"), d.get("rollback_release")
+        # 製品のパッケージのある System Release は、 ずれと wheel を残す schema 2 で配る（#173）
+        if dep and _package_of(rel_by_id.get(str(dep))) is not None:
+            errors.append(f"{p.name}: 製品のパッケージのある System Release を配った記録は schema 2 で書きます"
+                          "（ずれ〔recipe_drift〕と wheel を残す）")
         # **書いた版が実在すること。** 無い版を指していると、 必要になった
         #   瞬間に「戻せない」と分かる。
         for label, v in (("deployed_release", dep), ("rollback_release", rb)):
@@ -956,19 +1070,20 @@ def main(argv: "list | None" = None) -> int:
 
     by_record = _check_deployments_v2(dep2, known_ids, errors, notes, rel_by_id)
     # **ずれを残したまま、 次の System Release を作らない**（#173）。 照らすのは、 この Pull Request で
-    #   足した System Release だけ（足した後の配置の記録を止めない）。 見分けには基準の commit が要る
-    if new_form and rel_by_file:
+    #   足した・書き換えた System Release だけ（足した後の配置の記録を止めない）。 配置の記録は足すだけ。
+    #   どれも基準の commit と比べるので、 基準が要る
+    if new_form and (rel_by_file or deployments):
         if base is None:
-            notes.append("足した System Release の照らし: していません（--base-ref がありません）")
+            notes.append("基準と比べる照らし（足した・書き換えた System Release・配置の記録の書き換え）: "
+                         "していません（--base-ref がありません）")
         else:
-            before = _base_release_names(root, base)
-            if before is None:
-                unchecked.append("基準の commit を読めないので、この Pull Request で足した System Release を"
-                                 "見分けられません（ずれ無しを確かめていません）")
+            tree = _base_tree(root, base)
+            if tree is None:
+                unchecked.append("基準の commit を読めないので、この Pull Request で足した・書き換えた System Release と、"
+                                 "配置の記録の書き換えを見分けられません（ずれ無しを確かめていません）")
             else:
-                added = [(n, d) for n, d in sorted(rel_by_file.items()) if n not in before]
-                _check_added_releases(added, rel_by_id, by_record, errors)
-                notes.append(f"足した System Release の照らし: {len(added)} 件")
+                _check_against_base(root, tree, rel_by_file, dep2, deployed, rel_by_id, by_record, errors, notes,
+                                    yaml)
     vrs = []
     for p in verifications:
         d = _load(p, errors, yaml)

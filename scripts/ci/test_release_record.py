@@ -724,6 +724,8 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         for d in ("release", "deployment", "recipes"):
             (self.root / d).mkdir()
         (self.root / "recipes" / "case.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+        (self.root / "recipes" / "products").mkdir()
+        (self.root / "recipes" / "products" / f"{PRODUCT}.yaml").write_text("product: x\n", encoding="utf-8")
         # RELEASE_NEW と同じ中身（JSON で書くので、 YAML として読める）
         base = {"schema_version": 1, "release_id": "PJ999-R2026.10.1",
                 "software": {"versions_ref": "versions.yaml", "versions_commit": "abc1234"},
@@ -792,7 +794,8 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.write([self.r1], [self.legacy, self.active, self.check])
         code, out = self.run_check()
         self.assertEqual(code, 0, out)
-        self.assertIn("足した System Release の照らし: していません（--base-ref がありません）", out)
+        self.assertIn("基準と比べる照らし（足した・書き換えた System Release・配置の記録の書き換え）: "
+                      "していません（--base-ref がありません）", out)
         self.assertIn("ずれ（recipe_drift）: 一番新しい記録にずれが残る機体 0 台", out)
 
     def test_bad_product_packages_are_rejected_without_the_values(self) -> None:
@@ -874,14 +877,25 @@ class NewFormProductAndDriftTest(unittest.TestCase):
                 self.assertEqual(code, 1, out)
                 self.assertIn(needle, out)
                 self.assertIn("ずれの確かめ", out)
-        # 戻した記録は、 前の記録と同じ System Release でも、 確かめではない（戻した先の欄を書く）
-        rolled = dict(self.check, rolled_back_from="M01-0002", rollback_to="M01-0001")
-        self.write([self.r1], [self.legacy, self.active, rolled])
+
+    def test_a_rollback_goes_to_another_release(self) -> None:
+        """戻した記録は、 戻す前と違う System Release を配る（同じ System Release への「戻し」で、 確かめの照らしを逃れない）。"""
+        deploy_r2 = dict(self.active, record_id="M01-0003", sequence=3, supersedes="M01-0002",
+                         deployed_release="PJ999-R2026.11.1", rollback_to="M01-0002", config_commit=CC2,
+                         artifacts=[{"name": "customer-product", "version": "0.2.0", "sha256": "f" * 64}],
+                         recipe_drift={"compared_commit": CC2, "products": {}})
+        back = dict(self.active, record_id="M01-0004", sequence=4, supersedes="M01-0003",
+                    rolled_back_from="M01-0003", rollback_to="M01-0001")
+        self.write([self.r1, self.r2], [self.legacy, self.active, deploy_r2, back])
         code, out = self.run_check()
         self.assertEqual(code, 0, out)
+        same = dict(self.check, rolled_back_from="M01-0002", rollback_to="M01-0002", config_commit=CC2)
+        self.write([self.r1], [self.legacy, self.active, same])
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("戻した記録（rolled_back_from）は、戻す前の記録と違う System Release を配ります", out)
 
     def test_a_release_added_while_a_machine_drifts_is_refused(self) -> None:
-        base = self.base_with([self.r1], [self.legacy, self.active])
         cases = {
             "前の commit と比べた記録だけ": [self.legacy, self.active],
             "ずれが残る": [self.legacy, self.active,
@@ -890,25 +904,35 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         }
         for label, deps in cases.items():
             with self.subTest(label=label):
+                base = self.base_with([self.r1], deps)
                 self.write([self.r1, self.r2], deps)
                 code, out = self.run_check("--base-ref", base)
                 self.assertEqual(code, 1, out)
                 self.assertIn("PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-", out)
                 self.assertIn("ずれの無い記録ではありません", out)
                 self.assertNotIn(PRODUCT, out)
-        # ずれの確かめ（次のレシピの commit と比べて、 ずれ無し）があれば通る
+        # ずれの確かめ（次のレシピの commit と比べて、 ずれ無し）が前の Pull Request で入っていれば通る
+        base = self.base_with([self.r1], [self.legacy, self.active, self.check])
         self.write([self.r1, self.r2], [self.legacy, self.active, self.check])
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 0, out)
-        self.assertIn("足した System Release の照らし: 1 件", out)
+        self.assertIn("足した・書き換えた System Release の照らし: 1 件", out)
+
+    def test_the_drift_check_comes_before_the_release(self) -> None:
+        """ずれの確かめの記録は、 System Release を足す Pull Request より前に入れる（配置の記録の Pull Request で人が確かめる）。"""
+        base = self.base_with([self.r1], [self.legacy, self.active])
+        self.write([self.r1, self.r2], [self.legacy, self.active, self.check])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-0003）が、この Pull Request で足した記録です", out)
 
     def test_an_added_release_needs_a_product_package(self) -> None:
-        base = self.base_with([self.r1], [self.legacy, self.active])
+        base = self.base_with([self.r1], [self.legacy, self.active, self.check])
         bare = {k: v for k, v in self.r2.items() if k != "product_package"}
         self.write([self.r1, bare], [self.legacy, self.active, self.check])
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 1, out)
-        self.assertIn("PJ999-R2026.11.1.yaml: 新しい形で足す System Release には product_package", out)
+        self.assertIn("PJ999-R2026.11.1.yaml: 新しい形で足す・書き換える System Release には product_package", out)
 
     def test_only_added_releases_are_checked(self) -> None:
         # 基準にあった System Release は照らさない（足した後に書いた、 ずれの残る記録を止めない）
@@ -917,7 +941,7 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.write([self.r1, self.r2], [self.legacy, self.active, drifted])
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 0, out)
-        self.assertIn("足した System Release の照らし: 0 件", out)
+        self.assertIn("足した・書き換えた System Release の照らし: 0 件", out)
         # 前の形の System Release を配った機体と、 LEGACY の機体は照らさない（移すときに人が照らす）
         old_form_release = {k: v for k, v in dict(self.r1, release_id="PJ999-R2026.09.2").items() if k != "product_package"}
         on_old = dict(self.active, deployed_release="PJ999-R2026.09.2",
@@ -928,7 +952,88 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.write([old_form_release, self.r1, self.r2], [self.legacy, on_old, m02])
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 0, out)
-        self.assertIn("足した System Release の照らし: 1 件", out)
+        self.assertIn("足した・書き換えた System Release の照らし: 1 件", out)
+
+    def test_a_rewritten_release_is_checked_like_an_added_one(self) -> None:
+        """まだ配っていない System Release を作り直しても、 製品のパッケージかレシピの commit を変えれば照らす。"""
+        base = self.base_with([self.r1, self.r2], [self.legacy, self.active])
+        cases = {
+            "レシピの commit を変えた": (dict(self.r2, inspection=dict(self.r2["inspection"], config_commit="3c" * 20)),
+                                    "PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-0002）"),
+            "製品のパッケージを変えた": (dict(self.r2, product_package=dict(self.r2["product_package"], version="0.2.1")),
+                                    "PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-0002）"),
+            "製品のパッケージを消した": ({k: v for k, v in self.r2.items() if k != "product_package"},
+                                    "新しい形で足す・書き換える System Release には product_package"),
+            "配置に使った System Release を変えた": (dict(self.r1, inspection=dict(self.r1["inspection"], config_commit="3c" * 20)),
+                                             "PJ999-R2026.10.1.yaml: 配置に使った System Release の product_package・inspection.config_commit は変えません"),
+        }
+        for label, (rel, needle) in cases.items():
+            with self.subTest(label=label):
+                rels = [rel, self.r2] if rel["release_id"] == self.r1["release_id"] else [self.r1, rel]
+                self.write(rels, [self.legacy, self.active])
+                code, out = self.run_check("--base-ref", base)
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
+        # ずれの照らしが頼らない欄だけを直したときは、 照らさない
+        self.write([self.r1, dict(self.r2, hardware={"cameras": 6})], [self.legacy, self.active])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("足した・書き換えた System Release の照らし: 0 件", out)
+        # 名前を変えた System Release は、 足した物として照らす
+        moved = dict(self.r2, release_id="PJ999-R2026.11.2")
+        self.write([self.r1, moved], [self.legacy, self.active])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PJ999-R2026.11.2.yaml: 機体 M01 の一番新しい配置の記録（M01-0002）", out)
+
+    def test_deployment_records_are_only_added(self) -> None:
+        """新しい形では、 基準にあった配置の記録を書き換えない・消さない（ずれの記録を書き換えて逃れない）。"""
+        drifted = dict(self.check, recipe_drift={"compared_commit": CC2, "products": {PRODUCT: [DRIFT_KEY]}})
+        base = self.base_with([self.r1], [self.legacy, self.active, drifted])
+        for label, deps in {"書き換えた": [self.legacy, self.active, self.check], "消した": [self.legacy, self.active]}.items():
+            with self.subTest(label=label):
+                self.write([self.r1], deps)
+                code, out = self.run_check("--base-ref", base)
+                self.assertEqual(code, 1, out)
+                self.assertIn("deployment/M01-0003.yaml: 配置の記録は足すだけです", out)
+        # 足すのはよい
+        nxt = dict(self.check, record_id="M01-0004", sequence=4, supersedes="M01-0003")
+        self.write([self.r1], [self.legacy, self.active, drifted, nxt])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        # 前の形は変えない（書き換えを照らさない）
+        (self.root / "recipes" / "case.yaml").unlink()
+        old = {k: v for k, v in self.r1.items() if k != "product_package"}
+        on_old = {k: v for k, v in dict(self.active, artifacts=[{"name": "pdm", "version": "0.4.0", "sha256": "b" * 64}]).items()
+                  if k != "recipe_drift"}
+        base = self.base_with([old], [self.legacy, on_old])
+        self.write([old], [self.legacy, dict(on_old, model_sha256="d" * 64)])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+
+    def test_product_names_of_added_records_are_the_cases(self) -> None:
+        """足した記録のずれの製品の名前は、 この案件のレシピ（recipes/products/）の製品。 名前は出さない。"""
+        base = self.base_with([self.r1], [self.legacy, self.active])
+        other = dict(self.check, recipe_drift={"compared_commit": CC2, "products": {"OTHERPRODUCT": [DRIFT_KEY]}})
+        self.write([self.r1], [self.legacy, self.active, other])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("M01-0003.yaml: recipe_drift.products に、この案件のレシピ（recipes/products/）に無い製品の名前", out)
+        self.assertNotIn("OTHERPRODUCT", out)
+        # 基準にあった記録は照らさない（後でレシピから外した製品の、 前の記録を止めない）
+        mine = dict(self.check, recipe_drift={"compared_commit": CC2, "products": {PRODUCT: [DRIFT_KEY]}})
+        base = self.base_with([self.r1], [self.legacy, self.active, mine])
+        (self.root / "recipes" / "products" / f"{PRODUCT}.yaml").unlink()
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+
+    def test_schema_1_does_not_deploy_a_product_package(self) -> None:
+        old = {k: v for k, v in dict(self.r1, release_id="PJ999-R2026.09.2").items() if k != "product_package"}
+        self.write([self.r1, old], [])
+        (self.root / "deployment" / "line-1-2026-10-04.yaml").write_text(DEPLOYMENT, encoding="utf-8")
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("製品のパッケージのある System Release を配った記録は schema 2 で書きます", out)
 
     def test_an_unreadable_base_is_not_ok(self) -> None:
         self.base_with([self.r1], [self.legacy, self.active])
@@ -937,6 +1042,14 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.assertEqual(code, 2, out)
         self.assertIn("確かめられません: 基準の commit を読めない", out)
         self.assertNotIn("OK:", out)
+
+    def test_errors_and_an_unreadable_base_are_both_told(self) -> None:
+        self.base_with([self.r1], [self.legacy, self.active])
+        self.write([self.r1, self.r2], [self.legacy, dict(self.active, model_sha256="x")])
+        code, out = self.run_check("--base-ref", "0123456789abcdef0123456789abcdef01234567")
+        self.assertEqual(code, 1, out)
+        self.assertIn("model_sha256 は 64 桁", out)
+        self.assertIn("確かめていません: 基準の commit を読めない", out)
 
     def test_a_bad_base_ref_is_wrong_usage(self) -> None:
         self.write([self.r1], [self.legacy, self.active])
@@ -954,7 +1067,8 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.write([old, {k: v for k, v in self.r2.items() if k != "product_package"}], [])
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 0, out)
-        self.assertNotIn("足した System Release の照らし", out)
+        self.assertNotIn("基準と比べる照らし", out)
+        self.assertNotIn("書き換えた System Release の照らし", out)
 
 
 class ItIsWiredIntoTheReusableWorkflowTest(unittest.TestCase):
@@ -973,6 +1087,11 @@ class ItIsWiredIntoTheReusableWorkflowTest(unittest.TestCase):
         self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", step)
         self.assertIn('release_record_check.py --base-ref "$BASE_SHA"', step)
         self.assertNotIn("${{", step.split("run:", 1)[1])
+        # 基準を取りに行くのは、 新しい形（recipes/case.yaml がある）で、 基準が手元に無いときだけ
+        cond = step.index('[ -e "$CI_ROOT/recipes/case.yaml" ]')
+        self.assertLess(cond, step.index('cat-file -e "$BASE_SHA^{commit}"'))
+        self.assertLess(step.index('cat-file -e "$BASE_SHA^{commit}"'), step.index('git -C "$CI_ROOT" fetch'))
+        self.assertEqual(step.count("fetch"), 1)
 
 
 @unittest.skipIf(_needs_yaml(), "PyYAML が無い環境では記録を読めない")

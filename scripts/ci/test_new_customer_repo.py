@@ -127,6 +127,27 @@ def _need_yaml(test: unittest.TestCase) -> None:
         test.skipTest("PyYAML がありません")
 
 
+def _reusable_steps(test: unittest.TestCase) -> list:
+    """再利用 workflow の段が流す検査（`(python|bash, scripts/ci/...)`）。 **一覧は workflow から読む。**
+
+    1 行の `run:` と、 複数行の `run: |` の中の引数の無い呼び出し（Pull Request でない流し方。 基準の
+    commit を渡さない形。 #173）を拾う。 雛形の既定では流れない段（`run-isolation-check` の条件の段）は
+    拾わない（その段は、 有効にした後の照合として別に流す）。
+    """
+    _need_yaml(test)
+    wf = yaml.safe_load((ROOT / ".github/workflows/basic-checks-reusable.yml").read_text(encoding="utf-8"))
+    steps = []
+    for job in wf["jobs"].values():
+        for st in job.get("steps", []):
+            if "run-isolation-check" in str(st.get("if", "")):
+                continue
+            for line in str(st.get("run", "")).splitlines():
+                m = re.fullmatch(r"\s*(python|bash) validators/(scripts/ci/\S+)\s*", line)
+                if m:
+                    steps.append(m.groups())
+    return steps
+
+
 def _isolation(root: Path, *args: str, env: "dict | None" = None) -> tuple:
     """混入の検査を、 作った Repository に流す。 `(終了コード, 出力)`。"""
     r = subprocess.run([sys.executable, str(ISOLATION), *args],
@@ -408,11 +429,9 @@ class ItPassesTheFirstCITest(unittest.TestCase):
     """
 
     def test_every_step_of_the_reusable_workflow_passes(self) -> None:
-        wf = (ROOT / ".github/workflows/basic-checks-reusable.yml"
-              ).read_text(encoding="utf-8")
-        steps = re.findall(r"^\s+run: (python|bash) validators/(scripts/ci/\S+)\s*$",
-                           wf, re.M)
+        steps = _reusable_steps(self)
         self.assertGreaterEqual(len(steps), 5, steps)
+        self.assertIn(("python", "scripts/ci/release_record_check.py"), steps)
         with tempfile.TemporaryDirectory() as td:
             tgt = Path(td) / "target"
             _materialize(PLAN.tree, tgt)
@@ -1050,9 +1069,9 @@ class TheIsolationPathTest(unittest.TestCase):
             # 7. CI と同じ検査。 再利用 workflow の段をすべてと、 有効にしたときだけ動く照合の段
             reusable = (ROOT / ".github/workflows/basic-checks-reusable.yml"
                         ).read_text(encoding="utf-8")
-            steps = re.findall(r"^\s+run: (python|bash) validators/(scripts/ci/\S+)\s*$",
-                               reusable, re.M)
+            steps = _reusable_steps(self)
             self.assertGreaterEqual(len(steps), 5, steps)
+            self.assertIn(("python", "scripts/ci/release_record_check.py"), steps)
             env = dict(os.environ, CI_ROOT=str(tgt), CANONICAL_ROOT=str(ROOT))
             for prog, script in steps:
                 with self.subTest(script=script):

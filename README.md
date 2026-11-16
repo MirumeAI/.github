@@ -208,7 +208,7 @@ config_files:
   extra:                         # Core が読む決まった名前の外に置くファイル。理由を書く
     - path: config/image-acquisition/example_extra.json
       reason: 架空の例
-extensions: []                   # plugins/ の拡張の名前（今は数えて増減を出すだけで、照らさない）
+extensions: []                   # 差し込む部品の名前（新しい形の entry points。今は数えて増減を出すだけで、照らさない）
 ```
 
 - 宣言には、その案件の自分の値だけを書きます。資格情報（パスワード・トークン・鍵）は書きません（書くと終了コード 2）

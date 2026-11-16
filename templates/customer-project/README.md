@@ -16,6 +16,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 - **開発**: Core の clone は、この Repository の下でなく隣に置きます（同じ親のフォルダに `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository のコードが Core の内部を誤って参照しえます
 - **今ある機体（LEGACY）**: 機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み）。新しい配置はこの形に頼りません
+- **新しい形**（下の「目標の形と移る間」）: 製品のパッケージが両 Core を wheel の依存として読み込み、clone の道に頼りません。入れ方の正本は `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「製品のパッケージの入れ方」です
 
 ## 構造
 
@@ -34,11 +35,30 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `deploy/` | この機体固有の起動・配置設定 |
 | `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<案件の名前>.json` を `MIRUME_DEV_CONFIG` に渡す） |
 | `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） |
-| `plugins/` | Core に差し込む、この案件固有の拡張（差し込む Core の入口ができてから） |
-| `recipes/` | 製品・検査条件 |
+| `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） |
+| `machines/` | 機体の設定（新しい形。移るまで置く物は無い） |
 | `tests/` | この案件の組合せの検証 |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
+
+## 目標の形と移る間
+
+この雛形は**前の形**です。案件の値は `config/` に置き、Core 側の `setup_customer.sh` で機体へ配ります。
+
+目標の形は、この Repository を、案件を組み立てる 1 つの製品のパッケージにする形です。両 Core を wheel の依存として読み込み、起動の命令 1 つで組み立てます。案件の値の正本は `recipes/`、機体の設定は `machines/` です（正本は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md`。`MirumeAI/development-docs#392`）。
+
+新しい形への移り方は、最初の案件で作って確かめてから、この雛形に入れます（#392 の段 4 と段 6）。それまでは、新しい形の置き場を作りません。
+
+- 作らない物: `recipes/case.yaml`・`recipes/products/`・`machines/` の中のファイル（説明の `.md` を除く）・根の `pyproject.toml`・`src/`
+- 理由: `recipes/case.yaml` があると、混入の検査と記録の検査が新しい形として照らします。組み立て器が無いので、起動もできません。`case.yaml` が無いのに `machines/`・`recipes/products/` にファイルがあると、混入の検査が止まります
+
+| 前の形（今） | 新しい形の行き先 |
+|---|---|
+| `config/` | `recipes/case.yaml` と `machines/<機体の記号>.yaml`（鍵ごとに分ける） |
+| `dev/` | Git の外の開発の機体の設定（Git には見本の `machines/dev.example.yaml` だけ） |
+| `app/` | `src/<パッケージ>/`（製品のパッケージ） |
+| `recipes/capture/` | `recipes/products/<製品の名前>.yaml` |
+| 差し込む部品 | `src/<パッケージ>/` の部品を、根の `pyproject.toml` の entry points で Core の差し込みの群に登録する（群ができてから） |
 
 この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
 

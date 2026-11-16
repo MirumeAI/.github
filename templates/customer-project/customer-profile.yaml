@@ -37,4 +37,4 @@ products: []                            # 製品の名前（新しい形の reci
 config_files:
   extra: []                             # Core が読む決まった名前の外のファイル（path と reason。 config/ の下か、 新しい形の recipes/・machines/ の下）
 
-extensions: []                          # plugins/ の拡張の名前
+extensions: []                          # 差し込む部品の名前（新しい形の entry points）

@@ -44,6 +44,10 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> �
 - **今ある機体（LEGACY）**: 機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/`
   に Core の作業コピーがある形で動いている（`.gitignore` 済み）。新しい配置はこの形に頼らない
   （`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）
+- **新しい形**: 製品のパッケージが両 Core を wheel の依存として読み込み、clone の道に頼らない。
+  この雛形は前の形で、新しい形の置き場（`recipes/case.yaml`・`recipes/products/`・`machines/` の中の
+  ファイル・根の `pyproject.toml`・`src/`）は、最初の案件で確かめた形を雛形に入れるまで作らない
+  （`README.md` の「目標の形と移る間」。`MirumeAI/development-docs#392` の段 4 と段 6）
 - 正本は `MirumeAI/development-docs` の `03_customer_development/platform_evolution.md`（2 章）と
   `customer_specific_development.md` の「開発中の固定」
 
@@ -62,9 +66,9 @@ Architecture Review としてチームに相談する。
 
 - 今から: この案件で値を選んだ記録（形と置き場は `MirumeAI/development-docs#273` で決める。決まるまでの仮の置き場は `evaluation/`。混入の検査が照らさないので、記録の Pull Request では Reviewer B が混入を見る）
 - 回帰の試験（`tests/`）: 最初の試験は、`versions.yaml` で選んだ Core の版に対して流す道具（`MirumeAI/.github#145`）ができてから
-- 製品アプリ（`app/`。起動・製品画面・API・Adapter）: Core の公開の面（各 Core の `docs/public_api.md`）ができた範囲から。公開の面と入口だけを使い、Core の内部は import しない。認証とライセンスの門番を外さず、迂回しない（PDM 側の製品の API と画面は門番の内側に置く）。製品アプリのコードは混入の検査の範囲の外なので、Pull Request で Reviewer B が、ほかの案件の値・秘密・資格情報・Core の写し・Core の内部の使用・門番の迂回を見る
+- 製品アプリ（`app/`。起動・製品画面・API・Adapter。新しい形では `src/<パッケージ>/`）: Core の公開の面（各 Core の `docs/public_api.md`）ができた範囲から。公開の面と入口だけを使い、Core の内部は import しない。認証とライセンスの門番を外さず、迂回しない（PDM 側の製品の API と画面は門番の内側に置く）。製品アプリのコードは混入の検査の範囲の外なので、Pull Request で Reviewer B が、ほかの案件の値・秘密・資格情報・Core の写し・Core の内部の使用・門番の迂回を見る
 - 開発の機体だけの設定（`dev/config/image-acquisition/<案件の名前>.json`）: 今から。`MIRUME_DEV_CONFIG` に渡す。機体へ配らず、`deploy/`・`versions.yaml`・`release/`・`deployment/` から指さない。混入の検査が `config/` と同じに照らす（`dev/README.md`）。`dev/config/` の外の `dev/` は混入の検査の範囲の外なので、Pull Request で Reviewer B が混入を見る
-- 差し込みの入口のコード（`plugins/`）: 差し込む Core の入口ができてから。入口は、具体の要求が出たときに Architecture Review で作る
+- 差し込む部品: 新しい形の製品のパッケージ（`src/`）に置き、根の `pyproject.toml` の entry points で、Core が決めた差し込みの群に登録する。群ができてから（`MirumeAI/development-docs#392` の段 2。群を足すのは Architecture Review）。前の形には置き場が無い
 - 公開の面に無いものが要るときは、Core の内部を使わずに、この Repository に改善依頼を書く（顧客の名前と値を書かない形で）。共通プラットフォームの側が分類し、Core の共通の不具合・機能の不足・入口の不足は Core の Issue にする（`MirumeAI/development-docs` の `03_customer_development/platform_evolution.md` の 4 章）
 
 次のどれかに当たったら、Core の Issue を作って還元する（同じ文書の「Coreへの還元」）: 2 件目の案件でも要る・Core の内部を使わないと作れない・System Release を作るときの見直しで上げられると分かった。

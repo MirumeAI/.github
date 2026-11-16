@@ -54,7 +54,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 | 前の形（今） | 新しい形の行き先 |
 |---|---|
-| `config/` | `recipes/case.yaml` と `machines/<機体の記号>.yaml`（鍵ごとに分ける） |
+| `config/` | `recipes/case.yaml` と `machines/<機体の記号>.yaml`（鍵ごとに分ける）。面ごとに判定する流れの設定（`config/pdm/` など）と門番の設定（`pdm_guard_policy.json`）は、版 1 では行き先が無く、今の置き場のまま（`MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「まだ決めないこと」） |
 | `dev/` | Git の外の開発の機体の設定（Git には見本の `machines/dev.example.yaml` だけ） |
 | `app/` | `src/<パッケージ>/`（製品のパッケージ） |
 | `recipes/capture/` | `recipes/products/<製品の名前>.yaml` |

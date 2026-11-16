@@ -719,13 +719,22 @@ class NewFormProductAndDriftTest(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        import yaml
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         for d in ("release", "deployment", "recipes"):
             (self.root / d).mkdir()
         (self.root / "recipes" / "case.yaml").write_text("schema_version: 1\n", encoding="utf-8")
-        base = yaml.safe_load(RELEASE_NEW)
+        # RELEASE_NEW と同じ中身（JSON で書くので、 YAML として読める）
+        base = {"schema_version": 1, "release_id": "PJ999-R2026.10.1",
+                "software": {"versions_ref": "versions.yaml", "versions_commit": "abc1234"},
+                "inspection": {"version": "PJ999-M2026.10.1", "model_sha256": "c" * 64, "model_files": 156,
+                               "model_bytes": 5400000000, "config_commit": "abc1234", "calibration": "良品100枚"},
+                "dataset": {"training": {"id": "DS-PJ999-v3", "files": 1200, "bytes": 2100000000,
+                                         "manifest_sha256": "a" * 64},
+                            "evaluation": {"id": "DS-PJ999-eval-v2", "files": 300, "bytes": 500000000,
+                                           "manifest_sha256": "b" * 64}},
+                "runtime": {"os": "Ubuntu 22.04", "python": "3.10"}, "hardware": {"cameras": 5},
+                "validation": {"report": "r.md", "acceptance": "a.md", "smoke_test": "確認済"}}
         self.r1 = dict(base, inspection=dict(base["inspection"], config_commit=CC1),
                        product_package={"name": "customer-product", "version": "0.1.0", "wheel_sha256": WHEEL})
         self.r2 = dict(self.r1, release_id="PJ999-R2026.11.1",

@@ -96,10 +96,26 @@ jobs:
       # 「deployed_release に書いた版が release/ に無い」「rollback_release
       # が今の版と同じ」は、 **必要になった瞬間まで気づけない**。
       # どちらのフォルダも無い Repository では何もしない。
+      # PR のときは基準の commit を渡し、 この PR で足した System Release を見分ける
+      # （新しい形〔recipes/case.yaml がある〕で、 ずれを残したまま次の System Release を
+      # 作らない。 #173）。 基準が手元に無ければ、 新しい形の Repository だけが取りに行く。
+      # 読めなければ、 道具は合格と言わない。 基準の commit は、 式を run の中に書かず、
+      # 環境変数で渡す。
       - name: 版と配置の記録
         env:
           CI_ROOT: ${{ github.workspace }}/target
-        run: python validators/scripts/ci/release_record_check.py
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            if { [ -e "$CI_ROOT/recipes/case.yaml" ] || [ -L "$CI_ROOT/recipes/case.yaml" ]; } \
+                && ! git -C "$CI_ROOT" cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              git -C "$CI_ROOT" fetch --quiet --no-tags --depth=1 origin "$BASE_SHA" \
+                || echo "基準の commit を取れませんでした"
+            fi
+            python validators/scripts/ci/release_record_check.py --base-ref "$BASE_SHA"
+          else
+            python validators/scripts/ci/release_record_check.py
+          fi
 
       # **別の案件の値が混ざっていないか**（customer-profile.yaml との照合）。
       # 顧客 Repository の最初の登録で、 別の案件の構成のファイルと PLC の表が

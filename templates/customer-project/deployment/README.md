@@ -31,6 +31,9 @@ artifacts:
   - { name: pdm, version: 0.4.0, sha256: <64 桁> }
 model_sha256: <64 桁>
 rolled_back_from: null               # 戻したときは、戻す前の記録
+recipe_drift:                        # 新しい形で、製品のパッケージのある System Release を配った記録だけ
+  compared_commit: <40 桁>           # 作業ルートの製品の設定と比べた、レシピの commit
+  products: {}                       # ずれた製品ごとの、ずれた鍵の名前（値は書かない）。例 <製品の名前>: [judge.threshold]
 
 # LEGACY のとき（棚卸しで、人が読むだけで確かめた状態）
 # observed:
@@ -42,6 +45,8 @@ rolled_back_from: null               # 戻したときは、戻す前の記録
 
 - 確かめた結果（smoke test・受入）はここに書きません。`validation/` の検証の記録に書き、検証の記録がこの記録の ID を指します
 - 戻せる先（`rollback_to`）は**必ず書きます**。書けないなら、戻せる状態になっていないということです
+- 新しい形（根に `recipes/case.yaml` がある）で、製品のパッケージのある System Release を配った記録には、組み立て器が見たずれ（`recipe_drift`）と、その wheel（`artifacts`）を書きます。ずれの無いときも `products: {}` と書きます
+- **ずれの確かめ**: 配置を変えずに、機体の作業ルートの値を次に出すレシピの commit と比べたときも、1 回の出来事として記録を足します。`deployed_release`・`rollback_to`・`config_commit`・`artifacts`・`model_sha256` は前の記録と同じにし、`recipe_drift` に比べた結果を書きます。次の System Release は、配った機体のすべてで、その System Release のレシピの commit と比べてずれ無しになってから作ります
 - 記録の Pull Request には、配置した人・確かめた人の Human Verification が要ります
 - 前の形（`schema_version: 1`。`<site>-<line>-<日付>.yaml`）の記録も、確かめる道具は読みます
 

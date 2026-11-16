@@ -71,6 +71,26 @@ Git にはどのデータかだけを書く）。 案件の記号は `release_id
 記録・`supersedes` の枝分かれを止め、 対象 × 手順の ID ごとの状態（一番新しい記録が
 PASS なら VERIFIED、 FAIL なら FAILED、 PARTIAL なら NOT VERIFIED）を出す。
 
+顧客 Repository の新しい形（根に `recipes/case.yaml` がある。 混入の検査と同じ見分け。 #173）では、
+System Release に製品のパッケージ（`product_package`: 名前・版・wheel の sha256）を載せ、 使った
+レシピと機体の設定の commit は `inspection.config_commit`（40 桁）にする。 製品のパッケージのある
+System Release を配った `ACTIVE` の配置の記録は、 作業ルートの製品の設定とレシピのずれ
+（`recipe_drift`: 比べたレシピの commit と、 製品ごとのずれた鍵の名前。 **値は書かない**）を持ち、
+`artifacts` にその wheel を持つ。 前の記録と同じ System Release の `ACTIVE` の記録（ずれの確かめ）は、
+配置の欄を前の記録と同じにする。
+
+    product_package   新しい形で足す System Release に無い・前の形で書いた・形が違う
+    recipe_drift      製品のパッケージのある System Release を配った ACTIVE の記録に無い・ほかの記録にある・形が違う
+    artifacts         製品のパッケージの wheel（名前・版・sha256）が無い
+    ずれの確かめ      rollback_to・config_commit・artifacts・model_sha256 が前の記録と違う
+
+**ずれを残したまま、 次の System Release を作らない。** `--base-ref <基準の commit>` を渡すと、
+基準に無かった `release/` の記録（この Pull Request で足した System Release）ごとに、 製品の
+パッケージのある System Release を配って今 `ACTIVE` の機体のすべてで、 一番新しい記録が、 その
+System Release の `inspection.config_commit` と比べたずれ無し（`products: {}`）かを照らす。 足した
+後の記録を止めない（起きた配置の記録を止めない）ため、 照らすのは足した System Release だけ。
+`--base-ref` が無ければ照らさず、 そう出す。 基準を読めなければ、 合格と言わず 2 を返す。
+
 どれも無い Repository では何もしない（Core や platform）。
 """
 from __future__ import annotations
@@ -158,14 +178,33 @@ MODEL_VERSION_RE = re.compile(r"([A-Z0-9]+)-M[0-9]{4}\.[0-9]{2}\.[0-9]+")
 DATASET_ID_RE = {"training": re.compile(r"DS-([A-Z0-9]+)-v[0-9]+"),
                  "evaluation": re.compile(r"DS-([A-Z0-9]+)-eval-v[0-9]+")}
 DATASET_FIELDS = ("id", "files", "bytes", "manifest_sha256")
+#: 顧客 Repository の新しい形の印（根に置く。 混入の検査と同じ見分け。 MirumeAI/development-docs#392）。
+CASE_FILE = "recipes/case.yaml"
+#: System Release の製品のパッケージ（新しい形。 #173）。 決まりの外の鍵は書かない。
+PACKAGE_FIELDS = ("name", "version", "wheel_sha256")
+#: 配布の名前（PEP 508 の名前の形）。 比べるときは PEP 503 の形（小文字・`-`）にそろえる。
+PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+#: 配置の記録のずれ（#173）。 比べたレシピの commit と、 製品ごとのずれた鍵の名前（値は書かない）。
+DRIFT_FIELDS = ("compared_commit", "products")
+#: ずれた鍵の名前。 `.` で区切り、 各段は文字か `_` で始まる（後ろに `[番号]` を付けてよい）。
+#: `=`・空白・数で始まる段を断り、 値を書いた形を通さない。
+DRIFT_KEY_RE = re.compile(r"[^\W\d][\w-]*(?:\[[0-9]+\])*(?:\.[^\W\d][\w-]*(?:\[[0-9]+\])*)*")
+#: 製品の名前（`recipes/products/<製品の名前>.yaml` のファイルの名前にできる形）。
+_PRODUCT_BAD = re.compile(r"[/\\\x00-\x1f\x7f]|^\.|^$")
+#: 基準の commit（混入の検査の `--base-ref` と同じ形。 オプションと取り違えない）。
+_HEX_REF = re.compile(r"[0-9a-f]{7,40}")
+#: 前の記録と同じ System Release の ACTIVE の記録（ずれの確かめ）が、 前の記録と同じにする欄。
+SAME_STATE_FIELDS = ("rollback_to", "config_commit", "artifacts", "model_sha256")
 #: 出力にそのまま出す欄の名前（記録の決まった鍵）。 ほかは `<*>`（記録に書いた任意の名前を出さない。 #156）。
+#: 製品の名前（`recipe_drift.products` の下の鍵）は出さない。
 _SHOWN_KEYS = frozenset(
     {k for spec in (RELEASE_FIELDS, DEPLOYMENT_FIELDS) for sec, keys in spec.items()
      for k in ((sec,) if sec else ()) + keys}
-    | set(DATASET_FIELDS)
+    | set(DATASET_FIELDS) | set(PACKAGE_FIELDS) | set(DRIFT_FIELDS)
     | {"record_id", "machine", "sequence", "supersedes", "status", "recorded_by", "role", "account",
        "observed", "deployed_release", "rollback_to", "rolled_back_from", "config_commit", "artifacts",
-       "name", "version", "sha256", "model_sha256", "release_hash_matches_manifest", "operator"})
+       "name", "version", "sha256", "model_sha256", "release_hash_matches_manifest", "operator",
+       "product_package", "recipe_drift"})
 #: 知らせの文で言う決まった形（**値は出さない**。 欄に道などを書いても、 出力に出さない）。
 FORMS = {"release_id": "<案件の記号>-R<年>.<月 2 桁>.<番号>",
          "inspection.version": "<案件の記号>-M<年>.<月 2 桁>.<番号>",
@@ -268,6 +307,67 @@ def _check_release_data(name: str, d: dict, errors: list) -> None:
                 errors.append(f"{name}: dataset.{k}.{f} は {least} 以上の整数にしてください")
         if node.get("manifest_sha256") not in (None, "") and not _sha256_ok(node.get("manifest_sha256")):
             errors.append(f"{name}: dataset.{k}.manifest_sha256 は 64 桁の小文字の 16 進を引用符で囲んで書いてください")
+
+
+def _package_of(release) -> "dict | None":
+    """System Release の製品のパッケージ（無い・形の違う System Release は None）。"""
+    pkg = release.get("product_package") if isinstance(release, dict) else None
+    return pkg if isinstance(pkg, dict) else None
+
+
+def _norm_name(name: str) -> str:
+    """配布の名前を PEP 503 の形にそろえる（`My_Pkg` と `my-pkg` は同じ配布）。"""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _check_product_package(name: str, d: dict, new_form: bool, errors: list) -> None:
+    """System Release の製品のパッケージ（#173）。 要るかは、 足した System Release で見る（`_check_added_releases`）。"""
+    if "product_package" not in d:
+        return
+    pkg = d.get("product_package")
+    if not new_form:
+        errors.append(f"{name}: product_package は、新しい形（{CASE_FILE} がある Repository）の System Release にだけ書きます")
+        return
+    if not isinstance(pkg, dict):
+        errors.append(f"{name}: product_package は {'・'.join(PACKAGE_FIELDS)} を持つ形にしてください")
+        return
+    if set(pkg) - set(PACKAGE_FIELDS):
+        errors.append(f"{name}: product_package に決まりの外の鍵があります（書けるのは {'・'.join(PACKAGE_FIELDS)}）")
+    n, v = pkg.get("name"), pkg.get("version")
+    if not (isinstance(n, str) and PACKAGE_NAME_RE.fullmatch(n)):
+        errors.append(f"{name}: product_package.name は配布の名前（英数字と . _ -）にしてください")
+    if not (isinstance(v, str) and v.strip() == v and v):
+        errors.append(f"{name}: product_package.version は版を引用符で囲んだ文字にしてください（数として読まれると 1.10 が 1.1 になる）")
+    if not _sha256_ok(pkg.get("wheel_sha256")):
+        errors.append(f"{name}: product_package.wheel_sha256 は wheel の 64 桁の小文字の 16 進を引用符で囲んで書いてください")
+    # 組み立て器が使うレシピと機体の設定の commit。 ずれの確かめの compared_commit と同じ形で比べる
+    ins = d.get("inspection")
+    cc = ins.get("config_commit") if isinstance(ins, dict) else None
+    if cc not in (None, "") and not (isinstance(cc, str) and SHA_RE.fullmatch(cc)):
+        errors.append(f"{name}: 製品のパッケージのある System Release の inspection.config_commit は、"
+                      "レシピと機体の設定の 40 桁の commit SHA にします")
+
+
+def _check_drift(name: str, v, errors: list) -> None:
+    """配置の記録のずれ（#173）。 **値は書かない**ので、 鍵の名前の形だけを受ける。 製品の名前と鍵の名前は出さない。"""
+    if not (isinstance(v, dict) and set(v) == set(DRIFT_FIELDS)):
+        errors.append(f"{name}: recipe_drift は {'・'.join(DRIFT_FIELDS)} だけを持つ形にします（ずれが無ければ products: {{}}）")
+        return
+    cc = v.get("compared_commit")
+    if not (isinstance(cc, str) and SHA_RE.fullmatch(cc)):
+        errors.append(f"{name}: recipe_drift.compared_commit は、比べたレシピの 40 桁の commit SHA にします")
+    prods = v.get("products")
+    if not isinstance(prods, dict):
+        errors.append(f"{name}: recipe_drift.products は、ずれた製品ごとの鍵の名前の対応にします（ずれが無ければ {{}}）")
+        return
+    for p, keys in prods.items():
+        if not isinstance(p, str) or _PRODUCT_BAD.search(p):
+            errors.append(f"{name}: recipe_drift.products の製品の名前が、ファイルの名前にできる形ではありません")
+        if not (isinstance(keys, list) and keys
+                and all(isinstance(k, str) and DRIFT_KEY_RE.fullmatch(k) for k in keys)
+                and len(set(keys)) == len(keys)):
+            errors.append(f"{name}: recipe_drift.products.<*> は、ずれた鍵の名前（例 judge.threshold。値は書かない）の"
+                          "重ならない並びにします（ずれの無い製品は書かない）")
 
 
 def _dev_refs(name: str, node, errors: list, at: str = "") -> None:
@@ -423,8 +523,24 @@ def _earlier(rid, machine: str, seq: int, by_id: dict) -> bool:
     return bool(m) and m.group(1) == machine and int(m.group(2)) < seq and rid in by_id
 
 
-def _check_deployments_v2(recs: list, known_ids: set, errors: list, notes: list) -> dict:
-    """配置の記録 schema 2。 機体ごとの並びを確かめ、 記録の ID → 中身を返す。"""
+def _latest(by_id: dict) -> dict:
+    """機体の記号 → その機体の一番新しい記録（**今の状態は、 通し番号が一番大きい記録**）。"""
+    out: dict = {}
+    for d in by_id.values():
+        m = d.get("machine")
+        if m not in out or d.get("sequence", 0) > out[m].get("sequence", 0):
+            out[m] = d
+    return out
+
+
+def _check_deployments_v2(recs: list, known_ids: set, errors: list, notes: list,
+                          releases: "dict | None" = None) -> dict:
+    """配置の記録 schema 2。 機体ごとの並びを確かめ、 記録の ID → 中身を返す。
+
+    `releases` は System Release の ID → 中身。 製品のパッケージのある System Release を配った記録の、
+    ずれ（`recipe_drift`）と wheel を照らすのに使う（#173）。
+    """
+    releases = releases or {}
     by_id, by_machine = {}, {}
     for p, d in recs:
         name = p.name
@@ -482,6 +598,41 @@ def _check_deployments_v2(recs: list, known_ids: set, errors: list, notes: list)
             ms = d.get("model_sha256")
             if not (isinstance(ms, str) and HEX64_RE.fullmatch(ms)):
                 errors.append(f"{name}: model_sha256 は 64 桁の sha256 にします")
+            pkg = _package_of(releases.get(str(rel))) if rel else None
+            if pkg is not None:
+                # **前の記録と同じ System Release のまま書いた記録（ずれの確かめ）は、 配置を変えない。**
+                #   戻せる先が今の状態を指したり、 配った物が黙って変わったりしないように、 前の記録と同じにする
+                #   （前の形の記録には当てない。 前の形の扱いは変えない）
+                prev = by_id.get(f"{m}-{seq - 1:04d}")
+                if (isinstance(prev, dict) and prev.get("status") == "ACTIVE"
+                        and prev.get("deployed_release") == rel and rb is None):
+                    for k in SAME_STATE_FIELDS:
+                        if d.get(k) != prev.get(k):
+                            errors.append(f"{name}: 前の記録と同じ System Release の記録（ずれの確かめ）は、{k} を前の"
+                                          "記録と同じにします（配置を変えたときは、配った記録として書く）")
+                # 製品のパッケージのある System Release を配った記録は、 組み立て器が見たずれと、 その wheel を持つ
+                if "recipe_drift" not in d:
+                    errors.append(f"{name}: 製品のパッケージのある System Release を配った記録には recipe_drift を書きます"
+                                  "（ずれが無ければ products: {}）")
+                else:
+                    _check_drift(name, d.get("recipe_drift"), errors)
+                want = (_norm_name(str(pkg.get("name", ""))), str(pkg.get("version", "")), pkg.get("wheel_sha256"))
+                if isinstance(arts, list) and not any(
+                        isinstance(a, dict) and (_norm_name(str(a.get("name", ""))), str(a.get("version", "")),
+                                                 a.get("sha256")) == want for a in arts):
+                    errors.append(f"{name}: artifacts に、配った System Release の製品のパッケージの wheel"
+                                  "（product_package の name・version・wheel_sha256）がありません")
+                continue
+            if not rel or str(rel) not in known_ids:
+                continue                            # 配った System Release が無いことは、 上で言った
+        if "recipe_drift" in d:
+            errors.append(f"{name}: recipe_drift は、製品のパッケージのある System Release を配った ACTIVE の記録にだけ書きます")
+    if any("recipe_drift" in d for d in by_id.values()):
+        latest = _latest(by_id)
+        drifted = sorted(m for m, d in latest.items() if d.get("status") == "ACTIVE"
+                         and isinstance(d.get("recipe_drift"), dict) and d["recipe_drift"].get("products"))
+        notes.append(f"ずれ（recipe_drift）: 一番新しい記録にずれが残る機体 {len(drifted)} 台"
+                     + (f"（{'・'.join(drifted)}）" if drifted else ""))
     if by_machine:
         latest = [by_id.get(f"{m}-{max(s):04d}") or {} for m, s in sorted(by_machine.items())]
         notes.append(f"配置の記録（schema 2）: 機体 {len(latest)} 台・今の状態 " + "・".join(
@@ -600,7 +751,53 @@ def _check_verifications(recs: list, root: Path, known_ids: set, deployments: di
             f"{s} {states.count(s)}" for s in ("VERIFIED", "FAILED", "NOT VERIFIED")))
 
 
-DEV_PIN_USAGE = "使い方: release_record_check.py [--dev-pin <versions.dev.yaml の道>]"
+def _base_release_names(root: Path, base: str) -> "set | None":
+    """基準の commit にあった `release/` のファイルの名前。 基準を読めなければ None。
+
+    **PR の中身を実行しない。** 読むのは git の中の基準の木の名前だけ（`ls-tree`）。
+    """
+    try:
+        ok = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}^{{commit}}"],
+                            capture_output=True)
+        if ok.returncode != 0:
+            return None
+        r = subprocess.run(["git", "-C", str(root), "ls-tree", "-z", "--name-only", f"{base}^{{commit}}",
+                            "--", "release/"], capture_output=True)
+    except OSError:
+        return None
+    if r.returncode != 0:
+        return None
+    return {PurePosixPath(n.decode("utf-8", "surrogateescape")).name for n in r.stdout.split(b"\0") if n}
+
+
+def _check_added_releases(added: list, releases: dict, by_id: dict, errors: list) -> None:
+    """足した System Release（新しい形）ごとに、 製品のパッケージと、 機体のずれ無しを照らす（#173）。
+
+    **ずれを残したまま、 次の System Release を作らない。** 製品のパッケージのある System Release を
+    配って今 ACTIVE の機体のすべてで、 一番新しい記録が、 足す System Release のレシピと機体の設定の
+    commit（`inspection.config_commit`）と比べた、 ずれ無しの記録でなければならない。
+    """
+    latest = _latest(by_id)
+    for name, d in added:
+        if _package_of(d) is None:
+            errors.append(f"{name}: 新しい形で足す System Release には product_package（製品のパッケージ）を書きます")
+            continue
+        ins = d.get("inspection")
+        cc = ins.get("config_commit") if isinstance(ins, dict) else None
+        for m, rec in sorted(latest.items()):
+            if rec.get("status") != "ACTIVE" or _package_of(releases.get(str(rec.get("deployed_release")))) is None:
+                continue                    # 前の形の機体は、 移すときに人が照らす（ここでは見ない）
+            drift = rec.get("recipe_drift")
+            if not (isinstance(drift, dict) and isinstance(cc, str) and SHA_RE.fullmatch(cc)
+                    and drift.get("compared_commit") == cc and drift.get("products") == {}):
+                errors.append(f"{name}: 機体 {m} の一番新しい配置の記録（{rec.get('record_id')}）が、この System Release の"
+                              " inspection.config_commit と比べた、ずれの無い記録ではありません（ずれを書き戻すか、人が"
+                              "名指しして上書きし、ずれの確かめの記録を足してから System Release を作る）")
+
+
+USAGE = ("使い方: release_record_check.py [--base-ref <基準の commit>]\n"
+         "        release_record_check.py --dev-pin <versions.dev.yaml の道>")
+DEV_PIN_USAGE = USAGE
 
 
 def dev_pin(args: list) -> int:
@@ -647,9 +844,12 @@ def main(argv: "list | None" = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] == "--dev-pin":
         return dev_pin(args[1:])
-    if args:
-        # **知らない引数で、 黙ってすべての記録の検査へ進まない**
-        print(DEV_PIN_USAGE, file=sys.stderr)
+    base = None
+    if len(args) == 2 and args[0] == "--base-ref" and _HEX_REF.fullmatch(args[1]):
+        base = args[1]
+    elif args:
+        # **知らない引数で、 黙ってすべての記録の検査へ進まない**（基準は commit の 16 進 7〜40 字だけ）
+        print(USAGE, file=sys.stderr)
         return 2
     root = Path(os.environ.get("CI_ROOT", ".")).resolve()
     rel_dir, dep_dir = root / "release", root / "deployment"
@@ -681,7 +881,13 @@ def main(argv: "list | None" = None) -> int:
 
     errors: list = []
     notes: list = []
+    unchecked: list = []
     known_ids = set()
+    rel_by_id: dict = {}
+    rel_by_file: dict = {}
+    # 新しい形の印（リンクやフォルダでも、 在れば新しい形として扱う。 形の誤りは混入の検査が止める）
+    case = root / CASE_FILE
+    new_form = case.exists() or case.is_symlink()
 
     if versions.is_file():
         _check_versions(versions, errors, notes, yaml)
@@ -695,7 +901,9 @@ def main(argv: "list | None" = None) -> int:
         _check_schema(p.name, d, errors)
         _check_fields(p.name, d, RELEASE_FIELDS, errors)
         _check_release_data(p.name, d, errors)
+        _check_product_package(p.name, d, new_form, errors)
         _dev_refs(p.name, d, errors)
+        rel_by_file[p.name] = d
         # **System Release は versions.yaml だけを参照する**（#153）。 開発中の固定
         # （versions.dev.yaml）や別のファイルを指すと、 タグの無い版が配置に流れる。
         sw = d.get("software")
@@ -705,6 +913,7 @@ def main(argv: "list | None" = None) -> int:
         rid = d.get("release_id")
         if rid:
             known_ids.add(str(rid))
+            rel_by_id[str(rid)] = d
             # **ファイル名と ID が違うと、 どちらが正しいか分からなくなる。**
             if str(rid) != p.stem:
                 errors.append(
@@ -745,7 +954,21 @@ def main(argv: "list | None" = None) -> int:
                     f"{p.name}: smoke_test.result の {r!r} は"
                     f" {' / '.join(SMOKE_RESULTS)} のどちらかにしてください")
 
-    by_record = _check_deployments_v2(dep2, known_ids, errors, notes)
+    by_record = _check_deployments_v2(dep2, known_ids, errors, notes, rel_by_id)
+    # **ずれを残したまま、 次の System Release を作らない**（#173）。 照らすのは、 この Pull Request で
+    #   足した System Release だけ（足した後の配置の記録を止めない）。 見分けには基準の commit が要る
+    if new_form and rel_by_file:
+        if base is None:
+            notes.append("足した System Release の照らし: していません（--base-ref がありません）")
+        else:
+            before = _base_release_names(root, base)
+            if before is None:
+                unchecked.append("基準の commit を読めないので、この Pull Request で足した System Release を"
+                                 "見分けられません（ずれ無しを確かめていません）")
+            else:
+                added = [(n, d) for n, d in sorted(rel_by_file.items()) if n not in before]
+                _check_added_releases(added, rel_by_id, by_record, errors)
+                notes.append(f"足した System Release の照らし: {len(added)} 件")
     vrs = []
     for p in verifications:
         d = _load(p, errors, yaml)
@@ -764,7 +987,14 @@ def main(argv: "list | None" = None) -> int:
         print("\n  形式は MirumeAI/development-docs の"
               " 03_customer_development/release_and_deployment.md を"
               "参照してください。", file=sys.stderr)
+        for u in unchecked:
+            print(f"  確かめていません: {u}", file=sys.stderr)
         return 1
+    if unchecked:
+        # **確かめられなかったのに OK と言わない**
+        for u in unchecked:
+            print(f"確かめられません: {u}", file=sys.stderr)
+        return 2
     print("OK: 記録は形式どおりです")
     return 0
 

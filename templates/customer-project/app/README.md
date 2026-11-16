@@ -1,6 +1,6 @@
 # app/ — 製品アプリ
 
-この案件の製品アプリ（起動・製品画面・API・Adapter）を置きます。Core の公開の面ができた範囲から置けます（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」と `platform_evolution.md`）。
+この案件の製品アプリ（起動・製品画面・API・Adapter）を置きます。新しい形では、製品のパッケージの `src/<パッケージ>/` へ移します（根の `README.md` の「目標の形と移る間」）。Core の公開の面ができた範囲から置けます（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」と `platform_evolution.md`）。
 
 ## 使ってよいもの
 

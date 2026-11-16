@@ -19,6 +19,6 @@ product_package:
   wheel_sha256: "<wheel の 64 桁の sha256>"
 ```
 
-**ずれを残したまま、次の System Release を作りません。** System Release を足す Pull Request の前に、製品のパッケージのある System Release を配って今 `ACTIVE` の機体のすべてで、足す System Release の `inspection.config_commit` と比べたずれの確かめ（`deployment/` の README）を足し、ずれ無し（`products: {}`）にします。ずれの確かめの記録は、System Release を足す Pull Request より前に、配置の記録の Pull Request で入れます。記録の検査が、その Pull Request で足した System Release と、製品のパッケージか `inspection.config_commit` を書き換えた System Release について照らします。配置に使った System Release の、この 2 つは変えません（新しい System Release を作ります）。
+**ずれを残したまま、次の System Release を作りません。** System Release を足す Pull Request の前に、製品のパッケージのある System Release を配って今 `ACTIVE` の機体のすべてで、足す System Release の `inspection.config_commit` と比べたずれの確かめ（`deployment/` の README）を足し、ずれ無し（`products: {}`）にします。ずれの確かめの記録は、System Release を足す Pull Request より前に、配置の記録の Pull Request で入れます（System Release を足す Pull Request に足せる配置の記録は、その System Release を配った記録だけです）。記録の検査が、その Pull Request で足した System Release と、製品のパッケージか `inspection.config_commit` を書き換えた System Release について照らします。配置に使った System Release の、この 2 つは変えません（新しい System Release を作ります）。
 
 形式の正本: `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`

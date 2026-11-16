@@ -47,7 +47,7 @@ recipe_drift:                        # 新しい形で、製品のパッケー�
 - 戻せる先（`rollback_to`）は**必ず書きます**。書けないなら、戻せる状態になっていないということです
 - 新しい形（根に `recipes/case.yaml` がある）で、製品のパッケージのある System Release を配った記録には、組み立て器が見たずれ（`recipe_drift`）と、その wheel（`artifacts`）を書きます。ずれの無いときも `products: {}` と書きます
 - **ずれの確かめ**: 配置を変えずに、機体の作業ルートの値を次に出すレシピの commit と比べたときも、1 回の出来事として記録を足します。`deployed_release`・`rollback_to`・`config_commit`・`artifacts`・`model_sha256` は前の記録と同じにし、`recipe_drift` に比べた結果を書きます。次の System Release は、配った機体のすべてで、その System Release のレシピの commit と比べてずれ無しになってから作ります。確かめるのは人です（記録の Pull Request に、確かめた人の Human Verification が要ります）
-- 新しい形では、記録の検査が、前からある記録の書き換えと削除を断ります（足すだけ）。`recipe_drift` に書く製品は、`recipes/products/` にある製品だけです。製品のパッケージのある System Release を配った記録は schema 2 で書き、戻した記録（`rolled_back_from`）は戻す前と違う System Release を配ります
+- 新しい形では、記録の検査が、前からある記録の書き換えと削除を断ります（足すだけ）。`recipe_drift` に書く製品は、`recipes/products/` にある製品だけです。製品のパッケージのある System Release を配った記録は schema 2 で書き、その System Release を配って戻した記録の `rolled_back_from` は前の記録にし、戻す前と違う System Release を配ります
 - 記録の Pull Request には、配置した人・確かめた人の Human Verification が要ります
 - 前の形（`schema_version: 1`。`<site>-<line>-<日付>.yaml`）の記録も、確かめる道具は読みます
 

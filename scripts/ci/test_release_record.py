@@ -925,6 +925,7 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 1, out)
         self.assertIn("PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-0003）が、この Pull Request で足した記録です", out)
+        self.assertIn("M01-0003.yaml: System Release を足す・書き換える Pull Request に足せる配置の記録は", out)
 
     def test_an_added_release_needs_a_product_package(self) -> None:
         base = self.base_with([self.r1], [self.legacy, self.active, self.check])
@@ -1026,6 +1027,77 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         (self.root / "recipes" / "products" / f"{PRODUCT}.yaml").unlink()
         code, out = self.run_check("--base-ref", base)
         self.assertEqual(code, 0, out)
+
+    def test_the_exception_deployment_records_its_own_release_in_the_same_pull_request(self) -> None:
+        """例外の配置の手順 4: 配った System Release そのものの記録は、 System Release と同じ Pull Request で入れてよい。"""
+        # 1 台目: 足す System Release を配った記録だけ
+        base = self.base_with([], [self.legacy])
+        self.write([self.r1], [self.legacy, self.active])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("足した・書き換えた System Release の照らし: 1 件", out)
+        # 2 台目: ほかの機体のずれの確かめは前の Pull Request で入れておく
+        m02_legacy = dict(self.legacy, record_id="M02-0001", machine="M02")
+        m02_r2 = dict(self.active, record_id="M02-0002", machine="M02", supersedes="M02-0001", rollback_to="M02-0001",
+                      deployed_release="PJ999-R2026.11.1", config_commit=CC2,
+                      artifacts=[{"name": "customer-product", "version": "0.2.0", "sha256": "f" * 64}],
+                      recipe_drift={"compared_commit": CC2, "products": {}})
+        base = self.base_with([self.r1], [self.legacy, self.active, self.check, m02_legacy])
+        self.write([self.r1, self.r2], [self.legacy, self.active, self.check, m02_legacy, m02_r2])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        base = self.base_with([self.r1], [self.legacy, self.active, m02_legacy])
+        self.write([self.r1, self.r2], [self.legacy, self.active, m02_legacy, m02_r2])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PJ999-R2026.11.1.yaml: 機体 M01 の一番新しい配置の記録（M01-0002）", out)
+        self.assertNotIn("機体 M02", out)
+
+    def test_a_release_pull_request_adds_only_its_own_deployments(self) -> None:
+        """System Release を足す Pull Request で、 人が確かめていない記録を足して機体を照らしから外さない。"""
+        base = self.base_with([self.r1], [self.legacy, self.active, self.check])
+        retired = {k: v for k, v in dict(self.legacy, record_id="M01-0004", sequence=4, supersedes="M01-0003",
+                                         status="RETIRED").items() if k != "observed"}
+        for label, extra, rels in (("RETIRED", retired, [self.r1, self.r2]),
+                                   ("ずれの確かめ", dict(self.check, record_id="M01-0004", sequence=4, supersedes="M01-0003"),
+                                    [self.r1, self.r2])):
+            with self.subTest(label=label):
+                self.write(rels, [self.legacy, self.active, self.check, extra])
+                code, out = self.run_check("--base-ref", base)
+                self.assertEqual(code, 1, out)
+                self.assertIn("M01-0004.yaml: System Release を足す・書き換える Pull Request に足せる配置の記録は", out)
+
+    def test_a_rollback_is_from_the_previous_record(self) -> None:
+        """戻した記録の rolled_back_from は前の記録（今の状態から戻す）。 ほかの記録に向けて、 確かめの照らしを逃れない。"""
+        same = dict(self.check, rolled_back_from="M01-0001", rollback_to="M01-0002", config_commit=CC2)
+        self.write([self.r1], [self.legacy, self.active, same])
+        code, out = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn("戻した記録の rolled_back_from は、前の記録（supersedes）にします", out)
+
+    def test_a_deployed_release_is_found_by_its_name_without_the_suffix(self) -> None:
+        """拡張子を変えても、 配置に使った System Release の 2 つの欄を変えれば断る。"""
+        base = self.base_with([self.r1], [self.legacy, self.active])
+        (self.root / "release" / "PJ999-R2026.10.1.yaml").unlink()
+        moved = dict(self.r1, inspection=dict(self.r1["inspection"], config_commit="3c" * 20))
+        (self.root / "release" / "PJ999-R2026.10.1.yml").write_text(json.dumps(moved, ensure_ascii=False), encoding="utf-8")
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PJ999-R2026.10.1.yml: 配置に使った System Release の product_package・inspection.config_commit は変えません", out)
+        # 中身を変えずに拡張子だけを変えたときは、 照らさない
+        (self.root / "release" / "PJ999-R2026.10.1.yml").write_text(json.dumps(self.r1, ensure_ascii=False), encoding="utf-8")
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("足した・書き換えた System Release の照らし: 0 件", out)
+
+    def test_removing_every_record_is_still_compared(self) -> None:
+        """記録を全部消しても、 基準と比べて「足すだけ」を照らす。"""
+        base = self.base_with([self.r1], [self.legacy, self.active])
+        self.write([], [])
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("deployment/M01-0001.yaml: 配置の記録は足すだけです", out)
+        self.assertIn("deployment/M01-0002.yaml: 配置の記録は足すだけです", out)
 
     def test_schema_1_does_not_deploy_a_product_package(self) -> None:
         old = {k: v for k, v in dict(self.r1, release_id="PJ999-R2026.09.2").items() if k != "product_package"}

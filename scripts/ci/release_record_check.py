@@ -992,9 +992,15 @@ def main(argv: "list | None" = None) -> int:
     val_dir = root / "validation"
     releases, deployments = _records(rel_dir), _records(dep_dir)
     verifications = _records(val_dir)
+    # 新しい形の印（リンクやフォルダでも、 在れば新しい形として扱う。 形の誤りは混入の検査が止める）
+    case = root / CASE_FILE
+    new_form = case.exists() or case.is_symlink()
+    # 新しい形で基準があるときは、 記録が 1 つも無くても基準と比べる（記録と versions.yaml を全部消して
+    #   「足すだけ」を逃れない）。 下の「何もしません」「記録がまだありません」に入らない
+    against_base = new_form and base is not None
 
     if (not rel_dir.is_dir() and not dep_dir.is_dir() and not val_dir.is_dir()
-            and not versions.is_file() and not versions_dev.is_file()):
+            and not versions.is_file() and not versions_dev.is_file() and not against_base):
         print("release/・deployment/・validation/・versions.yaml が無いので何もしません。")
         return 0
 
@@ -1005,7 +1011,7 @@ def main(argv: "list | None" = None) -> int:
         import yaml
     except ImportError:
         if (not releases and not deployments and not verifications and not versions.is_file()
-                and not versions_dev.is_file()):
+                and not versions_dev.is_file() and not against_base):
             print("記録がまだありません。")
             return 0
         print("PyYAML が無いので記録を検査できません。"
@@ -1019,9 +1025,6 @@ def main(argv: "list | None" = None) -> int:
     known_ids = set()
     rel_by_id: dict = {}
     rel_by_file: dict = {}
-    # 新しい形の印（リンクやフォルダでも、 在れば新しい形として扱う。 形の誤りは混入の検査が止める）
-    case = root / CASE_FILE
-    new_form = case.exists() or case.is_symlink()
 
     if versions.is_file():
         _check_versions(versions, errors, notes, yaml)
@@ -1101,7 +1104,7 @@ def main(argv: "list | None" = None) -> int:
     if new_form and base is None and (rel_by_file or deployments):
         notes.append("基準と比べる照らし（足した・書き換えた System Release・配置の記録の書き換え）: "
                      "していません（--base-ref がありません）")
-    elif new_form and base is not None:
+    elif against_base:
         # 記録が 1 つも無くても比べる（基準の記録を全部消して「足すだけ」を逃れない）
         tree = _base_tree(root, base)
         if tree is None:

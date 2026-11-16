@@ -1099,6 +1099,22 @@ class NewFormProductAndDriftTest(unittest.TestCase):
         self.assertIn("deployment/M01-0001.yaml: 配置の記録は足すだけです", out)
         self.assertIn("deployment/M01-0002.yaml: 配置の記録は足すだけです", out)
 
+    def test_removing_every_folder_and_versions_is_still_compared(self) -> None:
+        """記録のフォルダと versions.yaml を全部消しても、 新しい形で基準があれば比べる（「何もしません」に入らない）。"""
+        (self.root / "versions.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+        base = self.base_with([self.r1], [self.legacy, self.active])
+        for name in ("release", "deployment"):
+            shutil.rmtree(self.root / name)
+        (self.root / "versions.yaml").unlink()
+        code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("何もしません", out)
+        self.assertIn("deployment/M01-0002.yaml: 配置の記録は足すだけです", out)
+        # 基準を渡さないときは、 前と同じく何もしない
+        code, out = self.run_check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("何もしません", out)
+
     def test_schema_1_does_not_deploy_a_product_package(self) -> None:
         old = {k: v for k, v in dict(self.r1, release_id="PJ999-R2026.09.2").items() if k != "product_package"}
         self.write([self.r1, old], [])

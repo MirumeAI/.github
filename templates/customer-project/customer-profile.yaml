@@ -1,5 +1,6 @@
 # この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 設定（config/・dev/config/・
-# deploy/・versions.yaml）と記録（deployment/・validation/）と照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
+# deploy/・versions.yaml）と記録（deployment/・validation/）と照らす。 新しい形（recipes/case.yaml が
+# ある）では、 レシピ（recipes/）と機体の設定（machines/）とも照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
 # 運用の手順は MirumeAI/development-docs の 03_customer_development/customer_isolation_check.md。
 #
 # 状態: REQUIRES HUMAN VERIFICATION
@@ -31,8 +32,9 @@ plc:
 
 triggers: []                            # shot の triggers と、 PLC の shot_request の項目
 faces: []                               # face_dict の鍵
+products: []                            # 製品の名前（新しい形の recipes/products/<製品>.yaml のファイルの名前と product）
 
 config_files:
-  extra: []                             # Core が読む決まった名前の外のファイル（path と reason）
+  extra: []                             # Core が読む決まった名前の外のファイル（path と reason。 config/ の下か、 新しい形の recipes/・machines/ の下）
 
 extensions: []                          # plugins/ の拡張の名前

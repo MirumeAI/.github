@@ -127,10 +127,20 @@ S5_IPS = tuple(_ip(n, h) for n, h in ((1, 77), (2, 9), (1, 78), (1, 79), (1, 81)
 #: 実行するときに組み立てる（ソースに IPv4 の形を置かない）。
 VERSION4 = ".".join(("9", "1", "0", "70"))
 
+#: 新しい形（#171）の値。 製品の名前・機体の記号・機体の道も、 出力に出さない。
+A_PRODUCT = "example_product_" + "a"
+B_PRODUCT = "example_product_" + "b"
+A_MACHINE = "EX-" + "A1"
+B_MACHINE = "EX-" + "B1"
+SRV = "/srv/" + "example/"
+#: 先頭が 0 の数の製造番号（YAML 1.1 では引用符が無いと 8 進として読まれる）。
+OCTAL_SERIAL = "0" + "1234567"
+
 #: 出力に出てはいけない値（どの場面でも見る）。
 NOT_SHOWN = (A_PROFILE, A_FLOW, A_IP, A_SERIAL, A_TRIGGER, B_PROFILE, B_FLOW, *B_IPS,
              *B_SERIALS, B_PLC_HOST, *B_TRIGGERS, B_GROUP, *B_ADDRS, CREDENTIAL, TOKEN,
-             NUMBER_KEY, HEX_KEY, HEX_VALUE, NUMBER_SERIAL, FLOAT_SERIAL, *S5_IPS, VERSION4)
+             NUMBER_KEY, HEX_KEY, HEX_VALUE, NUMBER_SERIAL, FLOAT_SERIAL, *S5_IPS, VERSION4,
+             A_PRODUCT, B_PRODUCT, A_MACHINE, B_MACHINE, SRV + "work_root", OCTAL_SERIAL)
 
 
 def a_config() -> dict:
@@ -242,6 +252,124 @@ def _with(files: dict, **changes) -> dict:
         else:
             out[rel] = v
     return out
+
+
+# ---- 新しい形（recipes/case.yaml がある Repository。 #171）。 形は development-docs の
+# `03_customer_development/recipes_and_machines.md`。 値はすべて架空で、 上の 2 つの案件のもの。
+
+CASE = "recipes/case.yaml"
+A_PRODUCT_FILE = "recipes/products/" + A_PRODUCT + ".yaml"
+A_MACHINE_FILE = "machines/" + A_MACHINE + ".yaml"
+EXAMPLE = "machines/dev.example.yaml"
+NSERVICE = "deploy/app/example.service"
+
+
+def n_profile(**kw) -> dict:
+    """案件 A の宣言に、 製品の名前を足したもの。"""
+    p = a_profile()
+    p["products"] = [A_PRODUCT]
+    p.update(kw)
+    return p
+
+
+def a_case(**profile_changes) -> dict:
+    """案件 A の `recipes/case.yaml`。 撮像側の案件の設定から、 機体の値と `case` に書く名前を除いた物。"""
+    prof = a_config()
+    del prof["_profile"]
+    prof["camera"] = {"camera1": {"camera_type": "area", "sdk": "example_sdk", "exposure_time": 1000}}
+    prof.update(profile_changes)
+    return {"schema_version": 1,
+            "case": {"name": A_PROFILE, "title": "例の案件", "description": "例の説明"},
+            "profile": prof}
+
+
+def a_product(**changes) -> dict:
+    """案件 A の `recipes/products/<製品>.yaml`（見本帳づくりが照合の型を選ぶ形）。"""
+    d = {"schema_version": 1, "product": A_PRODUCT,
+         "capture": {"crop": {"x": 0, "y": 0, "w": 100, "h": 100}, "exposure_time": 1000,
+                     "gain": 0, "note": "例"},
+         "extract": {"sam": {"model_type": "example", "checkpoint": "example.pth"}},
+         "judge": {"opt_level": "auto"}}
+    d.update(changes)
+    return d
+
+
+def a_machine(**changes) -> dict:
+    """案件 A の据え付けた機体の設定（`machines/<記号>.yaml`）。"""
+    d = {"schema_version": 1, "machine": {"symbol": A_MACHINE, "kind": "installed"},
+         "work_root": SRV + "work_root", "weights_root": SRV + "weights",
+         "ports": {"ui": 8000, "pdm": 8001}, "extra_origins": [],
+         "profile": {"camera": {"camera1": {"serial_number": A_SERIAL, "ip_address": A_IP,
+                                            "rotate": 0}},
+                     "paths": {"data": SRV + "data", "dataset": SRV + "dataset"}}}
+    d.update(changes)
+    return d
+
+
+def a_example() -> dict:
+    """開発の機体の設定の見本（`machines/dev.example.yaml`）。 値を入れない。"""
+    return {"schema_version": 1, "machine": {"symbol": "DEV", "kind": "dev"},
+            "work_root": "/path/to/work_root", "weights_root": "/path/to/weights",
+            "ports": {"ui": 8000, "pdm": 8001}, "extra_origins": [],
+            "profile": {"camera": {"camera1": {"sdk": "file", "folder": "/path/to/samples",
+                                               "loop": True, "serial_number": None,
+                                               "ip_address": None}},
+                        "paths": {"data": "/path/to/data", "dataset": "/path/to/dataset"}}}
+
+
+def n_files(profile=None, case=None, product=None, machine=None, example=None) -> dict:
+    """案件 A の新しい形の Repository（前の形の config/ は無い）。"""
+    return {
+        "customer-profile.yaml": _yaml(profile or n_profile()),
+        "recipes/README.md": "# recipes/\n",
+        CASE: _yaml(case or a_case()),
+        A_PRODUCT_FILE: _yaml(product or a_product()),
+        "recipes/capture/" + A_PRODUCT + ".json": _json({"crop": {"x": 0, "y": 0, "w": 100, "h": 100}}),
+        "machines/README.md": "# machines/\n",
+        "machines/.gitkeep": "",
+        A_MACHINE_FILE: _yaml(machine or a_machine()),
+        EXAMPLE: _yaml(example or a_example()),
+        NSERVICE: f"ExecStart=/usr/bin/true --machine ./{A_MACHINE_FILE}\n",
+        # 雛形の versions.yaml と同じく、 注釈で開発の固定に触れる（注釈は照らさない）
+        "versions.yaml": "# 開発中の固定は、 このファイルでなく versions.dev.yaml に書く\nschema_version: 1\n",
+    }
+
+
+def b_case() -> dict:
+    """案件 B の `recipes/case.yaml`（PLC の表はレシピ。 宛先は機体の設定）。"""
+    c = b_config()
+    del c["_profile"]
+    c["camera"] = {f"camera{i + 1}": {"camera_type": "area"} for i in range(5)}
+    del c["plc"]["address"]
+    return {"schema_version": 1, "case": {"name": B_PROFILE}, "profile": c}
+
+
+def b_machine() -> dict:
+    return {"schema_version": 1, "machine": {"symbol": B_MACHINE, "kind": "shown"},
+            "work_root": SRV + "work_root",
+            "profile": {"camera": {f"camera{i + 1}": {"ip_address": B_IPS[i],
+                                                       "serial_number": B_SERIALS[i]}
+                                   for i in range(5)},
+                        "plc": {"address": {"host": B_PLC_HOST, "port": B_PLC_PORT}}}}
+
+
+def nb_files(case=None, machine=None) -> dict:
+    """案件 B の新しい形の Repository。"""
+    return {
+        "customer-profile.yaml": _yaml(dict(b_profile(), products=[B_PRODUCT])),
+        CASE: _yaml(case or b_case()),
+        "recipes/products/" + B_PRODUCT + ".yaml": _yaml(a_product(product=B_PRODUCT)),
+        "machines/" + B_MACHINE + ".yaml": _yaml(machine or b_machine()),
+        "versions.yaml": "schema_version: 1\n",
+    }
+
+
+def _set(d: dict, path: tuple, value) -> dict:
+    """入れ子の対応表の道に値を置く（途中が無ければ作る）。"""
+    for k in path[:-1]:
+        d = d.setdefault(k, {})
+    d[path[-1]] = value
+    return d
 
 
 class Link:
@@ -772,6 +900,301 @@ def scenarios() -> "list[Scenario]":
     add("S4-dev i3. 行を \\ で続けても、 渡す形は不合格", a_with(**{
         "deploy__app__run.sh": "#!/bin/sh\nexec env -u EXAMPLE_X \\\n  MIRUME_DEV_CONFIG=/srv/x.json \\\n"
         "  /usr/bin/true\n"}), 1, {"S4-dev"})
+
+    # ---- 新しい形（recipes/case.yaml がある。 #171）。 前の形の照らしは変えない
+    def n_with(**changes) -> dict:
+        return _with(n_files(), **{k.replace("/", "__"): v for k, v in changes.items()})
+
+    old_config = {k: v for k, v in a_files().items() if k.startswith("config/")}
+    add("N1. 新しい形の正しい設定（主の設定 config.json は無くてよい）", n_files(), 0,
+        texts=("新しい形（recipes/case.yaml がある）", "（recipes/・machines/）のファイル 5"))
+    add("N1b. 移る間は前の形の config/ も残せる（両方を照らす）", _with(n_files(), **{
+        k.replace("/", "__"): v for k, v in old_config.items()}), 0)
+    mixed = {k: v for k, v in a_files(config=dict(a_config(), plc=b_plc(False))).items()
+             if k.startswith("config/")}
+    add("N1c. 両方あるときは、 前の形の config/ の混入も見つける", _with(n_files(), **{
+        k.replace("/", "__"): v for k, v in mixed.items()}), 1,
+        {"S2-plc", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
+    add("N1d. 前の形（case.yaml が無い）の、 今の雛形の recipes/ と説明だけの machines/ は今のまま照らさない",
+        a_with(**{
+            "recipes__README.md": "# recipes/\n", "recipes__x.yaml": f"peer: '{B_IPS[0]}'\n",
+            "recipes__capture__README.md": f"{B_IPS[0]}\n",
+            "recipes__capture__" + A_PRODUCT + ".json": _json({"host": B_IPS[0]}),
+            "recipes__products__README.md": "# products/\n", "machines__README.md": "# machines/\n",
+            "machines__.gitkeep": "",
+            SERVICE.replace("/", "__"): a_files()[SERVICE] + "# versions.dev.yaml\n"}), 0)
+    # case.yaml が無いのに、 新しい形にしか無いファイルがある（置き忘れ・書き違い）。 照らさずに通さない
+    for tag, rel in (("e", "machines__" + B_MACHINE + ".yaml"),
+                     ("f", "recipes__products__" + B_PRODUCT + ".yaml"),
+                     ("g", "recipes__case.yml"),
+                     ("h", "recipes__Case.yaml"),
+                     ("i", "machines__.gitkeep")):
+        add(f"N1{tag}. case.yaml が無いのに新しい置き場がある・書き違いなら止める", a_with(**{
+            rel: "x: 1\n"}), 2, error="config-missing")
+
+    # 層 1: 決まった場所（機体の設定とレシピの profile）
+    m = a_machine()
+    m["profile"]["camera"]["camera1"]["ip_address"] = B_IPS[0]
+    add("N2. 機体の設定のカメラの IP が宣言に無い", n_files(machine=m), 1, {"L1-endpoint"})
+    m = a_machine()
+    m["profile"]["camera"]["camera1"]["serial_number"] = B_SERIALS[0]
+    add("N3. 機体の設定の製造番号が宣言に無い", n_files(machine=m), 1, {"L1-serial"})
+    p = n_profile()
+    p["equipment"]["cameras"][0]["serial"] = OCTAL_SERIAL
+    m = _yaml(a_machine()).replace(f"serial_number: {A_SERIAL}", f"serial_number: {OCTAL_SERIAL}")
+    add("N3b. 引用符の無い、 先頭が 0 の数の製造番号は、 書いたままの字で照らす",
+        n_with(**{"customer-profile.yaml": _yaml(p), A_MACHINE_FILE: m}), 0)
+    m = a_machine()
+    m["profile"]["camera"]["camera2"] = {"rotate": 90}
+    add("N3c. 機体の設定のカメラの役が宣言に無い", n_files(machine=m), 1, {"S3-camera"})
+    m = a_machine()
+    m["profile"]["plc"] = {"address": {"host": B_PLC_HOST, "port": B_PLC_PORT}}
+    add("N4. PLC を使わない案件の機体の設定に PLC の宛先", n_files(machine=m), 1, {"L1-plc-endpoint"})
+    m = a_machine(extra_origins=["http://" + B_IPS[1] + ":8000"])
+    add("N5. 補い: profile の外（extra_origins）の、 宣言に無い IP", n_files(machine=m), 1,
+        {"L1-endpoint"})
+    add("N5b. 補い: 宣言した宛先なら、 profile の外でも通す",
+        n_files(profile=n_profile(endpoints=[B_IPS[1]]), machine=m), 0)
+    pr = a_product()
+    pr["extract"]["note"] = B_TRIGGERS[0]
+    add("N6. 補い: 製品のレシピの中の、 宣言に無い trig_ の語", n_files(product=pr), 1, {"L1-name"})
+    add("N7. 補い: 機体の設定のファイルの名前の、 宣言に無い trig_ の語", n_with(**{
+        "machines/" + B_TRIGGERS[1] + ".yaml": _yaml(a_machine())}), 1, {"L1-name"})
+    add("N8. 補い: 移る間の撮像の条件（JSON）の中の、 宣言に無い IP", n_with(**{
+        "recipes/capture/" + A_PRODUCT + ".json": _json({"host": B_IPS[2]})}), 1, {"L1-endpoint"})
+    add("NB1. B の新しい形（PLC の表はレシピ、 宛先は機体の設定）", nb_files(), 0)
+    m = b_machine()
+    m["profile"]["plc"]["address"]["host"] = _ip(2, 99)
+    add("NB2. 機体の設定の PLC の宛先が宣言に無い", nb_files(machine=m), 1, {"L1-plc-endpoint"})
+    c = b_case()
+    c["profile"]["plc"]["to_plc_example"]["example_signal"]["data"] = "EXAMPLE_ADDR_" + "999"
+    add("NB3. レシピの PLC の番地が宣言に無い", nb_files(case=c), 1, {"L1-plc-address"})
+    c = b_case()
+    c["profile"]["shot"]["camera1"]["triggers"].append(A_TRIGGER)
+    add("NB4. レシピの shot のトリガが宣言に無い", nb_files(case=c), 1, {"L1-trigger"})
+    c = b_case()
+    c["profile"]["plc"]["address"] = {"host": B_PLC_HOST, "port": B_PLC_PORT}
+    add("NB5. レシピに PLC の宛先（機体だけの鍵）", nb_files(case=c), 1, {"R-key"})
+
+    # S1: 置いてよいファイル
+    for tag, rel, body, codes in (
+            ("1", "recipes/x.yaml", "x: 1\n", ()),
+            ("2", "recipes/products/sub/x.yaml", "x: 1\n", ()),
+            ("3", "machines/sub/x.yaml", "x: 1\n", ()),
+            ("4", "machines/x.txt", f"{B_IPS[3]}\n", ("L1-endpoint",)),
+            ("5", "recipes/capture/x.csv", "x\n", ()),
+            ("6", "machines/.hidden.yaml", _yaml(a_machine()), ()),
+            ("7", "recipes/case.yml", "x: 1\n", ()),
+            ("8", "recipes/.gitkeep", f"{B_IPS[3]}\n", ("L1-endpoint",)),
+            ("9", "recipes/products/" + A_PRODUCT + ".yml", "x: 1\n", ())):
+        add(f"N9-{tag}. 新しい置き場の決まりの外のファイル", n_with(**{rel: body}), 1,
+            {"S1-new-file", *codes})
+    add("N10. 新しい置き場の下のリンクは読まずに断る", n_with(**{
+        "recipes/products/link.md": Link("../case.yaml")}), 1, {"S1-new-link"})
+    no_machines = {k: None for k in n_files() if k.startswith("machines/")}
+    add("N10b. machines そのもののリンクも読まずに断る（指していた設定は Git の外）", _with(n_with(**no_machines), **{
+        "machines": Link("recipes")}), 1, {"S1-new-link", "S4-dev"})
+    add("N10c. recipes そのもののリンクは、 case.yaml を読めないので止める", _with(n_files(), **{
+        k.replace("/", "__"): None for k in n_files() if k.startswith("recipes/")}, **{
+        "recipes_real__case.yaml": _yaml(a_case()), "recipes": Link("recipes_real")}), 2,
+        error="config-missing")
+    add("N10d. case.yaml がリンクなら止める", n_with(**{
+        "recipes/real.md": _yaml(a_case()), CASE: Link("real.md")}), 2, error="config-missing")
+    extra = {"config_files": {"extra": [{"path": "recipes/extra.yaml", "reason": "架空の追加"}]}}
+    add("N11. 宣言した追加のファイル（recipes/ の下）", n_with(**{
+        "customer-profile.yaml": _yaml(n_profile(**extra)), "recipes/extra.yaml": "memo: x\n"}), 0)
+    add("N11b. 宣言の追加のファイルは config/・recipes/・machines/ の下だけ", n_files(profile=n_profile(
+        config_files={"extra": [{"path": "deploy/x.yaml", "reason": "架空"}]})), 2,
+        error="profile-schema")
+    add("N12. 新しい置き場の説明の .md の中の値は参考だけ", n_with(**{
+        "machines/README.md": f"例 {B_IPS[0]}\n"}), 0, texts=("参考（強制しません",))
+
+    # S2・S3: recipes/case.yaml の profile と case.name
+    add("N13. PLC を使わない案件のレシピに B の PLC の表", n_files(case=a_case(plc=b_plc(False))), 1,
+        {"S2-plc", "L1-plc-endpoint", "L1-plc-address", "L1-trigger", "R-key"})
+    add("N13b. NAS の有無がレシピと宣言で違う", n_files(case=a_case(nas={"enabled": True})), 1,
+        {"S2-nas"})
+    add("N13c. AI の有無がレシピと宣言で違う", n_files(case=a_case(ai={"enabled": False})), 1,
+        {"S2-ai"})
+    c = a_case()
+    del c["profile"]["plc"]
+    add("N13d. レシピに plc の節が無ければ止める（推測しない）", n_files(case=c), 2,
+        error="config-field")
+    c = a_case()
+    c["case"]["name"] = B_PROFILE
+    add("N14. case.name が宣言に無い", n_files(case=c), 1, {"S3-profile"})
+    add("N14b. レシピの flow が宣言と違う", n_files(case=a_case(flow=B_FLOW)), 1, {"S3-flow"})
+    c = a_case()
+    c["profile"]["camera"]["camera2"] = {"camera_type": "area"}
+    add("N14c. レシピのカメラの役が宣言に無い", n_files(case=c), 1, {"S3-camera"})
+    c = a_case()
+    c["profile"]["face_dict"][B_TRIGGERS[3]] = "面"
+    add("N14d. レシピの面が宣言に無い", n_files(case=c), 1, {"S3-face"})
+    c = a_case()
+    del c["case"]["name"]
+    add("N14e. case.name が無ければ止める", n_files(case=c), 2, error="config-field")
+    add("N14f. profile に書いた _profile も照らす", n_files(case=a_case(_profile=B_PROFILE)), 1,
+        {"S3-profile"})
+    add("N14g. 全体が対応表でないレシピは止める", n_with(**{CASE: "- 1\n"}), 2, error="config-field")
+
+    # 製品の名前
+    # ファイルの名前だけが宣言に無い形（product の値は宣言の中）で、 ファイルの名前の照らしを確かめる
+    add("N15. 宣言に無い製品の名前のファイル", n_with(**{
+        "recipes/products/" + B_PRODUCT + ".yaml": _yaml(a_product())}), 1, {"S3-product"})
+    add("N15b. product の値が宣言に無い", n_files(product=a_product(product=B_PRODUCT)), 1,
+        {"S3-product"})
+    extra = {"config_files": {"extra": [{"path": "recipes/products/" + B_PRODUCT + ".yaml",
+                                         "reason": "架空"}]}}
+    add("N15c. 宣言に無い製品のファイルは、 追加のファイルとしても許さない", n_with(**{
+        "customer-profile.yaml": _yaml(n_profile(**extra)),
+        "recipes/products/" + B_PRODUCT + ".yaml": _yaml(a_product())}), 1, {"S3-product"})
+
+    # 新しく足す照らし: レシピに書かない鍵
+    c = a_case()
+    for path, value in ((("camera", "camera1", "serial_number"), A_SERIAL),
+                        (("camera", "camera1", "ip_address"), A_IP),
+                        (("camera", "camera1", "device_index"), 0),
+                        (("camera", "camera1", "folder"), SRV + "samples"),
+                        (("camera", "camera1", "loop"), True),
+                        (("nas", "mount_path"), SRV + "nas"),
+                        (("paths", "data"), SRV + "data"),
+                        (("paths", "dataset"), SRV + "dataset"),
+                        (("paths", "work"), SRV + "work"),
+                        (("pdm_dir",), SRV + "work"),
+                        (("pdm_dir_master",), SRV + "work")):
+        _set(c["profile"], path, value)
+    # paths は、 下の鍵がすべて書かない鍵なので paths そのものを 1 つ断る（下の 3 つは数えない）
+    add("N16. レシピの profile の、 機体だけ・開発の機体だけ・組み立て器が組む鍵", n_files(case=c), 1,
+        {"R-key"}, texts=("内訳: R-key 9",))
+    add("N16d. paths を字で書いても断る（値の型によらず）", n_files(case=a_case(paths=SRV + "data")), 1,
+        {"R-key"})
+    c = b_case()
+    c["profile"]["plc"]["address"] = f"{B_PLC_HOST}:{B_PLC_PORT}"
+    add("N16e. plc.address を字で書いても断る（値の型によらず）", nb_files(case=c), 1, {"R-key"})
+    c = a_case()
+    c["profile"]["camera"]["camera1"] = "serial " + A_SERIAL
+    add("N16f. カメラの役を対応表で書かなければ、 照らせないので止める", n_files(case=c), 2,
+        error="config-field", texts=("profile.camera.<*> を対応表で",))
+    add("N16g. nas を対応表で書かなければ、 照らせないので止める", n_files(case=a_case(nas=SRV + "nas")), 2,
+        error="config-field")
+    c = a_case()
+    c["profile"]["camera"]["camera1"]["sdk"] = "file"
+    add("N16b. 保存済みの画像のカメラ（sdk: file）はレシピに書かない", n_files(case=c), 1, {"R-key"})
+    c = a_case(nas={"enabled": False, "keep_back_days": 30}, ai_workers=1)
+    c["profile"]["camera"]["camera1"].update(rotate=0, gain=0, apply_settings=True)
+    add("N16c. 機体で上書きできる鍵の既定は、 レシピに書ける", n_files(case=c), 0)
+    pr = a_product()
+    for path in (("name",), ("save_name",), ("capture", "verified"), ("extract_mark",),
+                 ("updated_at",), ("extract_history",), ("extract_history_broken",),
+                 ("extract", "_meta"), ("judge", "_meta"), ("extract", "sam", "device"),
+                 ("judge", "device"), ("judge", "threshold"), ("judge", "threshold_bank_at"),
+                 ("judge", "dino_scale"), ("judge", "print_fields_geom"),
+                 ("judge", "print_fields_sig")):
+        _set(pr, path, 1)
+    add("N17. 製品のレシピに書かない鍵", n_files(product=pr), 1, {"R-key"},
+        texts=("内訳: R-key 16",))
+    pr = a_product()
+    for k in ("match", "window_radius", "edge_margin", "method", "layers", "top_percent"):
+        pr["judge"][k] = 1
+    add("N18. opt_level が auto なのに、 見本帳づくりが決める照合の型がある", n_files(product=pr), 1,
+        {"R-opt"}, texts=("内訳: R-opt 6",))
+    pr["judge"]["opt_level"] = "strict"
+    add("N18b. opt_level が auto でなければ、 照合の型を人が決めた値として書ける", n_files(product=pr), 0)
+
+    # 新しく足す照らし: 機体の設定（Git にある kind: dev・見本の値）
+    for tag, kind, code in (("", "dev", None), ("b", "example-kind", "config-field"),
+                            ("c", None, "config-field"), ("d", "shown", None)):
+        m = a_machine()
+        if kind is None:
+            del m["machine"]["kind"]
+        else:
+            m["machine"]["kind"] = kind
+        files = n_with(**{"machines/EX-" + "C1.yaml": _yaml(m)})
+        if code:
+            add(f"N19{tag}. machine.kind が installed・shown・dev のどれでもなければ止める", files, 2,
+                error=code)
+        elif kind == "dev":
+            add("N19. Git にある開発の機体の設定（kind: dev）", files, 1, {"M-dev"})
+        else:
+            add("N19d. 顧客に見せる機体（shown）の設定は置ける", files, 0)
+    for tag, change, codes in (
+            ("", (("profile", "camera", "camera1", "ip_address"), A_IP), {"M-example-endpoint"}),
+            ("b", (("extra_origins",), ["http://" + "127.0.0.1" + ":8000"]), {"M-example-endpoint"}),
+            ("c", (("profile", "camera", "camera1", "serial_number"), A_SERIAL), {"M-example-serial"}),
+            ("d", (("work_root",), SRV + "work_root"), {"M-example-path"}),
+            ("e", (("weights_root",), "/path/to/../../srv/example/weights"), {"M-example-path"}),
+            ("f", (("profile", "paths", "data"), "C:\\example\\data"), {"M-example-path"})):
+        e = a_example()
+        _set(e, *change)
+        add(f"N20{tag}. 見本に値（IP・製造番号・/path/to/ の外の絶対の道）を入れない",
+            n_files(example=e), 1, codes)
+    e = a_example()
+    e["machine"]["kind"] = "installed"
+    add("N20g. 見本の machine.kind が dev でない", n_files(example=e), 1, {"M-example-kind"})
+    e = a_example()
+    del e["machine"]
+    add("N20h. 見本に machine が無い", n_files(example=e), 1, {"M-example-kind"})
+
+    # 新しく足す照らし: 機体の設定の profile に書けるのは、 機体だけの鍵・機体で上書きできる鍵（と開発の機体だけの鍵）
+    m = a_machine()
+    m["profile"].update(_profile=A_PROFILE, flow=A_FLOW, pdm_dir=SRV + "work", plc={"enabled": False})
+    m["profile"]["paths"]["work"] = SRV + "work"
+    m["profile"]["camera"]["camera1"].update(sdk="example_sdk", folder=SRV + "samples")
+    add("N24. 機体の設定の profile に、 機体に書けない鍵", n_files(machine=m), 1, {"M-key"},
+        texts=("内訳: M-key 7",))
+    m = a_machine()
+    m["profile"]["camera"]["camera1"].update(device_index=0, exposure_time=1000, gain=0,
+                                             apply_settings=True)
+    m["profile"].update(nas={"mount_path": SRV + "nas", "keep_back_days": 30}, ai_workers=1)
+    add("N24b. 機体の設定には、 機体だけの鍵と機体で上書きできる鍵を書ける", n_files(machine=m), 0)
+    m = a_machine()
+    m["profile"]["camera"]["camera1"].update(sdk="file", loop=True)
+    add("N24c. 据え付けた機体の設定には、 開発の機体だけが書ける鍵を書かない", n_files(machine=m), 1,
+        {"M-key"}, texts=("内訳: M-key 2",))
+    e = a_example()
+    e["profile"]["camera"]["camera1"]["sdk"] = "example_sdk"
+    add("N24d. 見本でも、 sdk は file のときだけ機体に書ける", n_files(example=e), 1, {"M-key"})
+    m = b_machine()
+    m["profile"]["plc"]["address"] = f"{B_PLC_HOST}:{B_PLC_PORT}"
+    add("N24e. 機体の設定の plc.address を対応表で書かなければ、 照らせないので止める", nb_files(machine=m), 2,
+        error="config-field")
+
+    # S4: 新しい形では、 開発の固定・見本・Git の外の機体の設定も指さない
+    for tag, line in (("", f"ExecStartPre=/bin/cp {SRV}versions.dev.yaml /tmp/x\n"),
+                      ("b", f"ExecStart=/usr/bin/true --machine {SRV}{EXAMPLE}\n"),
+                      ("c", "ExecStart=/usr/bin/true --machine ./machines/EX-" + "D9.yaml\n"),
+                      ("d", "Environment=MIRUME_DEV_CONFIG=/srv/x.yaml\n"),
+                      ("g", "ExecStart=/usr/bin/true --machine %h/example/machines/EX-" + "D9.yaml\n"),
+                      ("h", "ExecStart=/usr/bin/true --machine ${REPO}/machines/EX-" + "D9.yaml\n")):
+        add(f"N21{tag}. 新しい形の deploy/ が開発の機体だけの物を指す", n_with(**{
+            NSERVICE: n_files()[NSERVICE] + line}), 1, {"S4-dev"})
+    add("N21e. versions.yaml の値が versions.dev.yaml を指す", n_with(**{
+        "versions.yaml": "schema_version: 1\nref: versions.dev.yaml\n"}), 1, {"S4-dev"})
+    add("N21i. 前に道があっても、 Git にある機体の設定を指すのは通す", n_with(**{
+        NSERVICE: f"ExecStart=/usr/bin/true --machine %h/example/{A_MACHINE_FILE}\n"}), 0)
+    add("N21f. 前の形の S4 は今のまま（versions.dev.yaml を見ない）", a_with(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]
+        + f"ExecStartPre=/bin/cp {SRV}versions.dev.yaml /tmp/x\n"}), 0)
+
+    # レシピと機体の設定の YAML の形
+    for tag, rel, text, want in (
+            ("", CASE, "case: [1\n", None),
+            ("b", A_PRODUCT_FILE, _yaml(a_product()) + f"product: {B_PRODUCT}\n", "同じ鍵が 2 回"),
+            ("c", A_MACHINE_FILE, _yaml(a_machine()) + "x: &a 1\ny: *a\n", "別名"),
+            ("d", A_PRODUCT_FILE, _yaml(a_product()) + f"{NUMBER_KEY}: x\n", "鍵は文字に"),
+            ("e", A_MACHINE_FILE, _yaml(a_machine()) + "other:\n  <<: {k: 1}\n", "`<<` は使えません"),
+            ("f", A_PRODUCT_FILE, _yaml(a_product()) + "tags: !!set {a: null}\n", "使えない型"),
+            ("g", A_PRODUCT_FILE, _yaml(a_product()) + "blob: !!binary aGk=\n", "使えない型")):
+        add(f"N22{tag}. 読めない・形の違うレシピと機体の設定は止める", n_with(**{rel: text}), 2,
+            error="config-yaml", texts=(want,) if want else ())
+
+    # 宣言の製品の名前
+    add("N23. 製品の名前の宣言の増え方は、 種類と数だけを出す", [
+        n_files(), n_files(profile=n_profile(products=[A_PRODUCT, B_PRODUCT]))], 0,
+        args=("--base-ref", "{base}"),
+        texts=("products: +1 / -0", "PROFILE EXPANSION DETECTED", "宣言して使っていないもの"))
+    add("N23b. 製品の名前を数で書いたら、 引用符で囲むよう言う", n_files(profile=n_profile(
+        products=[int(NUMBER_SERIAL)])), 2, error="profile-schema", texts=("引用符",))
     return s
 
 
@@ -1203,6 +1626,155 @@ MUTATIONS = [
      '    i = max(before.rfind(c) for c in ";&|")\n', "    i = -1\n"),
     ("S4: 値を使う .pop( も外す形とみなす",
      'rf"^[ \\t]*[{_A}.]{{1,128}}\\.pop\\(', 'rf"[{_A}.]{{1,128}}\\.pop\\('),
+    # ---- 新しい形（recipes/case.yaml がある。 #171）
+    ("新しい形: case.yaml があっても前の形として照らす",
+     "self.new_form = CASE in self.files or os.path.lexists(root / CASE)", "self.new_form = False"),
+    ("新しい形: 前の形の主の設定が無いと止める",
+     "if not self.new_form and (IA_MAIN not in self.files", "if (IA_MAIN not in self.files"),
+    ("新しい形: case.yaml がリンク・Git の外でも止めない",
+     'if self.new_form and (CASE not in self.files or os.path.islink(root / "recipes")',
+     'if False and (CASE not in self.files or os.path.islink(root / "recipes")'),
+    ("新しい形: 前の形にも新しい置き場の照らしを当てる",
+     "        if self.new_form:\n            self.new_places(docs)\n",
+     "        if True:\n            self.new_places(docs)\n"),
+    ("S1 新しい置き場: 決まりの外のファイルを通す",
+     "            code = self.s1_new(rel)\n", "            code = None\n"),
+    ("S1 新しい置き場: リンクを通す",
+     '            return "S1-new-link"\n', "            return None\n"),
+    ("S1 新しい置き場: 中身のある .gitkeep を読まない",
+     '(name == ".gitkeep" and code is None)', '(name == ".gitkeep")'),
+    ("新しい置き場: ファイルの名前の trig_ の語を照らさない",
+     '            for part in rel.split("/")[1:]:\n', "            for part in ():\n"),
+    ("新しい置き場: JSON を照らさない",
+     "                docs[rel] = JsonDoc(rel, text)\n", "                pass\n"),
+    ("新しい置き場: 決まりの外のファイルの中の値を照らさない",
+     '                self.text_lines(rel, text, "L1-endpoint", "L1-name", self.findings)\n',
+     "                pass\n"),
+    ("製品の名前: ファイルの名前を照らさない",
+     '            return "S3-product"\n', "            return None\n"),
+    ("製品の名前: product を照らさない",
+     'if s is not None and s in self.prof["products"]:', "if True:"),
+    ("宣言: products を読まない",
+     '    texts("products", ("products",), top.get("products"))\n', ""),
+    ("宣言: 追加のファイルを config/・recipes/・machines/ の外にも置ける",
+     "not path.startswith(EXTRA_DIRS)", "False"),
+    ("S3 新しい形: case.name を照らさない",
+     'if name in self.prof["project.profiles"]:', "if True:"),
+    ("S2・S3 新しい形: case.yaml の profile を主の設定と同じに照らさない",
+     "            self.ia_config(rel, view, True)\n", "            pass\n"),
+    ("層 1 新しい形: profile の中を決まった場所で照らさない",
+     "                    if self._known(rel, view, kind, path[1:], value, line):\n",
+     "                    if False:\n"),
+    ("層 1 新しい形: 機体の設定の PLC の宛先を照らさない",
+     "            self._plc_endpoint(rel, view)\n", "            pass\n"),
+    ("R: case.yaml の書かない鍵を通す",
+     'if kind == "key" and _case_forbidden(path, doc.data):', "if False:"),
+    ("R: 組み立て器が組む鍵（profile の根）を通す",
+     '        return p[0] in CASE_ASSEMBLED or p[0] == "paths"\n', '        return p[0] == "paths"\n'),
+    ("R: カメラの機体だけの鍵を通す",
+     "return p[2] in CASE_CAMERA_KEYS or", "return False or"),
+    ("R: sdk を値によらず断る",
+     '(p[2] == "sdk" and _get(data, path) == "file")', '(p[2] == "sdk")'),
+    ("R: PLC の宛先・NAS の置き場を通す",
+     "    return p in CASE_MACHINE_PATHS\n", "    return False\n"),
+    ("R: paths そのものを通す（値の型によらず断る。 #172 の A の MINOR-2）",
+     ' or p[0] == "paths"\n', "\n"),
+    ("R: 製品の書かない鍵を通す",
+     'if kind == "key" and _product_forbidden(path):', "if False:"),
+    ("R: capture の下の書かない鍵を見ない",
+     'top = path[1:] if path[:1] == ("capture",) else path', "top = path"),
+    ("R-opt: auto でも照合の型を通す",
+     'if judge.get("opt_level") == "auto":', "if False:"),
+    ("R-opt: auto でなくても照合の型を断る",
+     'if judge.get("opt_level") == "auto":', "if True:"),
+    ("M: Git にある kind: dev を通す",
+     '            if kind == "dev":\n', "            if False:\n"),
+    ("M: machine.kind を確かめない",
+     "if not isinstance(kind, str) or kind not in MACHINE_KINDS:", "if False:"),
+    ("見本: 照らさない",
+     "            self.example(rel, doc)\n", "            pass\n"),
+    ("見本: IPv4 を通す",
+     "            if _IPV4.search(value):\n", "            if False:\n"),
+    ("見本: 製造番号を通す",
+     'if kind == "key" and value == "serial_number" and _get(doc.data, path) not in (None, ""):',
+     "if False:"),
+    ("見本: 絶対の道を通す",
+     'if kind == "value" and _ABS_PATH.match(value) and not _placeholder_path(value):', "if False:"),
+    ("見本: .. で外へ出る道を /path/to/ の形とみなす",
+     "    n = posixpath.normpath(value)\n", "    n = value\n"),
+    ("見本: Windows の絶対の道を見ない",
+     r'_ABS_PATH = re.compile(r"/|\\|[A-Za-z]:[\\/]")', r'_ABS_PATH = re.compile(r"/|\\")'),
+    ("S4 新しい形: 照らさない",
+     "                    self.refs_new(rel, text)\n", "                    pass\n"),
+    ("S4 新しい形: 前の形にも当てる",
+     "                if self.new_form:\n                    self.refs_new",
+     "                if True:\n                    self.refs_new"),
+    ("S4 新しい形: versions.yaml の注釈の行も照らす",
+     '            if rel in S4_FILES and ln.lstrip().startswith("#"):\n', "            if False:\n"),
+    ("S4 新しい形: versions.dev.yaml を見ない",
+     "bad = bool(_DEV_PIN.search(ln))", "bad = False"),
+    ("S4 新しい形: 見本を指すのを見ない",
+     "(target == DEV_EXAMPLE or target not in self.files)", "(target not in self.files)"),
+    ("S4 新しい形: Git に無い機体の設定を見ない",
+     "(target == DEV_EXAMPLE or target not in self.files)", "(target == DEV_EXAMPLE)"),
+    ("YAML: 同じ鍵を通す",
+     "                if kn.value in names:\n", "                if False:\n"),
+    ("YAML: 別名を通す",
+     "        if id(node) in visited:\n", "        if False:\n"),
+    ("YAML: 数の鍵を通す",
+     'if not isinstance(kn, yaml.ScalarNode) or kn.tag != _YAML_TAG + "str":',
+     "if not isinstance(kn, yaml.ScalarNode):"),
+    ("YAML: << を、 文字でない鍵として断る（誤りの文が違う）",
+     'if kn.tag == _YAML_TAG + "merge":', "if False:"),
+    ("YAML: 知らない型の対応表を通す",
+     'if node.tag != _YAML_TAG + "map":', "if False:"),
+    ("YAML: 知らない型の値を通す",
+     "            if node.tag not in _YAML_SCALARS:\n", "            if False:\n"),
+    ("YAML: 数を読んだ型で照らす（先頭の 0 が消える）",
+     "value = node.value if node.tag in _YAML_AS_WRITTEN else loader.construct_object(node)",
+     "value = loader.construct_object(node)"),
+    # ---- #172 のレビューの直し
+    ("S4 新しい形: 前に道のある機体の設定の参照を拾わない（B-1）",
+     'rf"(?<![{_A}.-])(machines/', 'rf"(?<![{_A}./-])(machines/'),
+    ("新しい形: case.yaml が無いのに新しい置き場があっても前の形として通す（B-2）",
+     "if not self.new_form and any(_stray_new_place(root, f) for f in self.files):", "if False:"),
+    ("新しい形: case.yaml が無いとき、 説明の .md と空の .gitkeep も新しい置き場とみなす",
+     "    if parts[-1].endswith(\".md\") or (parts[-1] == \".gitkeep\" and not os.path.islink(p)",
+     "    if False and (parts[-1] == \".gitkeep\" and not os.path.islink(p)"),
+    ("新しい形: case.yaml が無いとき、 中身のある .gitkeep を除く",
+     "and p.is_file() and p.stat().st_size == 0):", "and p.is_file()):"),
+    ("新しい形: case.yaml の書き違いを見ない",
+     'return len(parts) >= 2 and parts[0] == "recipes" and parts[1].casefold().split(".")[0] == "case"',
+     "return False"),
+    ("新しい形: case.yaml の書き違いの大文字を見ない",
+     'parts[1].casefold().split(".")[0] == "case"', 'parts[1].split(".")[0] == "case"'),
+    ("M-key: 機体に書けない鍵を通す（B-3）",
+     "and not _machine_allowed(path[1:], _get(doc.data, path), dev)):", "and False):"),
+    ("M-key: 開発の機体だけが書ける鍵を、 どの機体でも許す",
+     "        dev = rel == DEV_EXAMPLE or kind == \"dev\"\n", "        dev = True\n"),
+    ("M-key: 見本にも開発の機体だけが書ける鍵を許さない",
+     "        dev = rel == DEV_EXAMPLE or kind == \"dev\"\n", "        dev = kind == \"dev\" and rel != DEV_EXAMPLE\n"),
+    ("M-key: sdk を値によらず許す",
+     '(p[2] == "sdk" and value == "file")', '(p[2] == "sdk")'),
+    ("M-key: paths.work を許す",
+     'return len(p) == 2 and p[1] != "work"', "return len(p) == 2"),
+    ("M-key: 機体の根の鍵を何でも許す",
+     "        return p[0] in MACHINE_ROOT_KEYS\n", "        return True\n"),
+    ("M-key: 機体で上書きできるカメラの鍵を許さない",
+     "        if p[2] in MACHINE_CAMERA_KEYS:\n", "        if False:\n"),
+    ("M-key: plc・nas の決まった鍵を許さない",
+     "    return p in MACHINE_PATHS\n", "    return False\n"),
+    ("見本: machine.kind を照らさない（B-4）",
+     '            if kind != "dev":\n', "            if False:\n"),
+    ("形: 上の段が対応表でなくても止めない（A の MINOR-2）",
+     "        if bad:\n            raise Stop(\"config-field\", f\"profile.{_field_text(bad[0])}",
+     "        if False:\n            raise Stop(\"config-field\", f\"profile.{_field_text(bad[0])}"),
+    ("形: カメラの役ごとの値を見ない",
+     "            bad += [(\"camera\", r) for r, v in cams.items()", "            bad += [(\"camera\", r) for r, v in ()"),
+    ("形: 止めるときに欄を伏せない",
+     'f"profile.{_field_text(bad[0])} を対応表で', 'f"profile.{\'.\'.join(map(str, bad[0]))} を対応表で'),
+    ("形: 機体の設定の上の段を見ない",
+     "        self._shape(rel, doc.data.get(\"profile\"), MACHINE_SHAPES)\n", ""),
 ]
 
 
@@ -1212,6 +1784,14 @@ class MutationTest(unittest.TestCase):
 
     def _all(self, mod) -> "dict[str, list[str]]":
         return {sc.name: problems(mod, sc) for sc in SCENARIOS}
+
+    def _first_failure(self, mod) -> "str | None":
+        """落ちる場面を 1 つ見つけたら止める（確かめるのは「どれかが落ちる」こと。 場面と変異の
+        数の積で時間が増え、 CI の job の時間の上限に近づいたため。 #171）。"""
+        for sc in SCENARIOS:
+            if problems(mod, sc):
+                return sc.name
+        return None
 
     def test_breaking_a_guard_fails_a_scenario(self) -> None:
         src = CHECKER.read_text(encoding="utf-8")
@@ -1228,8 +1808,7 @@ class MutationTest(unittest.TestCase):
             for i, (what, old, new) in enumerate(MUTATIONS):
                 with self.subTest(what):
                     self.assertEqual(src.count(old), 1, "置換前が 1 か所だけ見つかりません（表が古い）")
-                    failed = [k for k, v in self._all(copy(f"m{i:02d}", src.replace(old, new))).items()
-                              if v]
+                    failed = self._first_failure(copy(f"m{i:02d}", src.replace(old, new)))
                     self.assertTrue(failed, "壊しても、 どの場面も落ちません")
 
 

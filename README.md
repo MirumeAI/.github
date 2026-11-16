@@ -148,7 +148,7 @@ python scripts/ci/customer_isolation_check.py --root <顧客 Repository> --repor
 |---|---|
 | 0 | 合格（`--report-only` のときは、混入の疑いがあっても 0） |
 | 1 | 混入の疑い（宣言の外の値・ファイル・構成） |
-| 2 | 宣言・設定・検査の誤り（宣言が無い・読めない・資格情報らしい鍵がある、設定の JSON が読めない・同じ鍵がある、PyYAML が無い など）。照らせないときは合格にしません |
+| 2 | 宣言・設定・検査の誤り（宣言が無い・読めない・資格情報らしい鍵がある、設定の JSON やレシピ・機体の設定の YAML が読めない・同じ鍵がある、PyYAML が無い など）。照らせないときは合格にしません |
 
 見るもの:
 
@@ -162,6 +162,21 @@ python scripts/ci/customer_isolation_check.py --root <顧客 Repository> --repor
 - S5: 記録（`deployment/`・`validation/`。配置の記録・検証の記録と、その手順と証拠のファイル）。記録には値を書かないので、宣言に無い IPv4 と `trig_` で始まる語は不合格。参考だけにするのは雛形の 3 つの `README.md`（`deployment/`・`validation/`・`validation/protocols/`）の中だけで、手順と証拠の `.md` も照らす。鍵 `version` の値（package の版）は IPv4 とみなさない。空でない `.gitkeep` も照らす。下のリンクは読まずに断る。検証の記録の ID の案件の記号（`validation/VR-<記号>-<年>-<連番>.yaml`）が、記録どうしと、`release/` の System Release の ID の記号と同じか
 - S6: 開発の機体だけの設定（`dev/config/`）。置けるのは `dev/config/image-acquisition/<案件の名前>.json` と、説明の `.md` と空の `.gitkeep` だけ。機体へは配らないが、案件の値が入るので、撮像側の設定と同じに照らす（層 1・S2・S3。S2 は、宣言で使うものを切る `enabled: false` を許す。`plc`・`nas`・`ai` の節を書いたら `enabled` を `true` か `false` で書く。無いのも断る）。`dev/config/` の外の `dev/` は照らさない。下のリンクは読まずに断る
 - 参考（不合格にしない）: `deploy/` の中の値と、説明の `.md` の中の値（記録の置き場では、雛形の 3 つの `README.md` だけ）。強制するかは、既存の案件で報告だけの形で流した結果を見て決めます
+
+新しい形（`recipes/case.yaml` がある顧客 Repository）では、レシピ（`recipes/`）と機体の設定（`machines/`）にも同じ照らしを当てます。形と当て先の正本は、development-docs の `03_customer_development/recipes_and_machines.md`（「混入の検査と宣言」）です。前の形（`recipes/case.yaml` が無い）の照らしは変わりません（`recipes/`・`machines/` は照らしません）。ただし、`recipes/case.yaml` が無いのに `machines/`・`recipes/products/` にファイルがある（説明の `.md` と空の `.gitkeep` を除く）か、`recipes/case.yml`・`recipes/Case.yaml` のような書き違いがあれば、照らせないので止まります（終了コード 2）。今の雛形の `recipes/`（`README.md`・`recipes/capture/` など）だけなら、前の形のまま通ります。
+
+- 前の形の撮像側の設定 `config/image-acquisition/config.json` は無くても止まりません。あれば、移る間として前の形と同じに照らします（両方を照らす）。`recipes/case.yaml` がリンク・ファイルでない・Git の外なら止まります（終了コード 2）
+- 層 1: `machines/<記号>.yaml` の `profile` のカメラの IP と製造番号・PLC の宛先（`plc.address`）、`recipes/case.yaml` の `profile` の PLC の番地とトリガ・`shot` のトリガを、撮像側の案件の設定と同じ決まった場所で照らす。補いは `recipes/`・`machines/` のすべてのファイル（`profile` の外の `ports`・`extra_origins` なども。説明の `.md` は参考）
+- S1: 置けるのは `recipes/case.yaml`・`recipes/products/<宣言した製品の名前>.yaml`・`machines/<記号>.yaml`（見本 `machines/dev.example.yaml` も）・移る間の `recipes/capture/<名前>.json`・説明の `.md`・空の `.gitkeep`・宣言した追加のファイル（`config_files.extra` に `recipes/`・`machines/` の下の道を書ける。製品のファイルは追加のファイルにしても、宣言した製品の名前でなければ許しません）
+- S2・S3: `recipes/case.yaml` の `profile` を前の形の主の設定と同じに照らす（`plc`・`nas`・`ai` の節、`flow` か `inspection`、カメラの役、面。節が無い・`plc.enabled` か `ai.enabled` が真偽でない・`flow` と `inspection` のどちらか一方でないときは終了コード 2。`nas.enabled` が無ければ、照らさずにそう言う）。`case.name` は構成の名前として `project.profiles` と照らす（`case.name` が無ければ 2）。機体の設定の `profile` のカメラの役も照らす
+- S4: 前の形と同じ照らしに加えて、`deploy/` と `versions.yaml` が `versions.dev.yaml`・見本 `machines/dev.example.yaml`・Git に無い `machines/<…>.yaml` を指していないか（どれも、前にほかの道があっても。`%h/<…>/machines/<…>.yaml`・`${REPO}/machines/<…>.yaml` も、`machines/` から後ろを Git の物と照らす）。`versions.yaml` は注釈の行（`#` で始まる行）を照らしません（雛形が、書かない先として `versions.dev.yaml` を名指すため）
+- 製品の名前（S3-product）: `recipes/products/` のファイルの名前と `product` が、宣言の `products` の中か
+- レシピに書かない鍵（R-key）: `recipes/case.yaml` の `profile` の、機体だけの鍵（`camera.<役>.serial_number`・`ip_address`・`device_index`、`plc.address`、`nas.mount_path`、`paths`。`plc.address` と `paths` はそのものを、値の型によらず断る）・開発の機体だけが書ける鍵（`camera.<役>.folder`・`loop`、値が `file` の `sdk`）・組み立て器が組む鍵（`pdm_dir`・`pdm_dir_master`・`paths.work`）。製品のレシピの「レシピに書かない鍵」（根か `capture` の下の `name`・`save_name`・`verified`・`extract_mark`・`updated_at`・`extract_history`・`extract_history_broken`、`extract._meta`・`judge._meta`・`extract.sam.device`・`judge.device`・`judge.threshold`・`judge.threshold_bank_at`・`judge.dino_scale`・`judge.print_fields_geom`・`judge.print_fields_sig`）。値が空でも、鍵があれば断ります
+- 照合の型（R-opt）: `judge.opt_level` が `auto` なのに、`judge` に `match`・`window_radius`・`edge_margin`・`method`・`layers`・`top_percent` がある
+- 機体の設定（M-）: Git にある `machine.kind` が `dev` の設定（見本を除く。`kind` が `installed`・`shown`・`dev` のどれでもなければ終了コード 2）。`profile` の、機体に書けない鍵（M-key。書けるのは機体だけの鍵と機体で上書きできる鍵〔`camera.<役>.serial_number`・`ip_address`・`device_index`・`rotate`・`exposure_time`・`gain`・`apply_settings`、`plc.address`〔`host`・`port`〕、`nas.mount_path`・`keep_back_days`、`paths.work` を除く `paths` の下、`ai_workers`〕と、`kind: dev` の設定と見本だけは開発の機体だけが書ける鍵〔`camera.<役>.folder`・`loop`、値が `file` の `sdk`〕。`_profile`・`flow`・`plc.enabled` なども断る）。見本の `machine.kind` が `dev` でない（`machine` が無いときも。M-example-kind）。見本 `machines/dev.example.yaml` の中の IPv4（`127.0.0.1` などの一般の値も）・製造番号（`serial_number` の空でない値）・`/path/to/` で始まらない絶対の道（`..` で外へ出る道と Windows の道も）
+- 照らす鍵の上の段が対応表でなければ、照らせないので止まります（終了コード 2）: `recipes/case.yaml` の `profile` の `camera` とその役ごとの値・`nas`、機体の設定の `profile` の `camera` とその役ごとの値・`plc`・`plc.address`・`nas`・`paths`
+- レシピと機体の設定の YAML は、宣言と同じく別名（`*`）・`<<`・同じ鍵の重複・文字でない鍵を断り、知らない型（`!!binary`・`!!set` など）も断ります（終了コード 2）。数と日付の値は、書いたままの字で照らします（YAML では、引用符の無い先頭が 0 の数が 8 進として読まれるため）
+- Git の外の開発の機体の設定は照らしません。製品のパッケージのコード（`src/`・`tests/`・根の `pyproject.toml`）も照らしません（範囲に入れるかは人の判断。決まるまでは Reviewer B が見ます）
 
 宣言の例（値は文書用の架空のもの）:
 
@@ -188,6 +203,7 @@ plc:
   addresses: [EXAMPLE_D100, EXAMPLE_D101]
 triggers: [trig_example_top, trig_example_side]
 faces: [trig_example_top, trig_example_side]
+products: [example_product]      # 新しい形の recipes/products/<製品>.yaml のファイルの名前と product
 config_files:
   extra:                         # Core が読む決まった名前の外に置くファイル。理由を書く
     - path: config/image-acquisition/example_extra.json
@@ -199,7 +215,7 @@ extensions: []                   # plugins/ の拡張の名前（今は数えて
 - この検査が見ないもの: 宣言の注釈（`#` の後）は読みません。注釈にも、資格情報とほかの案件の値を書きません（秘密の走査〔`basic_checks.py`〕が探すのは決まった形の鍵だけで、パスワードなどの決まった形でないものと、ほかの案件の値は、どちらの検査も見つけません）。`versions.yaml` は、設定のファイルへの参照（S4）だけを見て、版やタグの値は見ません
 - 鍵は文字で書きます。数で書く値（製造番号など）は引用符で囲みます（YAML では先頭の 0 などが消えます）
 - `127.` と `255.` で始まる IP、`0.0.0.0`、Core の鍵 `trig_bit`・`trig_ready` は宣言しなくて構いません。文書用の網（`192.0.2.x` など）は除きません
-- 値は出力しません。出すのは種類・ファイル・行・欄だけです（決まっていない名前は `<*>` と `<伏せ#n>`）
+- 値は出力しません。出すのは種類・ファイル・行・欄だけです（決まっていない名前は `<*>` と `<伏せ#n>`）。製品の名前と機体の記号も、ファイルの道の中で伏せます。製品の名前を足す・変える Pull Request は、宣言の値を変える Pull Request として人が値を確かめます
 - PR では、基準の commit の宣言と比べた増減の数を出します。増えていれば `PROFILE EXPANSION DETECTED` と出る（Actions では注意としても出る）ので、増えた値が本当にこの案件のものかをレビューで確かめてください（設定と宣言の両方へ同じ誤った値を足すと、照合では見つかりません）
 - **これは事故を止める検査で、悪意のある変更を止める境界ではありません。** PR の CI は PR の側の workflow で動くので、PR はこの検査を外せます。宣言と workflow の変更はレビューで見ます
 

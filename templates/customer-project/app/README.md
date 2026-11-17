@@ -13,9 +13,9 @@
 ## 守ること
 
 - **Core の内部を import しない。** Core を直すたびに製品が壊れ、Core の写しを持つのと同じになります
-- **認証とライセンスの門番を外さず、迂回しない。** 製品アプリは PDM の Web アプリを直に開かず、門番 `pdm_guard.app:app` を通します。PDM 側の製品の API と画面は門番の内側に置きます。入口を開く・`allow_ports` を広げる変更は、守りの境として人の判断が要ります
+- **認証とライセンスの門番を外さず、迂回しない。** 製品アプリは PDM の Web アプリを直に開かず、門番 `mirumeai_ia.guard.app:app` を通します（前の名前 `pdm_guard.app:app` は、撮像側の clone の中で `MirumeAI/development-docs#392` の段 6 まで同じ門番を返し、撮像側の wheel には入りません）。PDM 側の製品の API と画面は門番の内側に置きます。入口を開く・`allow_ports` を広げる変更は、守りの境として人の判断が要ります
 - 検査側の製品の API と画面は、今の検査の Web アプリと同じ扱いです（認証は無く、別サイトからの要求を断る守りだけです）。副作用のある入口は POST にします
-- 判定の結果は、判定できない・エラー・知らない状態を良品にしません（撮像側の `docs/public_api.md` の Python の部品 `control.inspection.result` が、この扱いを持つ形です）
+- 判定の結果は、判定できない・エラー・知らない状態を良品にしません（撮像側の `docs/public_api.md` の Python の部品 `mirumeai_ia.control.inspection.result` が、この扱いを持つ形です。前の名前 `control.inspection.result` は、撮像側の clone の中で段 6 まで同じ物を返し、撮像側の wheel には入りません）
 - 開発の機体で案件を固定するときは `MIRUME_DEV_CONFIG` を使います。顧客に見せる機体を含め、開発の機体でないものでは使いません。据え付けた機体の製品の起動は `INSPECTION_CONFIG` を必ず渡します（無いと、デモと保存済み画像のカメラの断りが効きません。両方あるときは `INSPECTION_CONFIG` が先です）。開発の機体の設定は `dev/config/image-acquisition/<案件の名前>.json` に置きます（`dev/README.md`）
 
 ## 置かないもの

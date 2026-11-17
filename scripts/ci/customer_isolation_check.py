@@ -69,8 +69,10 @@
           空の .gitkeep）のほかが無い**（据え付けの計画が無く、 開発の機体だけの設定だけを置く案件。 #182）
           ときは、 ここに置いた設定のそれぞれを主の設定の代わりに照らす（plc・nas・ai の節と、 flow か
           inspection の一方が無ければ止める。 宣言で使うものを切るのは、 PLC も含めて許す）。 `config/` に
-          説明のほかがある・Git の外に主の設定がある・代わりにできる設定が無い（置き場の途中が
-          リンクのときも）なら、 照らす相手が無いので止める（終了コード 2）
+          説明のほかがある・代わりにできる設定が無い（置き場の途中がリンクのときも）なら、 照らす
+          相手が無いので止める（終了コード 2）。 検査する作業ツリーに Git の外の主の設定があるときも
+          止める（新しい clone で流す Required Verification には無い。 Git に入らないので混入の道でない）。
+          前の形で、 根に config/・dev/ の大文字小文字の書き違いの置き場があれば、 範囲の外なので止める
 
 新しい形（`recipes/case.yaml` がある Repository。 #171）では、 レシピ（`recipes/`）と機体の
 設定（`machines/`）にも、 同じ照らしを当てる（当て先の正本は development-docs の
@@ -772,13 +774,31 @@ def _schema_path(path: tuple) -> str:
 # ---------------------------------------------------------------- 設定のファイル
 
 
+#: 根の置き場のうち、 大文字小文字の書き違い（`Config/`・`DEV/` など）も見る物（#182）。
+_CASE_TOPS = ("config", "dev")
+
+
+def _is_case_stray(top: str) -> bool:
+    return top.lower() in _CASE_TOPS and top not in _CASE_TOPS
+
+
 def list_files(root: Path) -> "list[str]":
     """config/・deploy/・deployment/・validation/・dev/・versions.yaml と、 新しい形の recipes/・machines/ の、
     追跡しているもの + まだ add していない新しいもの。
 
     git のリポジトリでなければ、 フォルダをたどる（リンクはたどらず、 一覧に載せて断る）。
     """
-    specs = ("config", "deploy", "deployment", "validation", "dev", "versions.yaml") + NEW_DIRS
+    return list_files_and_strays(root)[0]
+
+
+def list_files_and_strays(root: Path) -> tuple:
+    """`(list_files の一覧, 根の config・dev の大文字小文字の書き違いの名前)`（#182）。
+
+    書き違いは、 同じ `git ls-files` の呼び出しで、 config と dev の pathspec に大文字小文字を問わない
+    印（`:(icase)`）を付けて引く（呼び出しの数を増やさない）。 Git でなければ、 根の名前を見る。
+    """
+    specs = (":(icase)config", "deploy", "deployment", "validation", ":(icase)dev",
+             "versions.yaml") + NEW_DIRS
     if (root / ".git").exists():
         seen: "set[bytes]" = set()
         for extra in ((), ("--others", "--exclude-standard")):
@@ -787,7 +807,15 @@ def list_files(root: Path) -> "list[str]":
             if r.returncode != 0:
                 raise Stop("git", "git の一覧を読めません")
             seen.update(raw for raw in r.stdout.split(b"\0") if raw)
-        return sorted(os.fsdecode(raw) for raw in seen)
+        files, strays = [], set()
+        for rel in (os.fsdecode(raw) for raw in seen):
+            top = rel.split("/", 1)[0]
+            if _is_case_stray(top):
+                strays.add(top)
+            else:
+                files.append(rel)
+        return sorted(files), sorted(strays)
+    strays = sorted(n for n in os.listdir(root) if _is_case_stray(n))
     out = ["versions.yaml"] if os.path.lexists(root / "versions.yaml") else []
     for top in ("config", "deploy", "deployment", "validation", "dev") + NEW_DIRS:
         if os.path.islink(root / top):
@@ -798,7 +826,7 @@ def list_files(root: Path) -> "list[str]":
             links = [n for n in dirs if os.path.islink(os.path.join(d, n))]
             out.extend(f"{rel_d}/{n}" for n in links + files)
             dirs[:] = [n for n in dirs if n not in links]
-    return sorted(out)
+    return sorted(out), strays
 
 
 def _read(root: Path, rel: str) -> str:
@@ -1636,7 +1664,8 @@ class Checker:
 
     def run(self) -> None:
         root = self.root
-        self.files = [f for f in list_files(root) if os.path.lexists(root / f)]
+        listed, case_strays = list_files_and_strays(root)
+        self.files = [f for f in listed if os.path.lexists(root / f)]
         # **新しい形**（#171）: recipes/case.yaml があれば、 レシピと機体の設定を照らす。 前の形の主の設定は
         # 無くてよい（あれば前の形と同じに照らす。 移る間は両方ある）
         self.new_form = CASE in self.files or os.path.lexists(root / CASE)
@@ -1650,6 +1679,13 @@ class Checker:
                               or os.path.islink(case) or not case.is_file()):
             raise Stop("config-missing", f"{CASE} を読めません（リンク・ファイルでない・Git の外。"
                        " 照らす相手が無いので、 合格にしません）")
+        if not self.new_form:
+            # 前の形の置き場の、 大文字小文字の書き違い（`Config/`・`DEV/` など。 #182）。 照らす範囲の外に
+            # 設定を置いたまま、 小文字の置き場で照らして合格にしない
+            stray = case_strays
+            if stray:
+                raise Stop("config-missing", "根に config/・dev/ の書き違い（大文字小文字）に見える置き場が"
+                           f" {len(stray)} つあります。 照らす範囲の外なので、 合格にしません")
         main = root / IA_MAIN
         if not self.new_form and (IA_MAIN not in self.files or os.path.islink(main) or not main.is_file()):
             # 前の形で主の設定が無い（#182）。 据え付けの計画が無く、 開発の機体だけの設定だけを置く案件は、
@@ -1657,7 +1693,8 @@ class Checker:
             absent = self._old_config_absent()
             self.dev_main = self._dev_mains() if absent else []
             if not self.dev_main:
-                why = ("開発の機体だけの設定 " + DEV_IA_DIR + "<名前>.json も無い" if absent
+                why = ("置いてよい形（" + DEV_IA_DIR + "<名前>.json。 置き場の途中がリンクでない）の"
+                       "開発の機体だけの設定も無い" if absent
                        else "config/ に説明のほかのファイルがあるので、 開発の機体だけの設定で代えない")
                 raise Stop("config-missing",
                            f"{IA_MAIN} がありません（{why}。 照らす相手が無いので、 合格にしません）")

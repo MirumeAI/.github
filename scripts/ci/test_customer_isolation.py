@@ -933,6 +933,12 @@ def scenarios() -> "list[Scenario]":
         dev + "example.json": no("flow")}), 0, absent=("主の設定の代わりに照らしました",))
     add("D15b. config/ があれば、 宣言で使う PLC を開発の機体で切るのは今のまま許す", _with(b_files(), **{
         dev + "example.json": _json(bdev)}), 0)
+    # 根の config/・dev/ の大文字小文字の書き違い。 範囲の外に設定を置いたまま、 小文字の置き場で照らして
+    # 合格にしない（Reviewer B の所見。 書き違いの置き場の値は出力に出さない）
+    add("D16. 根の Config/ に B の構成を置き、 開発の設定だけで照らす形は止める", d_files(**{
+        "Config__image-acquisition__config.json": _json(b_config())}), 2, error="config-missing")
+    add("D16b. config/ があっても、 根の Dev/ の書き違いがあれば止める", a_with(**{
+        "Dev__config__image-acquisition__example.json": _json(b_config())}), 2, error="config-missing")
 
     # ---- S4: 据え付けの設定が、 開発の機体だけの設定を指さない（#156）
     add("S4-dev a. deploy/ が MIRUME_DEV_CONFIG を渡すのは不合格", a_with(**{
@@ -1680,7 +1686,9 @@ MUTATIONS = [
     ("S6: dev/config そのもののリンクを見ない",
      'if rel not in ("dev", DEV_DIR[:-1]) and', 'if rel not in ("dev",) and'),
     ("S6: ファイルを集めるときに dev/ を見ない",
-     '"validation", "dev", "versions.yaml")', '"validation", "versions.yaml")'),
+     '"validation", ":(icase)dev",', '"validation",'),
+    ("書き違い: 根の config/・dev/ の大文字小文字の書き違いを見ない",
+     "            if _is_case_stray(top):\n", "            if False:\n"),
     ("S6: 決まりの外のファイルを通す",
      "            code = self.s6(rel)\n", "            code = None\n"),
     ("S6: 撮像側の置き場の下のフォルダを通す",

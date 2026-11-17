@@ -254,6 +254,31 @@ def _with(files: dict, **changes) -> dict:
     return out
 
 
+DEV_IA = "dev/config/image-acquisition/"
+
+
+def a_dev_config(**changes) -> dict:
+    """A の開発の機体の設定（保存済み画像のカメラ・AI を切る）。"""
+    d = a_config()
+    d["camera"] = {"camera1": {"camera_type": "area", "sdk": "file",
+                               "image_dir": "../samples"}}
+    d["ai"] = {"enabled": False}
+    d.update(changes)
+    return d
+
+
+def d_files(**changes) -> dict:
+    """前の形（`recipes/case.yaml` が無い）で、 据え付けの計画が無く、 開発の機体だけの設定だけを置く
+    案件 A のリポジトリ（#182）。 `config/` には雛形の説明だけがある。 鍵は `_with` と同じ。"""
+    return _with({
+        "customer-profile.yaml": _yaml(a_profile()),
+        "config/README.md": "# config/\n",
+        "dev/README.md": "# dev\n",
+        DEV_IA + "example.json": _json(a_dev_config()),
+        "versions.yaml": "schema_version: 1\n",
+    }, **changes)
+
+
 # ---- 新しい形（recipes/case.yaml がある Repository。 #171）。 形は development-docs の
 # `03_customer_development/recipes_and_machines.md`。 値はすべて架空で、 上の 2 つの案件のもの。
 
@@ -787,13 +812,7 @@ def scenarios() -> "list[Scenario]":
     dev = "dev__config__image-acquisition__"
 
     def a_dev(**changes) -> str:
-        """A の開発の機体の設定（保存済み画像のカメラ・AI を切る）。"""
-        d = a_config()
-        d["camera"] = {"camera1": {"camera_type": "area", "sdk": "file",
-                                   "image_dir": "../samples"}}
-        d["ai"] = {"enabled": False}
-        d.update(changes)
-        return _json(d)
+        return _json(a_dev_config(**changes))
 
     add("S6a. 開発の設定と説明だけなら通る（宣言で使うものを切ってよい）", a_with(**{
         "dev__README.md": "# dev\n", "dev__config__image-acquisition__.gitkeep": "",
@@ -836,6 +855,84 @@ def scenarios() -> "list[Scenario]":
         dev + "example.json": a_dev(ai={"enabled": 1})}), 1, {"S6-enabled"})
     add("S6n. 決まりの外のファイルの中の値も照らす", a_with(**{
         "dev__config__example.yaml": f"camera: {B_IPS[3]}\n"}), 1, {"S6-file", "L1-endpoint"})
+
+    # ---- 前の形で config/ に説明のほかが無く、 開発の機体だけの設定だけを置く案件（#182）。
+    # dev/config/ の設定を主の設定の代わりに照らす（開発の機体でも主の設定として読まれる）
+    def no(key: str) -> str:
+        d = a_dev_config()
+        del d[key]
+        return _json(d)
+
+    add("D1. 開発の設定だけで宣言と合えば通る（config/ は雛形の説明と空の .gitkeep だけ）", d_files(**{
+        "config__image-acquisition__.gitkeep": ""}), 0,
+        texts=("主の設定の代わりに照らしました", "dev/config/）のファイル 1"))
+    add("D1b. config/ がまったく無くても、 開発の設定を照らす", d_files(**{"config__README.md": None}), 0,
+        texts=("主の設定の代わりに照らしました",))
+    add("D2. 開発の設定に B の構成をまるごと置く", d_files(**{dev + "example.json": _json(b_config())}), 1,
+        {"S2-plc", "S2-nas", "S3-profile", "S3-flow", "S3-camera", "S3-face",
+         "L1-endpoint", "L1-serial", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
+    add("D3. 開発の設定の中の、 宣言に無いカメラの IP は不合格", d_files(**{
+        dev + "example.json": a_dev(camera={"camera1": {"ip_address": B_IPS[0]}})}), 1,
+        {"L1-endpoint"})
+    add("D4. 宣言で使わないものを開発の設定で使うのは不合格", d_files(**{
+        dev + "example.json": a_dev(nas={"enabled": True})}), 1, {"S2-nas"})
+    add("D5. 開発の設定が 2 つなら、 どちらも主の設定の代わりに照らす", d_files(**{
+        dev + "example2.json": a_dev(shot={"camera1": {"camera_type": "area",
+                                                        "triggers": [A_TRIGGER, B_TRIGGERS[2]]}})}),
+        1, {"L1-trigger"})
+    add("D5b. 開発の設定が 2 つとも宣言と合えば通る", d_files(**{dev + "example2.json": a_dev()}), 0,
+        texts=("dev/config/）のファイル 2",))
+    add("D6. 主の設定の代わりなので、 flow も inspection も無ければ止める", d_files(**{
+        dev + "example.json": no("flow")}), 2, error="config-field")
+    add("D6b. 主の設定の代わりなので、 flow と inspection の両方があれば止める", d_files(**{
+        dev + "example.json": a_dev(inspection={"axis_example": "value_example"})}), 2,
+        error="config-field")
+    for tag, key in (("", "plc"), ("b", "nas"), ("c", "ai")):
+        add(f"D7{tag}. 主の設定の代わりなので、 {key} の節が無ければ止める", d_files(**{
+            dev + "example.json": no(key)}), 2, error="config-field")
+    add("D8. 開発の設定の enabled が真偽でなければ不合格（今の S6 と同じ）", d_files(**{
+        dev + "example.json": a_dev(ai={})}), 1, {"S6-enabled"})
+    bdev = b_config()
+    bdev["plc"]["enabled"] = False
+    bdev["nas"] = {"enabled": False}
+    add("D9. 宣言で使う PLC・NAS を開発の機体で切るのは許す（主の設定の代わりでも）", {
+        "customer-profile.yaml": _yaml(b_profile()), DEV_IA + "example.json": _json(bdev)}, 0)
+    # config/ に説明のほかがある（据え付けの設定を書きかけた・消し忘れた形）なら、 今どおり止める
+    for tag, key, body in (("", "config__image-acquisition__recipe.json", _json({})),
+                           ("b", "config__pdm__align_reference.txt", "EXAMPLE-LOT-0001\n"),
+                           ("c", "config__pdm__capture__.gitkeep", "x\n"),
+                           ("d", "config__image-acquisition__config.json",
+                            Link("../../dev/config/image-acquisition/example.json")),
+                           ("f", "config__README.md", Link("../dev/README.md"))):
+        add(f"D10{tag}. config/ に説明のほかがあれば、 開発の設定で代えずに止める", d_files(**{key: body}), 2,
+            error="config-missing")
+    add("D10e. config そのもののリンクも止める", d_files(**{
+        "config__README.md": None, "config": Link("dev/config")}), 2, error="config-missing")
+    add("D10g. Git の外（.gitignore）に主の設定があれば止める", d_files(**{
+        ".gitignore": "/config/image-acquisition/config.json\n",
+        "config__image-acquisition__config.json": _json(a_config())}), 2, error="config-missing")
+    # どちらも無い・代わりにできる開発の設定が無いなら、 今どおり止める
+    add("D11. config/image-acquisition/config.json も開発の設定も無ければ止める", d_files(**{
+        dev + "example.json": None}), 2, error="config-missing")
+    for tag, key, body in (("b", dev + "sub__example.json", a_dev()),
+                           ("c", dev + ".example.json", a_dev()),
+                           ("d", dev + "example.txt", "x\n"),
+                           ("e", "dev__config__example.json", a_dev()),
+                           ("f", dev + "example.json", Link("../../README.md"))):
+        add(f"D11{tag}. 開発の設定が決まりの外かリンクだけなら、 代わりにせずに止める", d_files(**{
+            dev + "example.json": None, key: body}), 2, error="config-missing")
+    add("D12. --report-only は 0 で終える（所見は出す）", d_files(**{
+        dev + "example.json": a_dev(camera={"camera1": {"ip_address": B_IPS[0]}})}), 0,
+        {"L1-endpoint"}, args=("--report-only",), texts=("REPORT ONLY",))
+    for tag, args in (("", ()), ("b", ("--report-only",))):
+        add(f"D13{tag}. 宣言が初期形のままなら、 開発の設定だけでも止める", d_files(**{
+            "customer-profile.yaml": initial}), 2, error="profile-schema", args=args)
+    add("D14. deploy/ が無い主の設定に触れるのは不合格", d_files(**{
+        SERVICE.replace("/", "__"): a_files()[SERVICE]}), 1, {"S4-missing"})
+    add("D15. config/ があれば、 開発の設定は今のまま（主の設定として扱わない）", a_with(**{
+        dev + "example.json": no("flow")}), 0, absent=("主の設定の代わりに照らしました",))
+    add("D15b. config/ があれば、 宣言で使う PLC を開発の機体で切るのは今のまま許す", _with(b_files(), **{
+        dev + "example.json": _json(bdev)}), 0)
 
     # ---- S4: 据え付けの設定が、 開発の機体だけの設定を指さない（#156）
     add("S4-dev a. deploy/ が MIRUME_DEV_CONFIG を渡すのは不合格", a_with(**{
@@ -1383,6 +1480,21 @@ class SyntheticScenariosTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("ERROR [config-missing]", out)
 
+    def test_a_symlinked_dev_config_is_not_used_for_the_main_config(self) -> None:
+        """Git の一覧にある開発の設定でも、 置き場の途中がリンクなら、 主の設定の代わりにしない（#182）。
+        リンクの先（根の外）の設定を照らして通さず、 照らす相手が無いので止める。"""
+        with tempfile.TemporaryDirectory() as td:
+            outside, root = Path(td) / "outside", Path(td) / "repo"
+            _write(outside, {"image-acquisition/example.json": _json(b_config())})
+            _build(root, [d_files()])
+            shutil.rmtree(root / "dev" / "config")         # commit した後に、 置き場をリンクに替える
+            os.symlink(outside, root / "dev" / "config")
+            self.assertIn(DEV_IA + "example.json", I.list_files(root))
+            code, out = run_in(I, root)
+        self.assertEqual(code, 2, out)
+        self.assertIn("ERROR [config-missing]", out)
+        self.assertFalse([v for v in NOT_SHOWN if v in out])
+
     def test_long_unset_lines_stay_fast(self) -> None:
         """外す形の見分けが、 長い行で時間を 2 乗にしない（#156 の A の MINOR-5）。"""
         line = "del " * 20000 + "x; " + "UnsetEnvironment= " * 5000 + "MIRUME_DEV_CONFIG=/x"
@@ -1775,6 +1887,22 @@ MUTATIONS = [
      'f"profile.{_field_text(bad[0])} を対応表で', 'f"profile.{\'.\'.join(map(str, bad[0]))} を対応表で'),
     ("形: 機体の設定の上の段を見ない",
      "        self._shape(rel, doc.data.get(\"profile\"), MACHINE_SHAPES)\n", ""),
+    # ---- 前の形で主の設定が無いとき、 開発の機体だけの設定を主の設定の代わりに照らす（#182）
+    ("#182: 開発の機体だけの設定を主の設定の代わりにしない（直す前）",
+     "            self.dev_main = self._dev_mains() if absent else []\n", "            self.dev_main = []\n"),
+    ("#182: 主の設定の代わりにする開発の設定を、 主の設定と同じに照らさない",
+     "self.ia_config(rel, doc, rel == IA_MAIN or rel in self.dev_main)", "self.ia_config(rel, doc, rel == IA_MAIN)"),
+    ("#182: config/ に説明のほかがあっても、 開発の設定で代える",
+     "            if os.path.islink(p) or not (name.endswith(\".md\")",
+     "            if False and (name.endswith(\".md\")"),
+    ("#182: Git の外に主の設定があっても、 開発の設定で代える",
+     "        if os.path.lexists(root / IA_MAIN):\n", "        if False:\n"),
+    ("#182: 決まりの外の開発の設定のファイルも、 主の設定の代わりにする",
+     "and self.s6(rel) is None and (root / rel).is_file()]", "and (root / rel).is_file()]"),
+    ("#182: 主の設定の代わりにする開発の設定で、 宣言で使う PLC を切るのを断る",
+     "elif main and not dev and enabled is not True:", "elif main and enabled is not True:"),
+    ("#182: 主の設定の代わりにする開発の設定に節が無くても止めない",
+     "            if main and cap not in d:\n", "            if False:\n"),
 ]
 
 

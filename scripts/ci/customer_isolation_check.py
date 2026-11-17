@@ -65,6 +65,12 @@
           S3）。 ただし S2 は、 宣言で使うものを開発の機体で切る（`enabled: false`）のは
           許す。 開発の機体では主の設定として読まれるので、 plc・nas・ai の節を書いたら、
           enabled を true か false で書く（無いのも断る）。 dev/config/ の外の dev/ は照らさない。 下のリンクは読まずに断る
+          **前の形で主の設定 `config/image-acquisition/config.json` が無く、 `config/` に説明（.md と
+          空の .gitkeep）のほかが無い**（据え付けの計画が無く、 開発の機体だけの設定だけを置く案件。 #182）
+          ときは、 ここに置いた設定のそれぞれを主の設定の代わりに照らす（plc・nas・ai の節と、 flow か
+          inspection の一方が無ければ止める。 宣言で使うものを切るのは、 PLC も含めて許す）。 `config/` に
+          説明のほかがある・Git の外に主の設定がある・代わりにできる設定が無い（置き場の途中が
+          リンクのときも）なら、 照らす相手が無いので止める（終了コード 2）
 
 新しい形（`recipes/case.yaml` がある Repository。 #171）では、 レシピ（`recipes/`）と機体の
 設定（`machines/`）にも、 同じ照らしを当てる（当て先の正本は development-docs の
@@ -1080,6 +1086,8 @@ class Checker:
         self.counts = {"config": 0, "refs": 0, "records": 0, "dev": 0, "new": 0}
         #: 新しい形（`recipes/case.yaml` がある。 #171）か。 `run` で決める。
         self.new_form = False
+        #: 前の形で主の設定が無いとき、 主の設定の代わりに照らす開発の機体だけの設定（#182）。 `run` で決める。
+        self.dev_main: "list[str]" = []
         #: 所見の欄の前に足す道（新しい形の `profile` の中を、 撮像側の設定と同じに照らすとき）。
         self._at: tuple = ()
         self._endpoints = prof.endpoints()
@@ -1217,14 +1225,51 @@ class Checker:
             return None
         return "S6-file"
 
+    # ---- 前の形で主の設定が無いとき（#182）
+
+    def _old_config_absent(self) -> bool:
+        """前の形の主の設定の置き場 `config/` に、 説明（.md と空の .gitkeep）のほかが無いか。
+
+        **迷う形は「ある」とみなす**（リンク・Git の外の主の設定も）。 据え付けの設定を書きかけた・
+        消し忘れた形を、 開発の機体だけの設定で代えて通さない。
+        """
+        root = self.root
+        if os.path.lexists(root / IA_MAIN):
+            return False        # Git の外（.gitignore など）の主の設定も、 あるとみなす
+        for rel in self.files:
+            if rel != "config" and not rel.startswith("config/"):
+                continue
+            p, name = root / rel, rel.rsplit("/", 1)[-1]
+            if os.path.islink(p) or not (name.endswith(".md")
+                                         or (name == ".gitkeep" and p.stat().st_size == 0)):
+                return False
+        return True
+
+    def _dev_mains(self) -> "list[str]":
+        """主の設定の代わりに照らす、 開発の機体だけの設定（S6 で置いてよい
+        `dev/config/image-acquisition/<名前>.json`。 置いてあるものすべて）。
+
+        置き場の途中（`dev`・`dev/config`・`dev/config/image-acquisition`）がリンクなら、 代わりにしない
+        （Git の一覧にあるファイルを、 リンクの先で読まない）。
+        """
+        root = self.root
+        if any(os.path.islink(root / d) for d in ("dev", DEV_DIR[:-1], DEV_IA_DIR[:-1])):
+            return []
+        return [rel for rel in self.files
+                if rel.startswith(DEV_IA_DIR) and rel.endswith(".json")
+                and self.s6(rel) is None and (root / rel).is_file()]
+
     # ---- S2・S3（撮像側の案件の設定）
 
     def ia_config(self, rel: str, doc: JsonDoc, main: bool) -> None:
         d, prof = doc.data, self.prof
         if not isinstance(d, dict):
             raise Stop("config-field", "設定の全体が対応表ではありません", rel)
-        # 開発の機体だけの設定（S6）は、 宣言で使うものを切ってよい（PLC・NAS の無い開発の機体）
+        # 開発の機体だけの設定（S6）は、 宣言で使うものを切ってよい（PLC・NAS の無い開発の機体）。
+        # 前の形で主の設定が無く、 主の設定の代わりに照らすとき（#182。 `main` が真）も同じ
         dev = rel.startswith(DEV_IA_DIR)
+        why = ("開発の機体では主の設定として読まれ、 主の設定の代わりに照らしています" if dev
+               else "Core の配る道具も止める形です")
 
         # S2: 使うかどうか。 **書いていないものを推測しない。** 主の設定で、 Core の
         # 配る道具も止める形（節が無い、 plc.enabled・ai.enabled が真偽でない）は 2 で止める。
@@ -1234,12 +1279,12 @@ class Checker:
             sec = d.get(cap)
             enabled = sec.get("enabled") if isinstance(sec, dict) else None
             line = doc.line("key", (cap,))
+            if main and cap not in d:
+                raise Stop("config-field", f"{cap} の節がありません（{why}）", rel)
             if dev and not isinstance(enabled, bool):
                 # 開発の機体では主の設定として読まれる。 真偽でない値を照らさずに通さない
                 self.add("S6-enabled", rel, doc.line("value", (cap, "enabled")) or line, (cap, "enabled"))
                 continue
-            if main and cap not in d:
-                raise Stop("config-field", f"{cap} の節がありません（Core の配る道具も止める形です）", rel)
             if main and cap != "nas" and not isinstance(enabled, bool):
                 raise Stop("config-field", f"{cap}.enabled を true か false で書いてください"
                            "（Core の配る道具も止める形です）", rel)
@@ -1249,7 +1294,7 @@ class Checker:
                     if not (isinstance(sec, dict) and list(sec) == ["enabled"]
                             and sec["enabled"] is False):
                         self.add("S2-plc", rel, line, ("plc",))
-                elif main and enabled is not True:
+                elif main and not dev and enabled is not True:
                     self.add("S2-plc-enabled", rel, line, ("plc", "enabled"))
             elif not isinstance(enabled, bool):
                 self.skipped.append((cap, rel))          # 照らさずに、 そう言う
@@ -1266,8 +1311,7 @@ class Checker:
                 self.add("S3-profile", rel, doc.line("value", ("_profile",)), ("_profile",))
         has_flow, has_ins = "flow" in d, "inspection" in d
         if main and has_flow == has_ins:
-            raise Stop("config-field", "flow か inspection のどちらか一方を書いてください"
-                       "（Core の配る道具も止める形です）", rel)
+            raise Stop("config-field", f"flow か inspection のどちらか一方を書いてください（{why}）", rel)
         if has_flow and d["flow"] != prof.flow:
             self.add("S3-flow", rel, doc.line("value", ("flow",))
                      or doc.line("key", ("flow",)), ("flow",))
@@ -1608,8 +1652,15 @@ class Checker:
                        " 照らす相手が無いので、 合格にしません）")
         main = root / IA_MAIN
         if not self.new_form and (IA_MAIN not in self.files or os.path.islink(main) or not main.is_file()):
-            raise Stop("config-missing",
-                       f"{IA_MAIN} がありません（照らす相手が無いので、 合格にしません）")
+            # 前の形で主の設定が無い（#182）。 据え付けの計画が無く、 開発の機体だけの設定だけを置く案件は、
+            # その設定を主の設定の代わりに照らす。 config/ に説明のほかがある・代わりにできる設定が無いなら止める
+            absent = self._old_config_absent()
+            self.dev_main = self._dev_mains() if absent else []
+            if not self.dev_main:
+                why = ("開発の機体だけの設定 " + DEV_IA_DIR + "<名前>.json も無い" if absent
+                       else "config/ に説明のほかのファイルがあるので、 開発の機体だけの設定で代えない")
+                raise Stop("config-missing",
+                           f"{IA_MAIN} がありません（{why}。 照らす相手が無いので、 合格にしません）")
         docs: "dict[str, JsonDoc]" = {}
         for rel in self.files:
             if not rel.startswith("config/"):
@@ -1670,7 +1721,7 @@ class Checker:
             self.new_places(docs)
         for rel, doc in docs.items():
             if _is_ia_config(rel, doc.data):
-                self.ia_config(rel, doc, rel == IA_MAIN)
+                self.ia_config(rel, doc, rel == IA_MAIN or rel in self.dev_main)
             self.entries(rel, doc)
         for rel in self.files:
             if not (rel in S4_FILES or rel == "deploy" or rel.startswith("deploy/")):
@@ -1930,6 +1981,9 @@ def run(root: Path, base: "str | None", report_only: bool) -> int:
     found, notes = _unique(ck.findings), _unique(ck.notes)
     if ck.new_form:
         print(f"新しい形（{CASE} がある）として、 レシピと機体の設定も照らしました")
+    if ck.dev_main:
+        print(f"前の形で {IA_MAIN} が無いので、 開発の機体だけの設定（{DEV_IA_DIR} のファイル"
+              f" {len(ck.dev_main)}）を主の設定の代わりに照らしました")
     print(f"検査: config/ の設定のファイル {ck.counts['config']}"
           f"・deploy/ と versions.yaml の中の設定のファイルへの参照 {ck.counts['refs']}"
           f"・記録（deployment/・validation/）のファイル {ck.counts['records']}"

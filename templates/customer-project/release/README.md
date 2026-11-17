@@ -10,6 +10,8 @@ release/<System Release ID>.yaml     例: PJxxx-R2026.10.1.yaml
 
 `versions.yaml` の内容は**写さず参照**します。写すと二重管理になり、片方を直しても効きません。
 
+採用したモデル（`inspection` の `version`・`model_sha256`・`model_files`・`model_bytes`）と、学習用・評価用の Dataset（`dataset`）は、版か ID・ファイルの数・大きさ・manifest の sha256 で書きます。データの manifest そのものと、データの置き場の実際の道は書きません（`MirumeAI/development-docs` の `03_customer_development/data_and_models.md` の「Git に置くもの」）。
+
 新しい形（根に `recipes/case.yaml` がある）では、製品のパッケージも載せます。組み立て器が使うレシピと機体の設定の commit は、`inspection.config_commit`（40 桁）です。
 
 ```yaml

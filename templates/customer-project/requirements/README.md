@@ -8,7 +8,7 @@
 
 ## 置かないもの
 
-- 顧客から提供された画像・図面・Dataset の**本体**（`manifests/` に参照を置く）
+- 顧客から提供された画像・図面・Dataset の**本体**（Git に置かない。画像と Dataset はデータの置き場に置き、使ったデータは ID と manifest の sha256 で指す。`MirumeAI/development-docs` の `03_customer_development/data_and_models.md`）
 - 実装の詳細（Core の責務。ここには「何を」だけを書く）
 
 **受入条件が判定可能な形になっていることが重要です。** 「きれいに検査できること」では誰も終わりを判断できません。

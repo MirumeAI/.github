@@ -84,7 +84,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 根の `customer-profile.yaml` は、この案件にあってよい識別子の宣言です。作ったときは**値の無い初期形**で、状態は人の確認待ちです。初期形のままでは検査が照らせずに止まり、合格になりません。そのため、混入の照合（`.github/workflows/basic-checks.yml` の `run-isolation-check`）は `false` で始まります。運用の決まりの正本は `MirumeAI/development-docs` の `03_customer_development/customer_isolation_check.md` です。
 
-1. `config/` に案件の設定を書く（`config/image-acquisition/config.json` が無いと、検査は照らせない）
+1. `config/` に案件の設定を書く（`config/image-acquisition/config.json` が無いと、検査は照らせない）。据え付けの計画が無く、開発の機体だけの設定 `dev/config/image-acquisition/<案件の名前>.json` だけを置く案件は、`config/` に説明のほかを置かなければ、検査がその設定を主の設定の代わりに照らす（`dev/README.md`）
 2. 同じ Pull Request で `customer-profile.yaml` の下書きを書く。書き方は `MirumeAI/.github` の README「顧客の間の混入の検査」。状態の行は確認待ちのまま。今の設定にあることは、この案件の値である根拠にならない。値を Issue・Pull Request の本文・検査の記録に書かない
 3. 報告だけの形で流す（PyYAML が要る。`MirumeAI/.github` の clone は main の最新にしてから流す）。終了コードではなく、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して黙らせない。`参考` の行の数（値なし）はこの Repository の Issue に記録し、`注意` の行は人が読む
 

@@ -38,7 +38,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） |
 | `machines/` | 機体の設定（新しい形。移るまで置く物は無い） |
 | `tests/` | この案件の組合せの検証 |
-| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` だけは、正本に `*.lic` の拒否を足して作った物で、照合の対象の外 |
+| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` も直さない（正本に `*.lic` の拒否を足して作った物で、照合の対象の外なので、ずれても検査では止まらない。変えるときは正本の `MirumeAI/.github` の Pull Request から） |
 | `.github/workflows/` | Pull Request の検査。正本の再利用 workflow を呼ぶだけ（検査の中身は正本にある） |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。

@@ -778,6 +778,11 @@ def _schema_path(path: tuple) -> str:
 _CASE_TOPS = ("config", "dev")
 
 
+#: git の pathspec の印の扱いを変える環境の変数（一覧を引くときは外す。 #182）。
+_PATHSPEC_ENV = ("GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS",
+                 "GIT_ICASE_PATHSPECS")
+
+
 def _is_case_stray(top: str) -> bool:
     return top.lower() in _CASE_TOPS and top not in _CASE_TOPS
 
@@ -800,10 +805,13 @@ def list_files_and_strays(root: Path) -> tuple:
     specs = (":(icase)config", "deploy", "deployment", "validation", ":(icase)dev",
              "versions.yaml") + NEW_DIRS
     if (root / ".git").exists():
+        # pathspec の印の扱いを変える環境の変数（`GIT_LITERAL_PATHSPECS` など）を外す。 残すと `:(icase)` が
+        # 効かず、 config/・dev/ が一覧に載らずに黙って通る（#182 の Reviewer B の所見）
+        env = {k: v for k, v in os.environ.items() if k not in _PATHSPEC_ENV}
         seen: "set[bytes]" = set()
         for extra in ((), ("--others", "--exclude-standard")):
             r = subprocess.run(["git", "ls-files", "-z", *extra, "--", *specs],
-                               cwd=root, capture_output=True)
+                               cwd=root, capture_output=True, env=env)
             if r.returncode != 0:
                 raise Stop("git", "git の一覧を読めません")
             seen.update(raw for raw in r.stdout.split(b"\0") if raw)

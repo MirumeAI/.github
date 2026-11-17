@@ -1486,6 +1486,29 @@ class SyntheticScenariosTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("ERROR [config-missing]", out)
 
+    def test_pathspec_env_does_not_hide_config_or_strays(self) -> None:
+        """環境に `GIT_LITERAL_PATHSPECS=1` などがあっても、 config/・dev/ と書き違いの置き場を一覧に引く
+        （#182 の Reviewer B の所見。 外さないと `:(icase)` が効かず、 config/ が一覧から消えて黙って通る）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "repo"
+            _build(root, [_with(a_files(), **{"Config__image-acquisition__config.json": _json(b_config())})])
+            for name in I._PATHSPEC_ENV:
+                with self.subTest(env=name), mock.patch.dict(os.environ, {name: "1"}):
+                    files, strays = I.list_files_and_strays(root)
+                    self.assertIn("config/image-acquisition/config.json", files)
+                    self.assertEqual(strays, ["Config"])
+
+    def test_case_strays_outside_git(self) -> None:
+        """Git でない根でも、 config/・dev/ の書き違いの置き場で止める（#182 の Reviewer A の所見）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "repo"
+            _write(root, {k: v for k, v in d_files().items() if not k.startswith("config/")})
+            (root / "Dev").mkdir()
+            self.assertEqual(I.list_files_and_strays(root)[1], ["Dev"])
+            code, out = run_in(I, root)
+        self.assertEqual(code, 2, out)
+        self.assertIn("ERROR [config-missing]", out)
+
     def test_a_symlinked_dev_config_is_not_used_for_the_main_config(self) -> None:
         """Git の一覧にある開発の設定でも、 置き場の途中がリンクなら、 主の設定の代わりにしない（#182）。
         リンクの先（根の外）の設定を照らして通さず、 照らす相手が無いので止める。"""

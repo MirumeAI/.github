@@ -42,7 +42,8 @@ Required Verification（正本の検査を手元で流す）が PASS し、 作�
 この script の中で呼ぶ `gh` は見えないので、 ここでも止める。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
-案件の題名と案件の名前は、 実行時に受け取る Repository の名前から作る。
+案件の題名と案件の名前は、 実行時に受け取る Repository の名前から作る（題名は `--title` で
+変えられる。 案件の名前は変えない）。
 """
 from __future__ import annotations
 
@@ -540,7 +541,7 @@ def show_plan(plan: Plan) -> None:
           " main へ直接入れない）")
     print()
     print(f"最初の中身（{len(plan.tree)} ファイル）")
-    for kind, note in (("雛形", f"{TEMPLATE}/ から。 案件の名前を入れる"),
+    for kind, note in (("雛形", f"{TEMPLATE}/ から。 案件の題名と名前を入れる"),
                        ("正本", "この Repository から写す。 照合の対象"),
                        ("作る", f"正本に {' と '.join(SETTINGS_EXTRA_DENY)}"
                                 " の拒否を足す")):

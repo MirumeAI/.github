@@ -455,8 +455,13 @@ class TheFirstContentTest(unittest.TestCase):
                                  data.decode("utf-8"))
         self.assertTrue(PLAN.tree["README.md"][1].decode("utf-8")
                         .startswith("# example part\n"))
-        self.assertIn("案件の名前", N.pr_body(PLAN))
-        self.assertIn("example-part", N.pr_body(PLAN))
+        body = N.pr_body(PLAN)
+        self.assertIn("案件の名前（開発の設定のファイルの名前・Core が案件を引く鍵）は `example-part`", body)
+        self.assertIn("案件の名前（`example-part`）", body)
+        code, out = _main([NAME], FakeGh(_fresh()))
+        self.assertEqual(code, 0, out)
+        self.assertIn("案件の題名  example part\n", out)
+        self.assertIn("案件の名前  example-part（", out)
 
     def test_settings_add_only_the_license_rule(self) -> None:
         """`.claude/settings.json` は、 正本に `*.lic` の拒否を足しただけ。

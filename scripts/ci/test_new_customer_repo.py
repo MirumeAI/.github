@@ -396,6 +396,16 @@ class NameTest(unittest.TestCase):
         self.assertEqual(N.default_title(NAME), "example part")
         self.assertEqual(PLAN.title, "example part")
 
+    def test_the_case_name_is_what_setup_customer_uses(self) -> None:
+        """**案件の名前は、 撮像側の setup_customer.sh の既定と同じ**（#181）。
+
+        Core が案件を引く鍵（開発の設定のファイルの名前）なので、 空白を入れない。
+        期待値は script の定数から取らない。
+        """
+        self.assertEqual(N.case_name(NAME), "example-part")
+        self.assertEqual(PLAN.case, "example-part")
+        self.assertNotIn(" ", PLAN.case)
+
 
 class TheFirstContentTest(unittest.TestCase):
     """最初の中身に、 手で写していたものが漏れなく入ること。"""
@@ -430,6 +440,23 @@ class TheFirstContentTest(unittest.TestCase):
         for rel, (_, data) in PLAN.tree.items():
             with self.subTest(file=rel):
                 self.assertNotIn(N.PLACEHOLDER.encode("utf-8"), data)
+                self.assertNotIn(N.TITLE_PLACEHOLDER.encode("utf-8"), data)
+
+    def test_file_names_get_the_case_name_not_the_title(self) -> None:
+        """**ファイルの名前の所には案件の名前、 見出しには題名**（#181）。
+
+        前は題名を両方に入れたので、 開発の設定のファイルの名前の例に空白が入った。
+        """
+        dev = PLAN.tree["dev/README.md"][1].decode("utf-8")
+        self.assertIn("dev/config/image-acquisition/example-part.json", dev)
+        for rel, (_, data) in PLAN.tree.items():
+            with self.subTest(file=rel):
+                self.assertNotIn("image-acquisition/example part.json",
+                                 data.decode("utf-8"))
+        self.assertTrue(PLAN.tree["README.md"][1].decode("utf-8")
+                        .startswith("# example part\n"))
+        self.assertIn("案件の名前", N.pr_body(PLAN))
+        self.assertIn("example-part", N.pr_body(PLAN))
 
     def test_settings_add_only_the_license_rule(self) -> None:
         """`.claude/settings.json` は、 正本に `*.lic` の拒否を足しただけ。

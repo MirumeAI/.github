@@ -42,7 +42,7 @@ Required Verification（正本の検査を手元で流す）が PASS し、 作�
 この script の中で呼ぶ `gh` は見えないので、 ここでも止める。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
-案件の名前は実行時に受け取る。
+案件の題名と案件の名前は、 実行時に受け取る Repository の名前から作る。
 """
 from __future__ import annotations
 
@@ -69,8 +69,13 @@ ORG = org_audit.ORG
 #: 雛形の場所（この Repository の中）。
 TEMPLATE = "templates/customer-project"
 
-#: 雛形の中で、 案件の名前に置き換える文字列。
+#: 雛形の中で、 案件の名前に置き換える文字列。 **案件の名前は、 撮像側と PDM が案件を
+#: 引く鍵**（開発の設定のファイルの名前・`setup_customer.sh` が配る名前）。 空白を含めない
+#: （#181。 前は題名を入れていたので、 既定で空白が入った）。
 PLACEHOLDER = "<案件の名前>"
+
+#: 雛形の中で、 案件の題名（README の見出しなど、 人が読む名前）に置き換える文字列。
+TITLE_PLACEHOLDER = "<案件の題名>"
 
 #: `customer-<会社>-<部品>`。 英小文字・数字・ハイフンだけ。
 NAME_RE = re.compile(r"^customer-[a-z0-9]+(?:-[a-z0-9]+)+$")
@@ -283,9 +288,14 @@ class Plan:
     origin: dict         # {パス: "雛形" | "正本" | "作る"}
 
     @property
+    def case(self) -> str:
+        """案件の名前（Core が案件を引く鍵）。"""
+        return case_name(self.name)
+
+    @property
     def description(self) -> str:
-        # 既存の顧客案件と同じ書き方
-        return f"{self.title} 向けの顧客固有設定・Plugin・Recipe・Deploy設定"
+        # 雛形の今の置き場に合わせる（`plugins/` は外した。 #181）
+        return f"{self.title} 向けの顧客固有の設定・記録・開発"
 
     def count(self, origin: str) -> int:
         return sum(1 for o in self.origin.values() if o == origin)
@@ -300,6 +310,16 @@ def check_name(name: str) -> None:
 def default_title(name: str) -> str:
     """`customer-example-part` → `example part`（既存の案件と同じ付け方）。"""
     return name[len("customer-"):].replace("-", " ")
+
+
+def case_name(name: str) -> str:
+    """`customer-example-part` → `example-part`。
+
+    撮像側の `scripts/setup_customer.sh` が `--name` を付けないときに使う名前と同じ
+    （Repository の名前から `customer-` を外したもの）。 名前の形（`NAME_RE`）なので、
+    英小文字・数字・ハイフンだけで、 Core の案件の名前に使える。
+    """
+    return name[len("customer-"):]
 
 
 def customer_settings(canonical: bytes) -> bytes:
@@ -375,12 +395,13 @@ def check_isolation_defaults(tree: dict) -> None:
                               "有効にして始めません（run-isolation-check は false。 人の確認の後に true にする）")
 
 
-def build_tree(src: Source, title: str) -> tuple:
+def build_tree(src: Source, title: str, case: str) -> tuple:
     """最初の中身。 `({パス: (mode, 中身)}, {パス: 出どころ})`。"""
     tree, origin = {}, {}
     for path, (mode, data) in src.files(TEMPLATE).items():
         rel = path[len(TEMPLATE) + 1:]
-        data = data.replace(PLACEHOLDER.encode("utf-8"), title.encode("utf-8"))
+        data = data.replace(TITLE_PLACEHOLDER.encode("utf-8"), title.encode("utf-8"))
+        data = data.replace(PLACEHOLDER.encode("utf-8"), case.encode("utf-8"))
         tree[rel], origin[rel] = (mode, data), "雛形"
     canon = src.files(*FROM_CANONICAL, SETTINGS)
     for rel in (*FROM_CANONICAL, SETTINGS):
@@ -411,8 +432,8 @@ def make_plan(name: str, title: "str | None", properties: dict,
     check_name(name)
     title = (title if title is not None else default_title(name)).strip()
     if not title or "\n" in title or "<" in title or ">" in title:
-        raise ValueError("案件の名前は 1 行で、 < と > を含めないでください")
-    tree, origin = build_tree(src, title)
+        raise ValueError("案件の題名は 1 行で、 < と > を含めないでください")
+    tree, origin = build_tree(src, title, case_name(name))
     return Plan(name, title, dict(properties), src.commit(), tree, origin)
 
 
@@ -595,7 +616,7 @@ def pr_body(plan: Plan) -> str:
 
 `MirumeAI/.github` の `{plan.commit[:12]}` から、`scripts/ci/new_customer_repo.py` で作った。
 
-- 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の名前は「{plan.title}」
+- 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の題名は「{plan.title}」、案件の名前（開発の設定のファイルの名前・Core が案件を引く鍵）は `{plan.case}`
 - Claude Code 一式と、手元で実行する検査 {plan.count("正本")} ファイル。正本から写した（照合の対象なので、ずれると正本の検査が止まる）
 - `{SETTINGS}`。正本に `*.lic` の拒否を足して作った
 - `{PROFILE}`（顧客の間の混入の検査の宣言）は値の無い初期形で、状態は人の確認待ち。混入の照合はまだ動かない（`run-isolation-check: false`）。始め方は `README.md` の「顧客の間の混入の検査を始める」
@@ -617,7 +638,7 @@ def pr_body(plan: Plan) -> str:
 
 ## Reviewerに確認してほしい点
 
-案件の名前（「{plan.title}」）と、`README.md` の「始めるときにやること」。
+案件の題名（「{plan.title}」）と案件の名前（`{plan.case}`）、`README.md` の「始めるときにやること」。
 """
 
 
@@ -858,8 +879,9 @@ def main(argv=None, env=None, api: "Api | None" = None,
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name", help="Repository の名前（customer-<会社>-<部品>）")
-    ap.add_argument("--title", help="案件の名前。 既定は Repository の名前から"
-                                    "作る（customer-example-part → example part）")
+    ap.add_argument("--title", help="案件の題名（README の見出しなど）。 既定は Repository の名前から"
+                                    "作る（customer-example-part → example part）。 案件の名前"
+                                    "（Core が引く鍵）はいつも Repository の名前から作る（→ example-part）")
     ap.add_argument("--domain", choices=org_audit.STANDARD["domain"],
                     default=PROPERTIES["domain"], help="分類の domain")
     ap.add_argument("--criticality", choices=org_audit.STANDARD["criticality"],
@@ -899,7 +921,8 @@ def main(argv=None, env=None, api: "Api | None" = None,
         results, repo = preflight(api, plan, a.resume)
         if not a.apply:
             print(f"{ORG}/{plan.name} を作る計画です。 まだ何も変えていません。\n")
-        print(f"  案件の名前  {plan.title}")
+        print(f"  案件の題名  {plan.title}")
+        print(f"  案件の名前  {plan.case}（開発の設定のファイルの名前・Core が案件を引く鍵）")
         print(f"  説明        {plan.description}")
         print(f"  中身の出どころ  {ORG}/.github の {plan.commit[:7]}\n")
         print("確かめたこと（読み取りだけ）")

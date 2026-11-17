@@ -10,7 +10,7 @@ MirumeAI 標準開発ルールに従う。
 3. 変更は Pull Request 経由で `main` に入れる。Merge は Squash and merge。
 4. **Core の Source をこの Repository へコピーしない。** 開発では Core の clone を
    この Repository の隣に置く（下の「Core の置き方」）。根の `PDM/` と
-   `Image-Acquisition-PDM/` は、今ある機体（LEGACY）の作業コピーの置き場で、`.gitignore` 済み。
+   `Image-Acquisition-PDM/` は `.gitignore` 済み（今ある機体〔LEGACY〕がある案件では、その機体の作業コピーの置き場）。
 5. 顧客データ、Credential、大容量 Dataset、Model Weight を置かない。
 6. ライセンスファイル（`*.lic`）を置かない。
 
@@ -26,11 +26,13 @@ Branch protection を設定できないため、 これと運用ルールが唯�
 
 ## この Repository の位置づけ
 
-<案件の名前> 向けの**顧客固有差分**（設定と記録と、この案件の開発）を持つ Repository です。Core の Source は持ちません。
+<案件の題名> 向けの**顧客固有差分**（設定と記録と、この案件の開発）を持つ Repository です。Core の Source は持ちません。
 
 ```text
-PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> の検査システム
+PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の題名> の検査システム
 ```
+
+案件の名前（撮像側と PDM が案件を引く鍵。開発の設定のファイルの名前）は `<案件の名前>` です。
 
 出荷に使う Core の組合せは `versions.yaml` で固定します。
 
@@ -41,8 +43,8 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の名前> �
   コードが Core の内部を誤って参照しうる。使う commit は `versions.yaml`（出荷の組合せ）、
   開発中に Core の直しを試すときは根の `versions.dev.yaml`（任意。Core ごとの 40 桁の commit
   だけ）。**開発の版は機体に配置しない**（System Release が参照するのは `versions.yaml` だけ）
-- **今ある機体（LEGACY）**: 機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/`
-  に Core の作業コピーがある形で動いている（`.gitignore` 済み）。新しい配置はこの形に頼らない
+- **今ある機体（LEGACY）**: この案件に今ある機体がある場合だけ、その機体の上では、この Repository の根の
+  `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いている（`.gitignore` 済み）。新しい配置はこの形に頼らない
   （`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）
 - **新しい形**: 製品のパッケージが両 Core を wheel の依存として読み込み、clone の道に頼らない。
   この雛形は前の形で、新しい形の置き場（`recipes/case.yaml`・`recipes/products/`・`machines/` の中の

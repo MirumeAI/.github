@@ -14,7 +14,7 @@
 
 Core の script は Core の `scripts/` から使います。systemd unit も `WorkingDirectory` を Core に向け、`scripts/...` を相対で呼びます。
 
-今ある機体（LEGACY）では、Core の作業コピーがこの Repository の根の `PDM/`・`Image-Acquisition-PDM/` にあります（`.gitignore` 済み）。新しい配置はこの形に頼りません（`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）。開発では Core の clone をこの Repository の隣に置きます（根の `README.md` の「Core の置き方」）。
+この案件に今ある機体（LEGACY）がある場合、その機体では、Core の作業コピーがこの Repository の根の `PDM/`・`Image-Acquisition-PDM/` にあります（`.gitignore` 済み）。新しい配置はこの形に頼りません（`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）。開発では Core の clone をこの Repository の隣に置きます（根の `README.md` の「Core の置き方」）。
 
 ## 機体の記号
 

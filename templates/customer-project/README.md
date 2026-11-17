@@ -1,4 +1,4 @@
-# <案件の名前>
+# <案件の題名>
 
 この Repository は **この案件だけの差分**を持ちます。Core の Source は持ちません。
 
@@ -15,7 +15,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 ## Core の置き方
 
 - **開発**: Core の clone は、この Repository の下でなく隣に置きます（同じ親のフォルダに `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository のコードが Core の内部を誤って参照しえます
-- **今ある機体（LEGACY）**: 機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み）。新しい配置はこの形に頼りません
+- **今ある機体（LEGACY）**: この案件に今ある機体がある場合だけ、その機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み。今ある機体が無い案件でも、下に clone したときの守りとして残します）。新しい配置はこの形に頼りません
 - **新しい形**（下の「目標の形と移る間」）: 製品のパッケージが両 Core を wheel の依存として読み込み、clone の道に頼りません。入れ方の正本は `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「製品のパッケージの入れ方」です
 
 ## 構造
@@ -38,6 +38,8 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） |
 | `machines/` | 機体の設定（新しい形。移るまで置く物は無い） |
 | `tests/` | この案件の組合せの検証 |
+| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` も直さない（正本に `*.lic` の拒否を足して作った物で、照合の対象の外なので、ずれても検査では止まらない。変えるときは正本の `MirumeAI/.github` の Pull Request から） |
+| `.github/workflows/` | Pull Request の検査。正本の再利用 workflow を呼ぶだけ（検査の中身は正本にある） |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
 

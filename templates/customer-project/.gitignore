@@ -1,4 +1,5 @@
-# 今ある機体（LEGACY）の Core の作業コピー。 **追跡しない。**
+# Core の作業コピー。 **追跡しない。**（今ある機体〔LEGACY〕がある案件では、その機体の作業コピーの置き場。
+# 無い案件でも、 下に clone したときの守りとして残す）
 # 案件 Repository に Core の Source を置かない（`versions.yaml` で固定する）。
 # 開発では Core の clone をこの Repository の隣に置く（README.md の「Core の置き方」）。
 /PDM/
@@ -8,5 +9,13 @@
 __pycache__/
 *.py[cod]
 
-# 顧客のライセンス・認証情報
+# 顧客のライセンス・認証情報・秘密（置かない。 うっかりの add を止める）
 *.lic
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/

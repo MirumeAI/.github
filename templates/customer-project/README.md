@@ -32,7 +32,6 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `quick-diagnosis/` | 案件を受けるかの初期確認と判断 | PoC（受けるかを決めるとき） |
 | `poc/` | 実現性の検証（**本番のコードは置かない**） | PoC |
 | `config/` | Core へ配る設定 | 機体へ配るとき（配るときの記録と決まりは `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`）。開発の機体だけで動かす間は `dev/` に置く |
-| `manifests/` | 移る間の物で、**今は置く物が無い**（Dataset とモデルの ID・ファイルの数・大きさ・manifest の sha256 は `release/` の System Release の記録に書く。`manifests/README.md`） | なし |
 | `evaluation/` | 評価の結果と、この案件で値を選んだ記録 | 開発から（PoC で値を選んだときは PoC から） |
 | `validation/` | 仕様に対する技術検証 | 出荷（System Release が指す。配置の後の確かめも） |
 | `acceptance/` | 顧客・現場が受け入れた記録 | 出荷（System Release が指す） |
@@ -68,7 +67,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `recipes/capture/` | `recipes/products/<製品の名前>.yaml` |
 | 差し込む部品 | `src/<パッケージ>/` の部品を、根の `pyproject.toml` の entry points で Core の差し込みの群に登録する（群ができてから） |
 
-`requirements/`・`quick-diagnosis/`・`poc/`・`acceptance/`・`manifests/` は、目標の並びにまだ書かれていません。行き先は `MirumeAI/development-docs#422` で決めます。それまでは上の「構造」の表のとおり使います（`manifests/` は置く物がありません）。
+`requirements/`・`quick-diagnosis/`・`poc/`・`acceptance/` の行き先は、新しい形でも同じ置き場です（`MirumeAI/development-docs#422`。2026-11-18 の利用者の選択 1-1）。上の「構造」の表のとおり使います。置く物の無かった `manifests/` は、雛形から外しました（Dataset とモデルの ID・ファイルの数・大きさ・manifest の sha256 は `release/` の System Release の記録に書きます）。
 
 この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
 

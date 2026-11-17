@@ -20,26 +20,32 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 ## 構造
 
-| 場所 | 何を置くか |
-|---|---|
-| `requirements/` | 顧客要求と検査仕様、受入条件 |
-| `quick-diagnosis/` | 案件を受けるかの初期確認と判断 |
-| `poc/` | 実現性の検証（**本番のコードは置かない**） |
-| `config/` | Core へ配る設定 |
-| `manifests/` | Dataset と Model の**参照と hash**（本体は置かない） |
-| `evaluation/` | 固定した評価の結果と、この案件で値を選んだ記録 |
-| `validation/` | 仕様に対する技術検証 |
-| `acceptance/` | 顧客・現場が受け入れた記録 |
-| `release/` | System Release の manifest |
-| `deployment/` | 配置した事実の記録 |
-| `deploy/` | この機体固有の起動・配置設定 |
-| `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<案件の名前>.json` を `MIRUME_DEV_CONFIG` に渡す） |
-| `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） |
-| `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） |
-| `machines/` | 機体の設定（新しい形。移るまで置く物は無い） |
-| `tests/` | この案件の組合せの検証 |
-| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` も直さない（正本に `*.lic` の拒否を足して作った物で、照合の対象の外なので、ずれても検査では止まらない。変えるときは正本の `MirumeAI/.github` の Pull Request から） |
-| `.github/workflows/` | Pull Request の検査。正本の再利用 workflow を呼ぶだけ（検査の中身は正本にある） |
+表の「要る段」は、そのフォルダに初めて物を置く案件の段です（`MirumeAI/development-docs#392` の段〔作り直しの順〕とは別）。前の段で置いた物は、後の段でも使い続けます。
+
+- **PoC**: 案件を受けるかを決め、実現性を確かめる（本番のコードは作らない）
+- **開発**: 案件の設定と値を作り、開発の機体で動かす（顧客に見せる機体で見せることを含む）
+- **出荷**: System Release を作り、据え付けた機体へ配置して確かめ、顧客・現場が受け入れる
+
+| 場所 | 何を置くか | 要る段 |
+|---|---|---|
+| `requirements/` | 顧客要求と検査仕様、受入条件 | PoC から |
+| `quick-diagnosis/` | 案件を受けるかの初期確認と判断 | PoC（受けるかを決めるとき） |
+| `poc/` | 実現性の検証（**本番のコードは置かない**） | PoC |
+| `config/` | Core へ配る設定 | 機体へ配るとき（顧客に見せる機体は開発、据え付けた機体は出荷）。開発の機体だけで動かす間は `dev/` に置く |
+| `manifests/` | 移る間の物で、**今は置く物が無い**（Dataset とモデルの ID・ファイルの数・大きさ・manifest の sha256 は `release/` の System Release の記録に書く。`manifests/README.md`） | なし |
+| `evaluation/` | 評価の結果と、この案件で値を選んだ記録 | 開発から（PoC で値を選んだときは PoC から） |
+| `validation/` | 仕様に対する技術検証 | 出荷（System Release が指す。配置の後の確かめも） |
+| `acceptance/` | 顧客・現場が受け入れた記録 | 出荷（System Release が指す） |
+| `release/` | System Release の manifest | 出荷 |
+| `deployment/` | 配置した事実の記録 | 出荷（機体へ配置したとき） |
+| `deploy/` | この機体固有の起動・配置設定 | 機体へ配るとき（`config/` と同じ） |
+| `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<案件の名前>.json` を `MIRUME_DEV_CONFIG` に渡す） | 開発の機体で動かすとき（PoC で動かすなら PoC から） |
+| `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） | 開発 |
+| `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） | 開発から（前の形では撮像の条件の記録 `recipes/capture/`） |
+| `machines/` | 機体の設定（新しい形。移るまで置く物は無い） | なし（新しい形に移ってから） |
+| `tests/` | この案件の組合せの検証 | 開発（最初の試験を置ける時は `tests/README.md`） |
+| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` も直さない（正本に `*.lic` の拒否を足して作った物で、照合の対象の外なので、ずれても検査では止まらない。変えるときは正本の `MirumeAI/.github` の Pull Request から） | 作ったときからある |
+| `.github/workflows/` | Pull Request の検査。正本の再利用 workflow を呼ぶだけ（検査の中身は正本にある） | 作ったときからある |
 
 各フォルダの README に「置くもの / 置かないもの」が書いてあります。
 
@@ -62,12 +68,15 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `recipes/capture/` | `recipes/products/<製品の名前>.yaml` |
 | 差し込む部品 | `src/<パッケージ>/` の部品を、根の `pyproject.toml` の entry points で Core の差し込みの群に登録する（群ができてから） |
 
+`requirements/`・`quick-diagnosis/`・`poc/`・`acceptance/`・`manifests/` は、目標の並びにまだ書かれていません。行き先は `MirumeAI/development-docs#422` で決めます。それまでは上の「構造」の表のとおり使います（`manifests/` は置く物がありません）。
+
 この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
 
 ## 置かないもの
 
 - Core の Source（`PDM` と `Image-Acquisition-PDM` の中身）
 - 顧客から提供された画像・Dataset・Model Weight の**本体**
+- データの manifest そのものと、データの置き場の実際の道（Git には ID・ファイルの数・大きさ・manifest の sha256 だけを書く。`MirumeAI/development-docs` の `03_customer_development/data_and_models.md`）
 - ライセンスファイル（`*.lic`）、Credential、パスワード
 
 `config/` には PLC の接続先など内部ネットワークの情報が入ります。**この Repository は Private にし、Public な場所へ内容を転記しないでください。**
@@ -77,7 +86,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
 
 1. `versions.yaml` は未選択（`tag` と `commit` が `null`）で始まる。使う Core を決めたら、Product Release のタグと、タグが指す commit を書く（`pdm` の行は撮像側のタグの `pdm.lock.json` と同じにする）
-2. `config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で機体へ配る。同じ Pull Request で `customer-profile.yaml` も書く（下の「顧客の間の混入の検査を始める」）
+2. 機体（顧客に見せる機体・据え付けた機体）へ配るときは、`config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で配る。開発の機体だけで動かす間は、`dev/config/image-acquisition/<案件の名前>.json` に置く（`dev/README.md`）。どちらも、同じ Pull Request で `customer-profile.yaml` も書く（下の「顧客の間の混入の検査を始める」）
 3. 現場で稼働したら、分類の `production_impact` と `governance_profile` を `direct` と `strict` に変える（Organization の管理者が行う）。稼働前は `none` と `standard`
 
 ### 顧客の間の混入の検査を始める

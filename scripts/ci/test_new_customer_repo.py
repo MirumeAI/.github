@@ -14,6 +14,8 @@
   ・Repository を作る要求に、 分類の値を入れる（明示の値を要する分類があると、
     GitHub は値の無い要求を断る。 #179）
   ・照合の対象のうち、 顧客案件へ写さないものには理由がある
+  ・案件の題名と案件の名前（Core が案件を引く鍵）を、 README・CLAUDE.md・開発の設定の
+    ファイルの名前の所に分けて入れる（#181）
   ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
     混入の照合は有効にしない。 初期形のままでは検査が合格にならない
   ・架空の案件で、 雛形の README の手順どおりに、 宣言の下書き → 報告だけの形 →
@@ -462,6 +464,28 @@ class TheFirstContentTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("案件の題名  example part\n", out)
         self.assertIn("案件の名前  example-part（", out)
+
+    def test_claude_md_gets_the_title_and_the_case_name_apart(self) -> None:
+        """**雛形の CLAUDE.md も、 題名と案件の名前を分けて入れる**（#181）。
+
+        CLAUDE.md は Claude Code が毎回読む。 案件の名前（Core が案件を引く鍵）の所に
+        題名（空白を含みうる）が入ると、 Agent が開発の設定のファイルの名前を誤る。
+        題名を `--title` で変えても、 案件の名前は変わらない。 期待値は script の定数から取らない。
+        """
+        titled = N.make_plan(NAME, "Example Line", N.PROPERTIES, SRC)
+        for title, plan in (("example part", PLAN), ("Example Line", titled)):
+            with self.subTest(title=title):
+                claude = plan.tree["CLAUDE.md"][1].decode("utf-8")
+                self.assertIn(f"\n{title} 向けの**顧客固有差分**", claude)
+                self.assertIn(f" = {title} の検査システム\n", claude)
+                case = [ln for ln in claude.splitlines() if ln.startswith("案件の名前（")]
+                self.assertEqual(len(case), 1, case)
+                self.assertTrue(case[0].endswith("）は `example-part` です。"), case[0])
+                self.assertIn("`dev/config/image-acquisition/example-part.json`", claude)
+                # Repository の説明も題名で作る（`plugins/` を外す前の言い方に戻さない）
+                self.assertEqual(plan.description, f"{title} 向けの顧客固有の設定・記録・開発")
+        # 題名を変えたら、 既定の題名はどこにも残らない
+        self.assertNotIn("example part", titled.tree["CLAUDE.md"][1].decode("utf-8"))
 
     def test_settings_add_only_the_license_rule(self) -> None:
         """`.claude/settings.json` は、 正本に `*.lic` の拒否を足しただけ。

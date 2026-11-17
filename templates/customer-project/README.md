@@ -23,7 +23,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 表の「要る段」は、そのフォルダに初めて物を置く案件の段です（`MirumeAI/development-docs#392` の段〔作り直しの順〕とは別）。前の段で置いた物は、後の段でも使い続けます。
 
 - **PoC**: 案件を受けるかを決め、実現性を確かめる（本番のコードは作らない）
-- **開発**: 案件の設定と値を作り、開発の機体で動かす（顧客に見せる機体で見せることを含む）
+- **開発**: 案件の設定と値を作り、開発の機体で動かす
 - **出荷**: System Release を作り、据え付けた機体へ配置して確かめ、顧客・現場が受け入れる
 
 | 場所 | 何を置くか | 要る段 |
@@ -31,7 +31,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `requirements/` | 顧客要求と検査仕様、受入条件 | PoC から |
 | `quick-diagnosis/` | 案件を受けるかの初期確認と判断 | PoC（受けるかを決めるとき） |
 | `poc/` | 実現性の検証（**本番のコードは置かない**） | PoC |
-| `config/` | Core へ配る設定 | 機体へ配るとき（顧客に見せる機体は開発、据え付けた機体は出荷）。開発の機体だけで動かす間は `dev/` に置く |
+| `config/` | Core へ配る設定 | 機体へ配るとき（配るときの記録と決まりは `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`）。開発の機体だけで動かす間は `dev/` に置く |
 | `manifests/` | 移る間の物で、**今は置く物が無い**（Dataset とモデルの ID・ファイルの数・大きさ・manifest の sha256 は `release/` の System Release の記録に書く。`manifests/README.md`） | なし |
 | `evaluation/` | 評価の結果と、この案件で値を選んだ記録 | 開発から（PoC で値を選んだときは PoC から） |
 | `validation/` | 仕様に対する技術検証 | 出荷（System Release が指す。配置の後の確かめも） |

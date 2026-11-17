@@ -11,6 +11,8 @@
   ・計画の表示と `--check` は書き込まない
   ・Claude Code の中からは `--apply` できない（D5）
   ・main へ直接入れない（Branch を作り、 Pull Request にする）
+  ・Repository を作る要求に、 分類の値を入れる（明示の値を要する分類があると、
+    GitHub は値の無い要求を断る。 #179）
   ・照合の対象のうち、 顧客案件へ写さないものには理由がある
   ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
     混入の照合は有効にしない。 初期形のままでは検査が合格にならない
@@ -221,12 +223,25 @@ class FakeGh:
     応答は `(method, path)` ごとに `(HTTP の状態, 値)` で持つ。 並べると
     呼ばれるたびに 1 つ進む（最後のものが残る）。 **持っていない呼び出しは
     失敗にする。** 想定外の書き込みを見逃さないため。
+
+    Repository を作る要求は、 **GitHub と同じく断る**: 分類の定義で明示の値を
+    要する（`require_explicit_values`）ものが要求に無ければ 422（#179。 既定値が
+    あっても当てない）。 偽の応答だけでは、 この断りを見逃した。
     """
 
     def __init__(self, routes: dict) -> None:
         self.routes = {k: list(v) if isinstance(v, list) else [v]
                        for k, v in routes.items()}
         self.calls = []
+
+    def _explicit_missing(self, body: "dict | None") -> list:
+        schema = self.routes.get(("GET", "/orgs/MirumeAI/properties/schema"))
+        if not schema or schema[0][0] >= 300:
+            return []
+        given = (body or {}).get("custom_properties") or {}
+        return [p["property_name"] for p in schema[0][1] or []
+                if p.get("require_explicit_values")
+                and given.get(p["property_name"]) in (None, "")]
 
     def __call__(self, args: list, data: "bytes | None"):
         assert args[:2] == ["api", "-X"], args
@@ -238,6 +253,14 @@ class FakeGh:
             return _R(returncode=1, stdout=b"",
                       stderr=f"gh: 想定外の呼び出し {method} {path} (HTTP 599)"
                       .encode())
+        if (method, path) == ("POST", "/orgs/MirumeAI/repos"):
+            missing = self._explicit_missing(body)
+            if missing:
+                msg = (f"Property '{missing[0]}' requires an explicit value "
+                       "to be set")
+                return _R(returncode=1,
+                          stdout=json.dumps({"message": msg}).encode(),
+                          stderr=f"gh: {msg} (HTTP 422)".encode())
         status, value = seq.pop(0) if len(seq) > 1 else seq[0]
         if status < 300:
             out = b"" if value is None else json.dumps(value).encode()
@@ -253,10 +276,15 @@ class FakeGh:
 
 
 def _schema() -> list:
-    """Organization の分類の定義（標準のとおり）。"""
+    """Organization の分類の定義（標準のとおり）。
+
+    `repo_type` は、 Organization と同じく必須で、 明示の値を要する（#179）。
+    """
     return [{"property_name": k,
              "allowed_values": list(v) if v else None,
-             "default_value": "unclassified" if k == "repo_type" else None}
+             "default_value": "unclassified" if k == "repo_type" else None,
+             "required": k == "repo_type",
+             "require_explicit_values": k == "repo_type"}
             for k, v in A.STANDARD.items()]
 
 
@@ -584,6 +612,7 @@ class ApplyTest(unittest.TestCase):
         create = w[0][2]
         self.assertIs(create["private"], True)
         self.assertIs(create["auto_init"], True)
+        self.assertEqual(create["custom_properties"], N.PROPERTIES)
         self.assertEqual({p["property_name"]: p["value"]
                           for p in w[1][2]["properties"]}, N.PROPERTIES)
         self.assertEqual(w[2][2], N.REPO_SETTINGS)
@@ -596,6 +625,31 @@ class ApplyTest(unittest.TestCase):
         self.assertIn(f"{NAME}/pull/1", out)
         self.assertIn("--check", out)
         self.assertIn("作成者と別の人が customer-profile.yaml が雛形の値の無い初期形のまま", out)
+
+    def test_the_classification_goes_with_the_creation(self) -> None:
+        """**作る要求に、 計画の分類の値を全部入れる**（#179）。 引数で変えた値も。"""
+        fake = FakeGh({**_fresh(), **_writes_ok()})
+        code, out = _main([NAME, "--apply", "--criticality", "medium"], fake)
+        self.assertEqual(code, 0, out)
+        want = dict(N.PROPERTIES, criticality="medium")
+        w = fake.writes()
+        self.assertEqual(w[0][2]["custom_properties"], want)
+        self.assertEqual({p["property_name"]: p["value"]
+                          for p in w[1][2]["properties"]}, want)
+
+    def test_the_fake_refuses_like_github(self) -> None:
+        """偽の gh は、 明示の値を要する分類の無い作る要求を断る。 この断りが
+        無いと、 上の試験は値を渡し忘れた道具でも通る。"""
+        fake = FakeGh({**_fresh(), **_writes_ok()})
+        body = json.dumps({"name": NAME, "private": True}).encode()
+        r = fake(["api", "-X", "POST", "/orgs/MirumeAI/repos"], body)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(b"'repo_type' requires an explicit value", r.stderr)
+        self.assertIn(b"(HTTP 422)", r.stderr)
+        body = json.dumps({"name": NAME, "private": True,
+                           "custom_properties": {"repo_type": ""}}).encode()
+        r = fake(["api", "-X", "POST", "/orgs/MirumeAI/repos"], body)
+        self.assertEqual(r.returncode, 1, "空の値でも通した")
 
     def test_it_never_writes_main(self) -> None:
         """**main へ直接入れない。** Branch を作り、 Pull Request にする。"""

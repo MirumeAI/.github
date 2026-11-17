@@ -17,7 +17,7 @@
 
 `--apply` が行うこと（済んだものは飛ばす）:
 
-  1. Repository を作る（Private）
+  1. Repository を作る（Private。 分類の値も作る要求に入れる）
   2. 分類（Custom Properties）を稼働前の値にする
   3. Merge を Squash だけにし、 merge 後に Branch を消す
   4. Team の権限を付ける
@@ -676,6 +676,11 @@ def apply(api: Api, plan: Plan, repo, resume: bool, sleep=time.sleep) -> int:
             "has_projects": False,
             # 最初の commit が無いと Branch も Pull Request も作れない
             "auto_init": True,
+            # 分類に「明示の値を要する」（require_explicit_values）ものがある
+            # と、 作る要求の中に値が無ければ GitHub は作らずに 422 で断る
+            # （既定値があっても当てない。 #179）。 計画の値を全部ここで渡し、
+            # 手順 2 でも同じ値を入れる
+            "custom_properties": dict(plan.properties),
         })
         return "作った（Private）"
 

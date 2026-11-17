@@ -508,7 +508,7 @@ def _properties_line(props: dict) -> str:
 
 def show_plan(plan: Plan) -> None:
     print("--apply で行うこと")
-    print("  1. Repository を作る（Private）")
+    print("  1. Repository を作る（Private。 分類の値も作る要求に入れる）")
     print("  2. 分類（Custom Properties）を稼働前の値にする")
     print(f"       {_properties_line(plan.properties)}")
     print("  3. Merge を Squash だけにし、 merge 後に Branch を消す")

@@ -278,12 +278,14 @@ class FakeGh:
 def _schema() -> list:
     """Organization の分類の定義（標準のとおり）。
 
-    `repo_type` は、 Organization と同じく必須で、 明示の値を要する（#179）。
+    Organization と同じく、 `repo_type` は必須で明示の値を要し（#179）、
+    `lifecycle` は必須で既定値がある。
     """
+    defaults = {"repo_type": "unclassified", "lifecycle": "active"}
     return [{"property_name": k,
              "allowed_values": list(v) if v else None,
-             "default_value": "unclassified" if k == "repo_type" else None,
-             "required": k == "repo_type",
+             "default_value": defaults.get(k),
+             "required": k in defaults,
              "require_explicit_values": k == "repo_type"}
             for k, v in A.STANDARD.items()]
 

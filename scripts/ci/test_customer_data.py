@@ -320,6 +320,45 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
         where.chmod(0o700)
         self.assertTrue(C.load_registry(reg, root=self.repo))
 
+    @unittest.skipUnless(os.name == "posix", "権限の形は POSIX でだけ見る")
+    def test_the_real_dir_of_a_symlink_is_checked(self) -> None:
+        """symlink のときは、 symlink を置いた dir でなく、 実体を置いた dir を見る（#193）。
+
+        閉じた dir に置いた symlink から、 開いた dir の 600 の登録表を指しても断る。
+        dir の symlink の先が開いていても断る。 実体の dir が閉じていれば、 開いた所の symlink でも読める。
+        """
+        opened = self.td / "opened_real"
+        opened.mkdir()
+        real = _registry(opened)
+        opened.chmod(0o755)
+        closed = self.td / "closed_link"
+        closed.mkdir(mode=0o700)
+        closed.chmod(0o700)
+        link = closed / "customer_registry.txt"
+        os.symlink(real, link)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(link, root=self.repo)
+        dir_link = closed / "dir_link"
+        os.symlink(opened, dir_link)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(dir_link / "customer_registry.txt", root=self.repo)
+        opened.chmod(0o700)
+        public = self.td / "public_link"
+        public.mkdir()
+        public.chmod(0o755)
+        os.symlink(real, public / "customer_registry.txt")
+        self.assertTrue(C.load_registry(public / "customer_registry.txt", root=self.repo))
+
+    @unittest.skipUnless(os.name == "posix", "権限の形は POSIX でだけ見る")
+    def test_the_permissions_are_checked_even_when_allowed_in_the_repository(self) -> None:
+        """`--allow-registry-in-repo` でも、 置いた dir が開いていれば断る（#193）。"""
+        inside = _registry(self.repo)
+        self.repo.chmod(0o755)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(inside, root=self.repo, allow_in_repo=True)
+        self.repo.chmod(0o700)
+        self.assertTrue(C.load_registry(inside, root=self.repo, allow_in_repo=True))
+
     def test_errors_show_neither_the_place_nor_the_contents(self) -> None:
         """**エラーの文に、 登録表の場所も中身も入れない。**
 

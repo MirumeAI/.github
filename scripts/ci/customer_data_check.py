@@ -56,6 +56,9 @@ CI の記録は外から見えることがあり、 公開のリポジトリで�
 
   ・登録表がリポジトリの中にあれば断る（commit されるのを防ぐ）。 非公開の
     リポジトリで置くと決めたときだけ `--allow-registry-in-repo` で許す
+  ・登録表のファイルか、 それを置いた dir（symlink のときは実体の dir）が、 群や others に
+    権限を与えていれば断る（全部の顧客の名前を持つので、 本人だけが読める形〔ファイル 600・
+    dir 700〕に置く。 POSIX でだけ見る。 `--allow-registry-in-repo` のときも同じ）
   ・登録表の場所も中身も OS の例外の文も、 出力に書かない（登録表の何行目かと、
     決まった言葉だけを書く）。 場所の欄の値は **ファイルに触る前に形を確かめ**、
     改行や NUL などの制御文字を含む値・長すぎる値・`base64:` や `#` で始まる値は、
@@ -110,7 +113,7 @@ REGISTRY_ENV = "MIRUMEAI_CUSTOMER_REGISTRY"
 REGISTRY_ENV_PREFIX = "base64:"
 DEFAULT_REGISTRY = Path("~/.config/mirumeai/customer_registry.txt")
 
-#: 登録表を使えないので止めたとき（無い・見つからない・空・リポジトリの中にある）。
+#: 登録表を使えないので止めたとき（無い・見つからない・空・リポジトリの中にある・本人のほかに開いている）。
 EXIT_REGISTRY = 2
 
 #: 見つかっても構わないもの。 **理由を必ず書く。**
@@ -222,7 +225,7 @@ def load_registry(path: "str | os.PathLike[str]", *, root: "Path | None" = None,
     """登録表のファイルを読む。 `label` は、 エラーの文で登録表を指す決まった言葉。
 
     **どこで失敗しても、 文に場所も中身も OS の例外の文も入れない。** 確かめる順:
-    場所の形 → 在るか・ファイルか → リポジトリの中か → 大きさ → 文字の形。
+    場所の形 → 在るか・ファイルか → リポジトリの中か → 権限 → 大きさ → 文字の形。
     「リポジトリの中にあります」は、 そこに本当にファイルがあるときだけ言う。
     """
     value = os.fspath(path)
@@ -239,6 +242,13 @@ def load_registry(path: "str | os.PathLike[str]", *, root: "Path | None" = None,
                 f"{label}がリポジトリの中にあります。 commit すると中身が外へ出るので、"
                 " リポジトリの外へ置いてください（非公開のリポジトリで置くと決めた"
                 "場合だけ --allow-registry-in-repo を付ける）")
+        if os.name == "posix":
+            parent = p.resolve().parent.stat()
+            if st.st_mode & 0o077 or parent.st_mode & 0o077:
+                raise RegistryError(
+                    f"{label}が、 本人のほかにも開いた形で置かれています。 全部の顧客の"
+                    "名前を持つので、 ファイルを chmod 600、 それを置いた dir（symlink のときは"
+                    "実体の dir）を chmod 700 にしてください")
         if st.st_size > _MAX_REGISTRY_BYTES:
             raise RegistryError(f"{label}の形式が正しくありません（大きすぎます）")
         data = p.read_bytes()

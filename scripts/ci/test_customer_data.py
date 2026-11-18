@@ -104,8 +104,11 @@ def _b64(text: str) -> str:
 
 
 def _registry(where: Path, text: str = REGISTRY) -> Path:
+    """登録表を、 決まりの形（ファイル 600・dir 700）で置く。"""
     p = where / "customer_registry.txt"
     p.write_text(text, encoding="utf-8")
+    p.chmod(0o600)
+    where.chmod(0o700)
     return p
 
 
@@ -291,6 +294,71 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
         # 非公開のリポジトリで置くと決めた場合だけ、 明示すれば使える
         self.assertTrue(C.load_registry(inside, root=self.repo, allow_in_repo=True))
 
+    @unittest.skipUnless(os.name == "posix", "権限の形は POSIX でだけ見る")
+    def test_a_registry_open_to_others_is_refused(self) -> None:
+        """**登録表を、 本人のほかに開いた形で置かない。** 全部の顧客の名前を持つ（#193）。
+
+        ファイルか、 それを置いた dir が、 群か others に何か 1 つでも権限を与えていれば断る。
+        直し方（chmod 600・chmod 700）を出し、 場所は出さない。
+        """
+        where = self.td / "reg"
+        where.mkdir()
+        reg = _registry(where)
+        self.assertTrue(C.load_registry(reg, root=self.repo))
+        for file_mode, dir_mode in ((0o640, 0o700), (0o604, 0o700), (0o620, 0o700),
+                                    (0o601, 0o700), (0o600, 0o750), (0o600, 0o705),
+                                    (0o600, 0o720), (0o600, 0o701)):
+            with self.subTest(file=oct(file_mode), dir=oct(dir_mode)):
+                reg.chmod(file_mode)
+                where.chmod(dir_mode)
+                with self.assertRaises(C.RegistryError) as cm:
+                    C.load_registry(reg, root=self.repo)
+                self.assertIn("chmod 600", str(cm.exception))
+                self.assertIn("chmod 700", str(cm.exception))
+                self.assertNotIn(str(self.td), str(cm.exception))
+        reg.chmod(0o600)
+        where.chmod(0o700)
+        self.assertTrue(C.load_registry(reg, root=self.repo))
+
+    @unittest.skipUnless(os.name == "posix", "権限の形は POSIX でだけ見る")
+    def test_the_real_dir_of_a_symlink_is_checked(self) -> None:
+        """symlink のときは、 symlink を置いた dir でなく、 実体を置いた dir を見る（#193）。
+
+        閉じた dir に置いた symlink から、 開いた dir の 600 の登録表を指しても断る。
+        dir の symlink の先が開いていても断る。 実体の dir が閉じていれば、 開いた所の symlink でも読める。
+        """
+        opened = self.td / "opened_real"
+        opened.mkdir()
+        real = _registry(opened)
+        opened.chmod(0o755)
+        closed = self.td / "closed_link"
+        closed.mkdir(mode=0o700)
+        closed.chmod(0o700)
+        link = closed / "customer_registry.txt"
+        os.symlink(real, link)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(link, root=self.repo)
+        dir_link = closed / "dir_link"
+        os.symlink(opened, dir_link)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(dir_link / "customer_registry.txt", root=self.repo)
+        opened.chmod(0o700)
+        public = self.td / "public_link"
+        public.mkdir()
+        public.chmod(0o755)
+        os.symlink(real, public / "customer_registry.txt")
+        self.assertTrue(C.load_registry(public / "customer_registry.txt", root=self.repo))
+
+    @unittest.skipUnless(os.name == "posix", "権限の形は POSIX でだけ見る")
+    def test_the_permissions_are_checked_even_when_allowed_in_the_repository(self) -> None:
+        """`--allow-registry-in-repo` でも、 置いた dir が開いていれば断る（#193）。"""
+        inside = _registry(self.repo)
+        self.repo.chmod(0o755)
+        with self.assertRaises(C.RegistryError):
+            C.load_registry(inside, root=self.repo, allow_in_repo=True)
+        self.repo.chmod(0o700)
+        self.assertTrue(C.load_registry(inside, root=self.repo, allow_in_repo=True))
+
     def test_errors_show_neither_the_place_nor_the_contents(self) -> None:
         """**エラーの文に、 登録表の場所も中身も入れない。**
 
@@ -301,7 +369,12 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
         named.mkdir()
         loop = named / "loop"
         os.symlink(loop, loop)
+        opened = self.td / "opened"
+        opened.mkdir()
+        open_reg = _registry(opened)
+        open_reg.chmod(0o644)
         cases = {
+            "本人のほかに開いた": lambda: C.load_registry(open_reg, root=self.repo),
             "見つからない": lambda: C.load_registry(named / "none.txt", root=self.repo),
             "中身を場所として渡した": lambda: C.load_registry(REGISTRY, root=self.repo),
             "長い中身を場所として渡した":
@@ -680,6 +753,9 @@ class TheRegistryInputIsCheckedTest(_TempRepo, unittest.TestCase):
         big.write_text("EXAMPLE_CUSTOMER\n" + "#" * C._MAX_REGISTRY_BYTES, encoding="utf-8")
         latin = self.outside / "latin_registry.txt"
         latin.write_bytes(b"EXAMPLE_CUSTOMER\n" + bytes([0xE9, 0xFF]) + b"\n")
+        for p in (big, latin):                 # 権限の確かめ（#193）より先へ進む形で置く
+            p.chmod(0o600)
+        self.outside.chmod(0o700)
         for path, why in ((big, "大きすぎます"), (latin, "UTF-8 ではありません")):
             with self.subTest(case=why):
                 code, out = self.run_check("--registry", str(path))

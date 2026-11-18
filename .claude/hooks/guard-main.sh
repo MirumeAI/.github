@@ -165,21 +165,101 @@ def unwrap(text, depth=0):
         return out
     return [text]
 
-chunks = []
+# ---- 出力・入力の向け先（#162） ----
+# 前の区切りは `[;|&]` で `2>&1` の & も割り、 向け先の語を命令の引数として読むので、 向け先の位置で
+# 判定が変わっていた。 **前の区切りを残し、 向け先の `>&`・`<&`・`&>`・`>|` で割らない区切りを足す。**
+# 両方の命令を下の判定に渡すので、 どちらかが止めれば止まる。 どちらでも、 bash が引数として渡さない
+# 向け先の語だけを外す: 引用符と \ の外に書いた向け先の形の語（`2>&1`・`>/dev/null`・`&>x`・`<x`）と、
+# 記号だけの語（`>`・`2>`・`>&`・`&>`・`>>`）とその次の 1 語（先）。 1 つの命令の元の文を空白で区切った
+# 語の数が shlex の語の数と合わない・引用が閉じないときは、 何も外さない（止める側に倒す）
+REDIR_TOKEN = re.compile(r'(?:[0-9]*|&)(?:>>|>\||<>|>&|<&|>|<)\S*')
+REDIR_OP = re.compile(r'(?:[0-9]*|&)(?:>>|>\||<>|>&|<&|>|<)')
+
+
+def raw_words(c):
+    """c を空白で区切った語の並び（各語: 生の文字と、 引用・\\ が無いか）。 引用が閉じなければ None。"""
+    words = []
+    cur = []
+    plain = True
+    q = None
+    i, n = 0, len(c)
+    while i < n:
+        ch = c[i]
+        if q:
+            cur.append(ch)
+            if ch == '\\' and q in ('"', 'ansi') and i + 1 < n:
+                cur.append(c[i + 1]); i += 2; continue
+            if ch == ("'" if q == 'ansi' else q):
+                q = None
+            i += 1; continue
+        if ch == '$' and c[i + 1:i + 2] in ("'", '"'):
+            q = 'ansi' if c[i + 1] == "'" else '"'
+            plain = False
+            cur.append(c[i:i + 2]); i += 2; continue
+        if ch in ('"', "'"):
+            q = ch; plain = False
+            cur.append(ch); i += 1; continue
+        if ch == '\\':
+            plain = False
+            cur.append(c[i:i + 2]); i += 2; continue
+        if ch.isspace():
+            if cur:
+                words.append((''.join(cur), plain))
+            cur, plain = [], True
+            i += 1; continue
+        cur.append(ch); i += 1
+    if q:
+        return None
+    if cur:
+        words.append((''.join(cur), plain))
+    return words
+
+
+def drop_redirects(toks, c):
+    """toks から、 bash が引数として渡さない向け先の語を外す（外せないときは toks のまま）。"""
+    words = raw_words(c)
+    if words is None or len(words) != len(toks):
+        return toks
+    out = []
+    skip = False
+    for (w, plain), t in zip(words, toks):
+        if skip:
+            skip = False
+            continue
+        if plain and REDIR_OP.fullmatch(w):
+            skip = True    # 記号だけの向け先。 次の 1 語は先
+            continue
+        if plain and REDIR_TOKEN.fullmatch(w):
+            continue
+        out.append(t)
+    return out
+
+
+chunks = []     # 前の区切り
+chunks2 = []    # 向け先の & | で割らない区切り（足す読み方）
 for t in unwrap(raw):
     # 括弧・波括弧を外す
     t = re.sub(r'[(){}]', ' ', t)
-    # 区切りで分解
-    chunks.extend(re.split(r'\s*(?:\|\||&&|[;|&]|\n)\s*', t))
+    # 区切りで分解（前後の空白は後で落とす。 正規表現に \s* を付けると、 長い空白で時間が 2 乗になる）
+    chunks.extend(re.split(r'\|\||&&|[;|&]|\n', t))
+    chunks2.extend(re.split(r'\|\||&&|;|(?<!>)\||(?<![<>])&(?!>)|\n', t))
 
-for c in chunks:
-    c = c.strip()
-    if not c:
-        continue
+def split_words(c):
     try:
-        toks = shlex.split(c)
+        return shlex.split(c)
     except ValueError:
-        toks = c.split()
+        return c.split()
+
+
+# 2 つの読み方の間に印の行（\x1e だけ）を出す。 bash の側は、 そこで cd の追跡を戻す（前の読み方の
+# cd を足す読み方へ持ち越さない）
+lines = [drop_redirects(split_words(c.strip()), c.strip()) for c in chunks if c.strip()]
+lines.append(None)
+lines += [drop_redirects(split_words(c.strip()), c.strip()) for c in chunks2 if c.strip()]
+for toks in lines:
+    if toks is None:
+        print('\x1e')
+        continue
     # 先頭の飾りを剥がす: VAR=val / env / command / builtin / \ / 絶対パス / sudo / nohup / time / xargs
     i = 0
     while i < len(toks):
@@ -202,7 +282,8 @@ for c in chunks:
     if not toks:
         continue
     toks[0] = toks[0].lstrip('\\').rsplit('/', 1)[-1]
-    print('\x1f'.join(toks))
+    # 境の印（\x1e だけの行）と取り違えない
+    print('\x1f'.join(toks).replace('\x1e', '?'))
 PY
 )" || deny "python3 で命令を分けられない" "python3 -c 'print(1)' が動くかを確かめてください。"
 
@@ -215,6 +296,11 @@ esac
 CWD_OVERRIDE=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
+  # 2 つの読み方の境の印（#162）。 前の読み方の cd を、 足す読み方へ持ち越さない
+  if [ "$line" = $'\x1e' ]; then
+    CWD_OVERRIDE=""
+    continue
+  fi
   IFS=$'\x1f' read -r -a TOK <<< "$line"
   prog="${TOK[0]:-}"
 

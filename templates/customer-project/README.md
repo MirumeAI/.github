@@ -83,11 +83,10 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 ## 始めるときにやること
 
-この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
+この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties の `group` は `customer`。稼働しても変えない）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
 
 1. `versions.yaml` は未選択（`tag` と `commit` が `null`）で始まる。使う Core を決めたら、Product Release のタグと、タグが指す commit を書く（`pdm` の行は撮像側のタグの `pdm.lock.json` と同じにする）
 2. 機体（顧客に見せる機体・据え付けた機体）へ配るときは、`config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で配る。開発の機体だけで動かす間は、`dev/config/image-acquisition/<案件の名前>.json` に置く（`dev/README.md`）。どちらも、同じ Pull Request で `customer-profile.yaml` も書く（下の「顧客の間の混入の検査を始める」）
-3. 現場で稼働したら、分類の `production_impact` と `governance_profile` を `direct` と `strict` に変える（Organization の管理者が行う）。稼働前は `none` と `standard`
 
 ### 顧客の間の混入の検査を始める
 

@@ -26,13 +26,8 @@ sys.path.insert(0, str(HERE))
 import org_audit as A                                      # noqa: E402
 
 
-#: 標準の言葉で、 組も正しい値（Core と同じ）。
-GOOD = {
-    "domain": "visual-inspection", "repo_type": "product-core",
-    "criticality": "high", "lifecycle": "active",
-    "owner_team": "visual-inspection", "governance_profile": "strict",
-    "data_classification": "internal", "production_impact": "direct",
-}
+#: 決めた値（Core と同じ）。
+GOOD = {"group": "platform"}
 
 
 def _props(**kw):
@@ -62,14 +57,14 @@ def _repo(**kw):
     return d
 
 
-def _schema(names):
-    return {n: {"required": False, "values": list(A.STANDARD.get(n) or ())}
-            for n in names}
+def _schema(values=A.GROUPS, required=True, default="customer"):
+    return {A.PROPERTY: {"required": required, "default": default,
+                         "values": list(values)}}
 
 
 def _org(**kw):
-    """既定は標準の Property がすべて定義済み。"""
-    d = {"plan": "team", "properties": _schema(A.STANDARD),
+    """既定は分類 `group` が決めた値の並びで定義済み。"""
+    d = {"plan": "team", "properties": _schema(),
          "issue_types": [], "issue_fields": [], "teams": {}}
     d.update(kw)
     return d
@@ -166,7 +161,6 @@ class ItFindsWhatMattersTest(unittest.TestCase):
 
     def test_no_pr_required_is_critical(self) -> None:
         repos = {"r": _repo(private=False, required_checks=["x"],
-                            properties=_props(data_classification="public"),
                             protection={"pr_required": False, "approvals": 0,
                                         "force_push_blocked": True,
                                         "deletion_blocked": True})}
@@ -183,163 +177,128 @@ class ItFindsWhatMattersTest(unittest.TestCase):
         実測で `.github` がこの状態だった（保護はあるが必須チェック 0 件）。
         """
         repos = {"r": _repo(private=False, required_checks=[],
-                            properties=_props(data_classification="public"),
                             protection={"pr_required": True, "approvals": 0,
                                         "force_push_blocked": True,
                                         "deletion_blocked": True})}
         findings, _ = A.classify(_org(), repos, {})
         self.assertIn("no_required_checks", [f["code"] for f in findings])
 
-    def test_unclassified_repo_is_found(self) -> None:
-        p = _props(repo_type="unclassified")
-        findings, _ = A.classify(_org(), {"r": _repo(properties=p)}, {})
-        self.assertIn("unclassified_repo", [f["code"] for f in findings])
-
-    def test_a_missing_property_is_found(self) -> None:
+    def test_a_missing_group_is_found(self) -> None:
         findings, _ = A.classify(_org(), {"r": _repo(properties={})}, {})
-        codes = [f["message"] for f in findings]
-        self.assertTrue(any("repo_type" in m for m in codes))
-        self.assertTrue(any("lifecycle" in m for m in codes))
+        self.assertEqual(_codes(findings), ["missing_property"])
+        self.assertIn("group", findings[0]["message"])
 
     def test_an_archived_repo_is_skipped(self) -> None:
         """archived は棚卸し対象外。 所見で埋めない。"""
-        p = _props(lifecycle="archived")
         findings, _ = A.classify(
-            _org(), {"r": _repo(archived=True, files={}, properties=p)}, {})
+            _org(), {"r": _repo(archived=True, files={}, properties={})}, {})
         self.assertEqual(findings, [])
 
-    def test_an_archived_repo_still_marked_active_is_found(self) -> None:
-        """**一覧では稼働中に見える。**
 
-        この判定は前からあったが、 archived を先に飛ばしていたので
-        一度も動いていなかった。
-        """
-        for lc in ("active", "maintenance"):
-            with self.subTest(lifecycle=lc):
-                findings, _ = A.classify(_org(), {"r": _repo(
-                    archived=True, properties=_props(lifecycle=lc))}, {})
-                self.assertEqual(_codes(findings), ["archive_drift"])
+class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
+    """**分類は `group` の 1 つで、 決めた値の並びで書く。**
 
-
-class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
-    """**Custom Properties は標準（§6）の言葉で書く。**
-
-    2026-09-30 に寄せ終えた。 決めた値の表で所見 0 件になること、
-    旧い言葉がもう通らないことを確かめる。
+    Organization の分類が前の 8 つから `group` に替わったので、 2026-11-19 に
+    決まりと道具を合わせた（MirumeAI/.github#195）。 今の割り当てで所見が
+    0 件になること、 決めた並びの外の値と前の 8 つの言葉が通らないことを
+    確かめる。
     """
 
-    #: 決めた Target（as_is_inventory.md §9.1）。 名前は伏せている
-    #: （このリポジトリは Public）。
+    #: 今の割り当て。 名前は伏せている（このリポジトリは Public）。
     TARGET = {
-        "core-a": (True, "visual-inspection", "product-core", "high",
-                   "visual-inspection", "strict", "internal", "direct"),
-        "core-b": (True, "visual-inspection", "product-core", "high",
-                   "visual-inspection", "strict", "internal", "direct"),
-        "customer-a": (True, "visual-inspection", "customer-project", "high",
-                       "delivery", "strict", "customer-confidential",
-                       "direct"),
-        "customer-b": (True, "visual-inspection", "customer-project", "high",
-                       "delivery", "strict", "customer-confidential",
-                       "direct"),
-        "platform": (False, "platform", "platform", "medium", "platform",
-                     "strict", "public", "indirect"),
-        "docs": (True, "internal", "documentation", "low", "platform",
-                 "standard", "internal", "none"),
+        "core-a": (True, "platform"),
+        "core-b": (True, "platform"),
+        "customer-a": (True, "customer"),
+        "customer-b": (True, "customer"),
+        "customer-c": (True, "customer"),
+        ".github": (False, "infrastructure"),
+        "docs": (True, "infrastructure"),
+        "docs-private": (True, "infrastructure"),
     }
 
-    #: 寄せる前に使っていた言葉（2026-09-30 まで）。
-    OLD_WORDS = {
-        "repo_type": ("core", "customer", "docs", "org-config",
-                      "template", "workflow"),
-        "lifecycle": ("development", "production"),
-    }
+    def test_the_decided_values(self) -> None:
+        self.assertEqual(A.PROPERTY, "group")
+        self.assertEqual(set(A.GROUPS), {
+            "tools", "research", "infrastructure", "customer", "platform"})
 
-    def test_all_eight_properties_of_the_standard_are_audited(self) -> None:
-        self.assertEqual(set(A.STANDARD), {
-            "domain", "repo_type", "criticality", "lifecycle", "owner_team",
-            "governance_profile", "data_classification",
-            "production_impact"})
-
-    def test_the_decided_target_has_no_findings(self) -> None:
-        """**決めた値を入れたら、 監査の所見が 0 件になること。**
+    def test_the_current_assignment_has_no_findings(self) -> None:
+        """**今の値で、 監査の所見が 0 件になること。**
 
         適用後の確認はこれで行う。 目で表と見比べると見落とす。
         """
-        keys = ("domain", "repo_type", "criticality", "owner_team",
-                "governance_profile", "data_classification",
-                "production_impact")
-        repos = {}
-        for name, (private, *vals) in self.TARGET.items():
-            p = dict(zip(keys, vals), lifecycle="active")
-            repos[name] = _repo(private=private, properties=p)
+        repos = {name: _repo(private=private, properties={"group": g})
+                 for name, (private, g) in self.TARGET.items()}
         findings, _ = A.classify(_org(), repos, {})
         self.assertEqual(findings, [])
 
-    def test_the_old_words_are_no_longer_accepted(self) -> None:
-        """**寄せ終えたので、 旧い言葉は「標準に無い値」になる。**
-
-        定義からも外したので入れられないはずだが、 選択肢を戻されたときに
-        気づけるようにする。
-        """
-        for key, words in self.OLD_WORDS.items():
-            for w in words:
-                with self.subTest(key=key, value=w):
-                    findings, _ = A.classify(_org(), {"r": _repo(
-                        properties=_props(**{key: w}))}, {})
-                    self.assertEqual(_codes(findings), ["unknown_value"])
-                    self.assertEqual(findings[0]["severity"], A.WARNING)
-
-    def test_a_team_name_as_owner_is_found(self) -> None:
-        """**担当は機能の言葉で表す。** Team は権限の単位（D12）。
-
-        Team の一覧は API から取るので、 Team が増えても表を直さなくてよい。
-        """
-        org = _org(teams={"developers": [], "maintainers": []})
-        for team in ("developers", "maintainers"):
-            with self.subTest(owner_team=team):
-                findings, _ = A.classify(org, {"r": _repo(
-                    properties=_props(owner_team=team))}, {})
-                self.assertEqual(_codes(findings), ["team_as_owner"])
-        findings, _ = A.classify(org, {"r": _repo(
-            properties=_props(owner_team="platform"))}, {})
-        self.assertEqual(findings, [], "機能の言葉まで Team 名と誤認しています")
-
-    def test_owner_team_is_an_open_vocabulary(self) -> None:
-        """標準も owner_team の選択肢を閉じていない（「...」）。"""
-        for team in ("integration", "research", "ai"):
-            with self.subTest(owner_team=team):
+    def test_every_decided_value_is_accepted(self) -> None:
+        for g in A.GROUPS:
+            with self.subTest(group=g):
                 findings, _ = A.classify(_org(), {"r": _repo(
-                    properties=_props(owner_team=team))}, {})
+                    properties={"group": g})}, {})
                 self.assertEqual(findings, [])
 
-    def test_a_value_outside_the_standard_is_found(self) -> None:
-        """標準に無い値（定義から外した `template` など）を見つける。"""
-        findings, _ = A.classify(_org(), {"r": _repo(
-            properties=_props(repo_type="template"))}, {})
-        self.assertEqual(_codes(findings), ["unknown_value"])
-        self.assertEqual(findings[0]["severity"], A.WARNING)
+    def test_a_value_outside_the_decided_list_is_found(self) -> None:
+        """前の 8 つの言葉（`product-core` など）も、 決めた並びの外。"""
+        for w in ("product-core", "customer-project", "documentation",
+                  "Customer", ""):
+            with self.subTest(value=w):
+                findings, _ = A.classify(_org(), {"r": _repo(
+                    properties={"group": w})}, {})
+                code = "missing_property" if not w else "unknown_value"
+                self.assertEqual(_codes(findings), [code])
+                self.assertEqual(findings[0]["severity"], A.WARNING)
 
-    def test_a_missing_value_is_found(self) -> None:
-        findings, _ = A.classify(_org(), {"r": _repo(
-            properties=_props(governance_profile=None))}, {})
+    def test_the_old_properties_alone_do_not_count(self) -> None:
+        """前の 8 つの値だけがあって `group` が無ければ、 未設定と数える。"""
+        findings, _ = A.classify(_org(), {"r": _repo(properties={
+            "repo_type": "product-core", "lifecycle": "active"})}, {})
         self.assertEqual(_codes(findings), ["missing_property"])
-        self.assertIn("governance_profile", findings[0]["message"])
 
-    def test_an_undefined_property_is_counted_once(self) -> None:
+    def test_an_undefined_group_is_counted_once(self) -> None:
         """**直すものは 1 つ。** 3 件の Repository に同じ所見を並べない。"""
-        names = [k for k in A.STANDARD if k != "domain"]
-        repos = {n: _repo(properties=_props(domain=None))
-                 for n in ("a", "b", "c")}
-        findings, _ = A.classify(_org(properties=_schema(names)), repos, {})
+        repos = {n: _repo(properties={}) for n in ("a", "b", "c")}
+        findings, _ = A.classify(_org(properties={}), repos, {})
         self.assertEqual(_codes(findings), ["missing_property_definition"])
         self.assertTrue(findings[0]["repo"].startswith("(org)"))
 
+    def test_the_old_definitions_do_not_stand_in_for_group(self) -> None:
+        old = {k: {"required": True, "values": []}
+               for k in ("repo_type", "lifecycle", "data_classification")}
+        findings, _ = A.classify(_org(properties=old), {}, {})
+        self.assertEqual(_codes(findings), ["missing_property_definition"])
+
+    def test_a_drift_in_the_choices_is_found(self) -> None:
+        """Organization の選べる値が、 決めた並びと違えば知らせる。"""
+        for values, lack, extra in (
+                ([g for g in A.GROUPS if g != "customer"], "customer", "なし"),
+                ([*A.GROUPS, "archive"], "なし", "archive")):
+            with self.subTest(values=values):
+                findings, _ = A.classify(
+                    _org(properties=_schema(values)), {}, {})
+                self.assertEqual(_codes(findings), ["property_values_drift"])
+                self.assertIn(f"無い: {lack}", findings[0]["message"])
+                self.assertIn(f"多い: {extra}", findings[0]["message"])
+
+    def test_group_must_be_required_with_the_customer_default(self) -> None:
+        """既定が customer なので、 値を決めずに作った Repository も顧客の
+        Repository と同じ厳しさで照らせる。 変わったら知らせる。"""
+        for kw in ({"required": False}, {"default": "platform"},
+                   {"default": None}):
+            with self.subTest(**kw):
+                findings, _ = A.classify(
+                    _org(properties=_schema(**kw)), {}, {})
+                self.assertEqual(_codes(findings), ["property_default_drift"])
+                self.assertEqual(findings[0]["severity"], A.WARNING)
+
     def test_an_unreadable_schema_is_not_called_missing(self) -> None:
-        """**取れないことを「無い」と言わない。** 前から必須の 2 つだけ見る。"""
-        repos = {"r": _repo(properties={"lifecycle": "active"})}
-        findings, _ = A.classify(_org(properties=None), repos, {})
+        """**取れないことを「無い」と言わない。** 値はそれでも見る。"""
+        findings, _ = A.classify(
+            _org(properties=None), {"r": _repo(properties={})}, {})
         self.assertEqual(_codes(findings), ["missing_property"])
-        self.assertIn("repo_type", findings[0]["message"])
+        findings, _ = A.classify(
+            _org(properties=None), {"r": _repo()}, {})
+        self.assertEqual(findings, [])
 
     def test_a_version_in_a_property_is_found(self) -> None:
         """**版の正本は versions.yaml。** Property にも書くと 2 つになる。"""
@@ -348,56 +307,77 @@ class ItSpeaksTheStandardVocabularyTest(unittest.TestCase):
         self.assertEqual(_codes(findings), ["second_source_of_truth"])
 
 
-class ItAppliesTheProfileRulesTest(unittest.TestCase):
-    """governance_profile の組（標準 §8）。 いまは Ruleset を当てられない
-    （Plan の制約）ので、 **意図として正しいかをここで確かめる。**"""
-
-    def _find(self, **kw):
-        findings, _ = A.classify(
-            _org(), {"r": _repo(properties=_props(**kw))}, {})
-        return _codes(findings)
-
-    def test_direct_impact_needs_strict(self) -> None:
-        """顧客 Repository は標準では standard だが、 現場へ直接届く。"""
-        self.assertEqual(self._find(
-            repo_type="customer-project", governance_profile="standard",
-            data_classification="customer-confidential"),
-            ["profile_mismatch"])
-
-    def test_the_platform_needs_strict_without_direct_impact(self) -> None:
-        self.assertEqual(self._find(
-            repo_type="platform", governance_profile="standard",
-            production_impact="indirect"), ["profile_mismatch"])
-
-    def test_documentation_may_be_standard(self) -> None:
-        self.assertEqual(self._find(
-            repo_type="documentation", governance_profile="standard",
-            production_impact="none"), [])
-
-
 class ItGuardsThePublicBoundaryTest(unittest.TestCase):
-    """**Public への混入は取り消せない。** 分類と公開範囲の食い違いを見る。"""
+    """**Public への混入は取り消せない。** 分類・名前と公開範囲を照らす。"""
 
-    def _find(self, private, dc):
-        findings, _ = A.classify(_org(), {"r": _repo(
-            private=private,
-            properties=_props(data_classification=dc))}, {})
+    def _find(self, name, private, group):
+        props = {} if group is None else {"group": group}
+        findings, _ = A.classify(_org(), {name: _repo(
+            private=private, properties=props)}, {})
         return findings
 
-    def test_customer_data_on_a_public_repo_is_critical(self) -> None:
-        for dc in A.NEVER_PUBLIC:
-            with self.subTest(data_classification=dc):
-                f = self._find(False, dc)
-                self.assertEqual(_codes(f), ["public_classification"])
-                self.assertEqual(f[0]["severity"], A.CRITICAL)
+    def test_customer_group_on_a_public_repo_is_critical(self) -> None:
+        f = self._find("r", False, "customer")
+        self.assertEqual(_codes(f), ["public_customer_repo"])
+        self.assertEqual(f[0]["severity"], A.CRITICAL)
 
-    def test_internal_on_a_public_repo_is_a_warning(self) -> None:
-        f = self._find(False, "internal")
-        self.assertEqual(_codes(f), ["public_classification"])
+    def test_a_public_customer_repo_is_critical_whatever_its_group(self) -> None:
+        """分類を付け忘れた・違う値の顧客の Repository も、 名前で見つける。"""
+        for group in ("customer", "infrastructure", None, "unknown"):
+            with self.subTest(group=group):
+                f = self._find("customer-a", False, group)
+                crit = [x for x in f if x["severity"] == A.CRITICAL]
+                self.assertEqual(_codes(crit), ["public_customer_repo"])
+        f = self._find("customer-a", False, "customer")
+        self.assertEqual(len(f), 1, "同じ Repository に Critical を 2 つ並べない")
+        self.assertIn("customer-", f[0]["message"])
+        self.assertIn("group=customer", f[0]["message"])
+
+    def test_a_customer_repo_needs_the_customer_group(self) -> None:
+        f = self._find("customer-a", True, "platform")
+        self.assertEqual(_codes(f), ["customer_repo_group"])
         self.assertEqual(f[0]["severity"], A.WARNING)
 
+    def test_only_the_listed_repo_may_be_public(self) -> None:
+        """**ほかは Private のはず。** Core は案件の長期 Branch を、 文書は顧客
+        Repository の名前を持つ（前の `data_classification=internal` の Warning
+        の代わり。 #195 の Reviewer A・B）。"""
+        self.assertEqual(A.PUBLIC_OK, (".github",))
+        self.assertEqual(self._find(".github", False, "infrastructure"), [])
+        for name, group in (("core-a", "platform"), ("docs", "infrastructure"),
+                            ("my-customer-a", "tools"), (".github-x", None)):
+            with self.subTest(name=name):
+                f = self._find(name, False, group)
+                self.assertIn("public_unexpected", _codes(f))
+                hit = next(x for x in f if x["code"] == "public_unexpected")
+                self.assertEqual(hit["severity"], A.WARNING)
+
+    def test_the_name_is_read_without_case(self) -> None:
+        f = self._find("Customer-A", False, "infrastructure")
+        crit = [x for x in f if x["severity"] == A.CRITICAL]
+        self.assertEqual(_codes(crit), ["public_customer_repo"])
+        self.assertEqual(_codes(self._find("CUSTOMER-a", True, "platform")),
+                         ["customer_repo_group"])
+
+    def test_an_archived_public_repo_is_still_watched(self) -> None:
+        """archived でも Public なら中身は読める。 公開範囲だけは照らす。"""
+        for name, group, code, sev in (
+                ("customer-a", None, "public_customer_repo", A.CRITICAL),
+                ("r", "customer", "public_customer_repo", A.CRITICAL),
+                ("core-a", "platform", "public_unexpected", A.WARNING)):
+            with self.subTest(name=name):
+                findings, _ = A.classify(_org(), {name: _repo(
+                    archived=True, private=False, files={},
+                    properties={} if group is None else {"group": group})}, {})
+                self.assertEqual(_codes(findings), [code])
+                self.assertEqual(findings[0]["severity"], sev)
+        findings, _ = A.classify(_org(), {"customer-a": _repo(
+            archived=True, files={}, properties={"group": "platform"})}, {})
+        self.assertEqual(findings, [], "archived の Private は照らさない")
+
     def test_a_private_repo_may_hold_customer_data(self) -> None:
-        self.assertEqual(self._find(True, "customer-confidential"), [])
+        self.assertEqual(self._find("customer-a", True, "customer"), [])
+        self.assertEqual(self._find("r", True, "customer"), [])
 
 
 class ItKeepsTheFormTypesUsableTest(unittest.TestCase):

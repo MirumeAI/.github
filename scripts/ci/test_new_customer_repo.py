@@ -590,7 +590,8 @@ class TheClassificationPassesTheAuditTest(unittest.TestCase):
                 "plan_limited": []}
         org = {"plan": "free",
                "properties": {p["property_name"]: {
-                   "required": p["required"], "values": p["allowed_values"]}
+                   "required": p["required"], "default": p["default_value"],
+                   "values": p["allowed_values"]}
                    for p in _schema()},
                "issue_types": None, "issue_fields": [],
                "teams": {s: [] for s, _ in N.TEAMS}}

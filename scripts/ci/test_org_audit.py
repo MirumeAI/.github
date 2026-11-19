@@ -57,8 +57,9 @@ def _repo(**kw):
     return d
 
 
-def _schema(values=A.GROUPS):
-    return {A.PROPERTY: {"required": True, "values": list(values)}}
+def _schema(values=A.GROUPS, required=True, default="customer"):
+    return {A.PROPERTY: {"required": required, "default": default,
+                         "values": list(values)}}
 
 
 def _org(**kw):
@@ -210,7 +211,7 @@ class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
         "customer-a": (True, "customer"),
         "customer-b": (True, "customer"),
         "customer-c": (True, "customer"),
-        "org-config": (False, "infrastructure"),
+        ".github": (False, "infrastructure"),
         "docs": (True, "infrastructure"),
         "docs-private": (True, "infrastructure"),
     }
@@ -279,6 +280,17 @@ class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
                 self.assertIn(f"無い: {lack}", findings[0]["message"])
                 self.assertIn(f"多い: {extra}", findings[0]["message"])
 
+    def test_group_must_be_required_with_the_customer_default(self) -> None:
+        """既定が customer なので、 値を決めずに作った Repository も顧客の
+        Repository と同じ厳しさで照らせる。 変わったら知らせる。"""
+        for kw in ({"required": False}, {"default": "platform"},
+                   {"default": None}):
+            with self.subTest(**kw):
+                findings, _ = A.classify(
+                    _org(properties=_schema(**kw)), {}, {})
+                self.assertEqual(_codes(findings), ["property_default_drift"])
+                self.assertEqual(findings[0]["severity"], A.WARNING)
+
     def test_an_unreadable_schema_is_not_called_missing(self) -> None:
         """**取れないことを「無い」と言わない。** 値はそれでも見る。"""
         findings, _ = A.classify(
@@ -326,11 +338,42 @@ class ItGuardsThePublicBoundaryTest(unittest.TestCase):
         self.assertEqual(_codes(f), ["customer_repo_group"])
         self.assertEqual(f[0]["severity"], A.WARNING)
 
-    def test_other_public_repos_are_fine(self) -> None:
-        for name, group in (("org-config", "infrastructure"),
-                            ("r", "platform"), ("my-customer-a", "tools")):
+    def test_only_the_listed_repo_may_be_public(self) -> None:
+        """**ほかは Private のはず。** Core は案件の長期 Branch を、 文書は顧客
+        Repository の名前を持つ（前の `data_classification=internal` の Warning
+        の代わり。 #195 の Reviewer A・B）。"""
+        self.assertEqual(A.PUBLIC_OK, (".github",))
+        self.assertEqual(self._find(".github", False, "infrastructure"), [])
+        for name, group in (("core-a", "platform"), ("docs", "infrastructure"),
+                            ("my-customer-a", "tools"), (".github-x", None)):
             with self.subTest(name=name):
-                self.assertEqual(self._find(name, False, group), [])
+                f = self._find(name, False, group)
+                self.assertIn("public_unexpected", _codes(f))
+                hit = next(x for x in f if x["code"] == "public_unexpected")
+                self.assertEqual(hit["severity"], A.WARNING)
+
+    def test_the_name_is_read_without_case(self) -> None:
+        f = self._find("Customer-A", False, "infrastructure")
+        crit = [x for x in f if x["severity"] == A.CRITICAL]
+        self.assertEqual(_codes(crit), ["public_customer_repo"])
+        self.assertEqual(_codes(self._find("CUSTOMER-a", True, "platform")),
+                         ["customer_repo_group"])
+
+    def test_an_archived_public_repo_is_still_watched(self) -> None:
+        """archived でも Public なら中身は読める。 公開範囲だけは照らす。"""
+        for name, group, code, sev in (
+                ("customer-a", None, "public_customer_repo", A.CRITICAL),
+                ("r", "customer", "public_customer_repo", A.CRITICAL),
+                ("core-a", "platform", "public_unexpected", A.WARNING)):
+            with self.subTest(name=name):
+                findings, _ = A.classify(_org(), {name: _repo(
+                    archived=True, private=False, files={},
+                    properties={} if group is None else {"group": group})}, {})
+                self.assertEqual(_codes(findings), [code])
+                self.assertEqual(findings[0]["severity"], sev)
+        findings, _ = A.classify(_org(), {"customer-a": _repo(
+            archived=True, files={}, properties={"group": "platform"})}, {})
+        self.assertEqual(findings, [], "archived の Private は照らさない")
 
     def test_a_private_repo_may_hold_customer_data(self) -> None:
         self.assertEqual(self._find("customer-a", True, "customer"), [])

@@ -67,8 +67,14 @@ VERSION_PROPERTIES = ("core_version",)
 CUSTOMER_GROUP = "customer"
 
 #: 顧客案件の Repository の名前の頭（`customer-<会社>-<部品>`）。 分類を
-#: 付け忘れても、 名前で顧客の Repository と分かる。
+#: 付け忘れても、 名前で顧客の Repository と分かる。 大文字と小文字は区別しない。
 CUSTOMER_PREFIX = "customer-"
+
+#: Public であってよい Repository。 **ほかは Private のはず**（Core は案件の
+#: 長期 Branch を、 文書は顧客 Repository の名前を持つ）。 `group` では Public で
+#: よい infrastructure と Private であるべき infrastructure を分けられないので、
+#: 名前で持つ（前の `data_classification=public` の代わり。 #195 の Reviewer A・B）。
+PUBLIC_OK = (".github",)
 
 #: Plan で使えない機能。 **未実施と区別する。**
 PLAN_LIMITED = {
@@ -168,6 +174,7 @@ def audit_org(gh: Gh) -> dict:
         out["properties"] = {
             p["property_name"]: {
                 "required": p.get("required", False),
+                "default": p.get("default_value"),
                 "values": p.get("allowed_values") or [],
             }
             for p in schema
@@ -265,13 +272,15 @@ def _check_group(name: str, info: dict, defined: "dict | None",
     return v
 
 
-def _check_boundary(name: str, info: dict, group: "str | None", add) -> None:
+def _check_boundary(name: str, info: dict, group: "str | None", add,
+                    public_only: bool = False) -> None:
     """**Public への混入は取り消せない。** 分類・名前と公開範囲を照らす。
 
     名前でも見るのは、 分類を付け忘れた・取れなかった顧客の Repository も
-    見落とさないため。
+    見落とさないため。 `public_only` は公開範囲だけを見る（archived の
+    Repository。 archived でも Public なら中身は読める）。
     """
-    customer_name = name.startswith(CUSTOMER_PREFIX)
+    customer_name = name.lower().startswith(CUSTOMER_PREFIX)
     if not info["private"]:
         why = [w for w, hit in ((f"{PROPERTY}={CUSTOMER_GROUP}",
                                  group == CUSTOMER_GROUP),
@@ -281,6 +290,12 @@ def _check_boundary(name: str, info: dict, group: "str | None", add) -> None:
             add(CRITICAL, "public_customer_repo", name,
                 f"Public なのに{'・'.join(why)}"
                 "（顧客の値が外へ出ている可能性がある）")
+        elif name not in PUBLIC_OK:
+            add(WARNING, "public_unexpected", name,
+                "Public であってよい Repository の並びに無いのに Public"
+                "（Private のはずの Repository が公開された可能性がある）")
+    if public_only:
+        return
     if customer_name and group is not None and group != CUSTOMER_GROUP:
         add(WARNING, "customer_repo_group", name,
             f"顧客案件の Repository（名前が {CUSTOMER_PREFIX} で始まる）なのに"
@@ -298,7 +313,10 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
     defined = org.get("properties")
     for name, info in repos.items():
         if info["archived"]:
-            # 棚卸し対象外（GitHub の archived だけで分かる）
+            # 棚卸し対象外（GitHub の archived だけで分かる）。 ただし
+            # Public の境は見る（archived でも Public なら中身は読める）
+            _check_boundary(name, info, info["properties"].get(PROPERTY), add,
+                            public_only=True)
             continue
         # --- 必須ファイル ---
         for f, present in info["files"].items():
@@ -349,7 +367,14 @@ def classify(org: dict, repos: dict, local: dict) -> tuple:
             add(WARNING, "missing_property_definition", f"(org) {ORG}",
                 f"分類 {PROPERTY} が定義されていない")
         else:
-            got = set(defined[PROPERTY].get("values") or [])
+            d = defined[PROPERTY]
+            if not d.get("required") or d.get("default") != CUSTOMER_GROUP:
+                add(WARNING, "property_default_drift", f"(org) {ORG}",
+                    f"分類 {PROPERTY} が必須で既定 {CUSTOMER_GROUP} でない"
+                    f"（必須: {'はい' if d.get('required') else 'いいえ'}・"
+                    f"既定: {d.get('default') or 'なし'}。 値を決めずに作った"
+                    " Repository を顧客の Repository と同じ厳しさで照らせない）")
+            got = set(d.get("values") or [])
             lack = [v for v in GROUPS if v not in got]
             extra = sorted(got - set(GROUPS))
             if lack or extra:

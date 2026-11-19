@@ -306,8 +306,8 @@ def _check_boundary(name: str, info: dict, group: "str | None", add,
         # Critical が先に出る
         add(WARNING, "customer_group_name", name,
             f"{PROPERTY}={CUSTOMER_GROUP} なのに名前が {CUSTOMER_PREFIX} で始まらない"
-            f"（値を決めずに作ると既定の {CUSTOMER_GROUP} になる。 用途に合う値を"
-            " 入れるか、 顧客案件の Repository なら名前を合わせる）")
+            f"（値を決めずに作ると既定の {CUSTOMER_GROUP} になる。 用途に合う"
+            "値を入れるか、 顧客案件の Repository なら名前を合わせる）")
 
 
 def classify(org: dict, repos: dict, local: dict) -> tuple:

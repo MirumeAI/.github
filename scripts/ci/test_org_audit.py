@@ -291,6 +291,37 @@ class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
                 self.assertEqual(_codes(findings), ["property_default_drift"])
                 self.assertEqual(findings[0]["severity"], A.WARNING)
 
+    def test_the_definition_is_read_from_the_api(self) -> None:
+        """**監査は分類の定義を API から読む。** 必須・既定値・選べる値を
+        決め打ちにしない（#197。#196 の Reviewer A）。"""
+        for required, default, values, want in (
+                (True, "customer", list(A.GROUPS), []),
+                (False, "customer", list(A.GROUPS), ["property_default_drift"]),
+                (True, "platform", list(A.GROUPS), ["property_default_drift"]),
+                (True, None, list(A.GROUPS), ["property_default_drift"]),
+                (True, "customer", ["customer", "platform"],
+                 ["property_values_drift"])):
+            with self.subTest(required=required, default=default,
+                              values=values):
+                gh = A.Gh()
+
+                def fake(path, why, required=required, default=default,
+                         values=values):
+                    if path.endswith("/properties/schema"):
+                        p = {"property_name": "group", "required": required,
+                             "allowed_values": values}
+                        if default is not None:
+                            p["default_value"] = default
+                        return [p]
+                    return {} if path == f"/orgs/{A.ORG}" else []
+                gh.get = fake
+                org = A.audit_org(gh)
+                self.assertEqual(org["properties"], {"group": {
+                    "required": required, "default": default,
+                    "values": values}})
+                findings, _ = A.classify(org, {}, {})
+                self.assertEqual(_codes(findings), want)
+
     def test_an_unreadable_schema_is_not_called_missing(self) -> None:
         """**取れないことを「無い」と言わない。** 値はそれでも見る。"""
         findings, _ = A.classify(

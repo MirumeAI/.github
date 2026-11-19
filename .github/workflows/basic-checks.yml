@@ -20,7 +20,8 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 2026-11-19 に 10 分から 15 分へ（直近は 8〜9 分で、上限に当たって取り消された。#200）
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

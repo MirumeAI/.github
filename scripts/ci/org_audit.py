@@ -300,6 +300,14 @@ def _check_boundary(name: str, info: dict, group: "str | None", add,
         add(WARNING, "customer_repo_group", name,
             f"顧客案件の Repository（名前が {CUSTOMER_PREFIX} で始まる）なのに"
             f" {PROPERTY}={group}")
+    if group == CUSTOMER_GROUP and not customer_name and info["private"]:
+        # 既定値が customer なので、 値を決めずに作った Repository はここに
+        # 当たる（前の分類の unclassified の役目。 #199）。 Public なら上の
+        # Critical が先に出る
+        add(WARNING, "customer_group_name", name,
+            f"{PROPERTY}={CUSTOMER_GROUP} なのに名前が {CUSTOMER_PREFIX} で始まらない"
+            f"（値を決めずに作ると既定の {CUSTOMER_GROUP} になる。 用途に合う"
+            "値を入れるか、 顧客案件の Repository なら名前を合わせる）")
 
 
 def classify(org: dict, repos: dict, local: dict) -> tuple:

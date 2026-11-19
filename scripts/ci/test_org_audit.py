@@ -233,8 +233,9 @@ class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
 
     def test_every_decided_value_is_accepted(self) -> None:
         for g in A.GROUPS:
+            name = "customer-a" if g == "customer" else "r"
             with self.subTest(group=g):
-                findings, _ = A.classify(_org(), {"r": _repo(
+                findings, _ = A.classify(_org(), {name: _repo(
                     properties={"group": g})}, {})
                 self.assertEqual(findings, [])
 
@@ -320,6 +321,27 @@ class ItSpeaksTheGroupVocabularyTest(unittest.TestCase):
                     "required": required, "default": default,
                     "values": values}})
                 findings, _ = A.classify(org, {}, {})
+                self.assertEqual(_codes(findings), want)
+
+    def test_missing_keys_in_the_definition_count_as_drift(self) -> None:
+        """定義の鍵が無い・空のときは、 所見を出す側へ倒す（#199。 #198 の
+        Reviewer B）。 API の応答の形が変わっても、 違いを隠さない。"""
+        base = {"property_name": "group", "required": True,
+                "default_value": "customer", "allowed_values": list(A.GROUPS)}
+        for drop, over, want in (
+                ("required", {}, ["property_default_drift"]),
+                ("default_value", {}, ["property_default_drift"]),
+                ("allowed_values", {}, ["property_values_drift"]),
+                (None, {"allowed_values": None}, ["property_values_drift"]),
+                (None, {"allowed_values": []}, ["property_values_drift"])):
+            p = {k: v for k, v in base.items() if k != drop}
+            p.update(over)
+            with self.subTest(drop=drop, over=over):
+                gh = A.Gh()
+                gh.get = (lambda p: lambda path, why: [p]
+                          if path.endswith("/properties/schema")
+                          else ({} if path == f"/orgs/{A.ORG}" else []))(p)
+                findings, _ = A.classify(A.audit_org(gh), {}, {})
                 self.assertEqual(_codes(findings), want)
 
     def test_an_unreadable_schema_is_not_called_missing(self) -> None:
@@ -408,7 +430,20 @@ class ItGuardsThePublicBoundaryTest(unittest.TestCase):
 
     def test_a_private_repo_may_hold_customer_data(self) -> None:
         self.assertEqual(self._find("customer-a", True, "customer"), [])
-        self.assertEqual(self._find("r", True, "customer"), [])
+        self.assertEqual(self._find("Customer-B", True, "customer"), [])
+
+    def test_the_customer_group_needs_a_customer_name(self) -> None:
+        """**値を決めずに作った Repository を見つける。** 既定値が customer なので、
+        前の分類の unclassified の役目を名前で持つ（#199）。"""
+        f = self._find("r", True, "customer")
+        self.assertEqual(_codes(f), ["customer_group_name"])
+        self.assertEqual(f[0]["severity"], A.WARNING)
+        f = self._find("r", False, "customer")
+        self.assertEqual(_codes(f), ["public_customer_repo"],
+                         "Public なら Critical だけを出す")
+        findings, _ = A.classify(_org(), {"r": _repo(
+            archived=True, files={}, properties={"group": "customer"})}, {})
+        self.assertEqual(findings, [], "archived の Private は照らさない")
 
 
 class ItKeepsTheFormTypesUsableTest(unittest.TestCase):

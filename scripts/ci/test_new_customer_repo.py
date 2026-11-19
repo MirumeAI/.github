@@ -277,19 +277,18 @@ class FakeGh:
         return [c for c in self.calls if c[0] != "GET"]
 
 
-def _schema() -> list:
-    """Organization の分類の定義（標準のとおり）。
+def _schema(explicit: bool = False) -> list:
+    """Organization の分類の定義（今の Organization と同じ）。
 
-    Organization と同じく、 `repo_type` は必須で明示の値を要し（#179）、
-    `lifecycle` は必須で既定値がある。
+    `group` は必須で既定値は customer、 明示の値は要らない（2026-11-19 の
+    実測。 #195）。 `explicit` で明示の値を要する形にできる（#179 の断り）。
     """
-    defaults = {"repo_type": "unclassified", "lifecycle": "active"}
-    return [{"property_name": k,
-             "allowed_values": list(v) if v else None,
-             "default_value": defaults.get(k),
-             "required": k in defaults,
-             "require_explicit_values": k == "repo_type"}
-            for k, v in A.STANDARD.items()]
+    return [{"property_name": "group",
+             "allowed_values": ["tools", "research", "infrastructure",
+                                "customer", "platform"],
+             "default_value": "customer",
+             "required": True,
+             "require_explicit_values": explicit}]
 
 
 def _fresh(sha: str = "") -> dict:
@@ -575,14 +574,9 @@ class TheRulesAreWrittenOutTest(unittest.TestCase):
         self.assertEqual(dict(N.TEAMS),
                          {"developers": "push", "maintainers": "admin"})
 
-    def test_before_going_live_it_is_not_production(self) -> None:
-        """作った時点では稼働前（現場で稼働したら人が変える）。"""
-        self.assertEqual((N.PROPERTIES["repo_type"],
-                          N.PROPERTIES["data_classification"],
-                          N.PROPERTIES["production_impact"],
-                          N.PROPERTIES["governance_profile"]),
-                         ("customer-project", "customer-confidential",
-                          "none", "standard"))
+    def test_the_classification(self) -> None:
+        """分類は group=customer だけ（稼働しても変えない。 #195）。"""
+        self.assertEqual(N.PROPERTIES, {"group": "customer"})
 
 
 class TheClassificationPassesTheAuditTest(unittest.TestCase):
@@ -595,26 +589,21 @@ class TheClassificationPassesTheAuditTest(unittest.TestCase):
                 "protection": None, "required_checks": None,
                 "plan_limited": []}
         org = {"plan": "free",
-               "properties": {k: {"required": False, "values": list(v or ())}
-                              for k, v in A.STANDARD.items()},
+               "properties": {p["property_name"]: {
+                   "required": p["required"], "values": p["allowed_values"]}
+                   for p in _schema()},
                "issue_types": None, "issue_fields": [],
                "teams": {s: [] for s, _ in N.TEAMS}}
         findings, _ = A.classify(org, {NAME: repo}, {})
         return [f["code"] for f in findings if f["repo"] == NAME]
 
-    def test_before_going_live(self) -> None:
+    def test_the_planned_value_has_no_findings(self) -> None:
         self.assertEqual(self._findings(dict(N.PROPERTIES)), [])
 
-    def test_after_going_live(self) -> None:
-        """雛形の README の手順 3 のとおりに変えれば、 所見は出ない。"""
-        self.assertEqual(self._findings(dict(
-            N.PROPERTIES, production_impact="direct",
-            governance_profile="strict")), [])
-
-    def test_changing_only_one_is_found(self) -> None:
-        """片方だけ変えると監査が見つける（手順 3 で両方を変える理由）。"""
-        self.assertIn("profile_mismatch", self._findings(dict(
-            N.PROPERTIES, production_impact="direct")))
+    def test_another_group_is_found(self) -> None:
+        """顧客案件の Repository の group を変えると、 監査が見つける。"""
+        self.assertEqual(self._findings({"group": "platform"}),
+                         ["customer_repo_group"])
 
 
 class ThePlanChangesNothingTest(unittest.TestCase):
@@ -685,27 +674,41 @@ class ApplyTest(unittest.TestCase):
         self.assertIn("作成者と別の人が customer-profile.yaml が雛形の値の無い初期形のまま", out)
 
     def test_the_classification_goes_with_the_creation(self) -> None:
-        """**作る要求に、 計画の分類の値を全部入れる**（#179）。 引数で変えた値も。"""
-        fake = FakeGh({**_fresh(), **_writes_ok()})
-        code, out = _main([NAME, "--apply", "--criticality", "medium"], fake)
+        """**作る要求に、 計画の分類の値を全部入れる**（#179）。 明示の値を要する
+        定義に変わっても作れる。"""
+        routes = {**_fresh(), **_writes_ok()}
+        routes[("GET", "/orgs/MirumeAI/properties/schema")] = (
+            200, _schema(explicit=True))
+        fake = FakeGh(routes)
+        code, out = _main([NAME, "--apply"], fake)
         self.assertEqual(code, 0, out)
-        want = dict(N.PROPERTIES, criticality="medium")
+        want = {"group": "customer"}
         w = fake.writes()
         self.assertEqual(w[0][2]["custom_properties"], want)
         self.assertEqual({p["property_name"]: p["value"]
                           for p in w[1][2]["properties"]}, want)
 
+    def test_the_old_classification_options_are_gone(self) -> None:
+        """前の分類の引数（`--domain`・`--criticality`）は無い（#195）。"""
+        for opt in ("--domain", "--criticality"):
+            with self.subTest(opt=opt), redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                _main([NAME, opt, "x"], FakeGh(_fresh()))
+
     def test_the_fake_refuses_like_github(self) -> None:
         """偽の gh は、 明示の値を要する分類の無い作る要求を断る。 この断りが
         無いと、 上の試験は値を渡し忘れた道具でも通る。"""
-        fake = FakeGh({**_fresh(), **_writes_ok()})
+        routes = {**_fresh(), **_writes_ok()}
+        routes[("GET", "/orgs/MirumeAI/properties/schema")] = (
+            200, _schema(explicit=True))
+        fake = FakeGh(routes)
         body = json.dumps({"name": NAME, "private": True}).encode()
         r = fake(["api", "-X", "POST", "/orgs/MirumeAI/repos"], body)
         self.assertEqual(r.returncode, 1)
-        self.assertIn(b"'repo_type' requires an explicit value", r.stderr)
+        self.assertIn(b"'group' requires an explicit value", r.stderr)
         self.assertIn(b"(HTTP 422)", r.stderr)
         body = json.dumps({"name": NAME, "private": True,
-                           "custom_properties": {"repo_type": ""}}).encode()
+                           "custom_properties": {"group": ""}}).encode()
         r = fake(["api", "-X", "POST", "/orgs/MirumeAI/repos"], body)
         self.assertEqual(r.returncode, 1, "空の値でも通した")
 
@@ -779,32 +782,35 @@ class ResumeTest(unittest.TestCase):
         self.assertIn("--resume", out)
 
     def test_resume_skips_what_is_done_and_keeps_values(self) -> None:
-        """**入っている値を上書きしない。** 人が直した値を黙って戻さない。"""
-        routes = {**_fresh(), **_writes_ok()}
-        routes[("GET", REPO)] = (200, {"name": NAME, "default_branch": "main"})
-        routes[("GET", f"{REPO}/properties/values")] = (200, [
-            {"property_name": "repo_type", "value": "unclassified"},  # 既定値
-            {"property_name": "lifecycle", "value": "active"},        # 同じ
-            {"property_name": "criticality", "value": "medium"},      # 人が直した
-        ])
-        routes[("GET", PR_LIST)] = (200, [
-            {"state": "open", "merged_at": None,
-             "html_url": f"https://github.com/MirumeAI/{NAME}/pull/1"}])
-        fake = FakeGh(routes)
-        code, out = _main([NAME, "--apply", "--resume"], fake)
-        self.assertEqual(code, 0, out)
-        w = fake.writes()
-        self.assertNotIn(("POST", "/orgs/MirumeAI/repos"),
-                         [(m, p) for m, p, _ in w])
-        props = {p["property_name"]: p["value"]
-                 for m, p_, b in w if p_.endswith("/properties/values")
-                 for p in b["properties"]}
-        self.assertEqual(props["repo_type"], "customer-project")
-        self.assertNotIn("lifecycle", props)
-        self.assertNotIn("criticality", props)
-        self.assertIn("criticality=medium", out)
-        self.assertFalse([p for m, p, _ in w if m == "POST"],
-                         "Pull Request があるのに作り直した")
+        """**入っている値を上書きしない。** 人が直した値を黙って戻さない。
+        空なら入れ、 同じ値（既定値）なら飛ばす。"""
+        for current, written, note in (
+                ([], {"group": "customer"}, None),
+                ([{"property_name": "group", "value": "customer"}], {}, None),
+                ([{"property_name": "group", "value": "platform"}], {},
+                 "group=platform")):
+            with self.subTest(current=current):
+                routes = {**_fresh(), **_writes_ok()}
+                routes[("GET", REPO)] = (
+                    200, {"name": NAME, "default_branch": "main"})
+                routes[("GET", f"{REPO}/properties/values")] = (200, current)
+                routes[("GET", PR_LIST)] = (200, [
+                    {"state": "open", "merged_at": None,
+                     "html_url": f"https://github.com/MirumeAI/{NAME}/pull/1"}])
+                fake = FakeGh(routes)
+                code, out = _main([NAME, "--apply", "--resume"], fake)
+                self.assertEqual(code, 0, out)
+                w = fake.writes()
+                self.assertNotIn(("POST", "/orgs/MirumeAI/repos"),
+                                 [(m, p) for m, p, _ in w])
+                props = {p["property_name"]: p["value"]
+                         for m, p_, b in w if p_.endswith("/properties/values")
+                         for p in b["properties"]}
+                self.assertEqual(props, written)
+                if note:
+                    self.assertIn(note, out)
+                self.assertFalse([p for m, p, _ in w if m == "POST"],
+                                 "Pull Request があるのに作り直した")
 
     def test_resume_needs_apply(self) -> None:
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -874,16 +880,17 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("customer-profile.yaml", out)
 
-    def test_a_changed_classification_is_only_a_note(self) -> None:
-        """稼働した後に変えた分類は NG にしない（正しさは監査が見る）。"""
+    def test_a_changed_group_is_found_by_the_audit(self) -> None:
+        """group を customer から変えると、 監査の所見で NG になる（#195）。"""
         routes = _created()
-        routes[("GET", f"{REPO}/properties/values")] = (200, [
-            {"property_name": k, "value": v} for k, v in dict(
-                N.PROPERTIES, production_impact="direct",
-                governance_profile="strict").items()])
-        code, out, _ = self._check(routes)
-        self.assertEqual(code, 0, out)
-        self.assertIn("production_impact=direct", out)
+        changed = [{"property_name": "group", "value": "platform"}]
+        routes[("GET", f"{REPO}/properties/values")] = (200, changed)
+        routes[("GET", "/orgs/MirumeAI/properties/values")] = (
+            200, [{"repository_name": NAME, "properties": changed}])
+        code, out = _main([NAME, "--check"], FakeGh(routes))
+        self.assertEqual(code, 1, out)
+        self.assertIn("分類が作ったときの値と違う: group=platform", out)
+        self.assertIn("customer- で始まる）なのに group=platform", out)
 
 
 class TheIsolationStartsOffTest(unittest.TestCase):

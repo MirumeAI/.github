@@ -18,7 +18,7 @@
 `--apply` が行うこと（済んだものは飛ばす）:
 
   1. Repository を作る（Private。 分類の値も作る要求に入れる）
-  2. 分類（Custom Properties）を稼働前の値にする
+  2. 分類（Custom Properties の `group`）を customer にする
   3. Merge を Squash だけにし、 merge 後に Branch を消す
   4. Team の権限を付ける
   5. Dependabot Alerts を有効にする
@@ -141,20 +141,11 @@ REPO_SETTINGS = {
     "has_projects": False,
 }
 
-#: 分類（Custom Properties）。 **稼働前の値。** 現場で稼働したら
-#: `production_impact` と `governance_profile` を `direct` と `strict` に
-#: 変える（雛形の README）。 値が標準にあり、 組が監査の規則に合うことは
-#: テストが確かめる。
-PROPERTIES = {
-    "repo_type": "customer-project",
-    "lifecycle": "active",
-    "owner_team": "delivery",
-    "domain": "visual-inspection",
-    "criticality": "high",
-    "data_classification": "customer-confidential",
-    "production_impact": "none",
-    "governance_profile": "standard",
-}
+#: 分類（Custom Properties）。 Organization の分類は `group` の 1 つで、
+#: 顧客案件の Repository は `customer`（稼働しても変えない。 稼働しているかは
+#: 配置の記録で読む。 MirumeAI/.github#195）。 値が監査の決めた並びにあり、
+#: 監査の所見が出ないことはテストが確かめる。
+PROPERTIES = {org_audit.PROPERTY: org_audit.CUSTOMER_GROUP}
 
 #: 最初の中身を入れる Branch。 Issue は作らない（雛形から機械的に作る
 #: 中身で、 判断を含まない）。
@@ -531,7 +522,7 @@ def _properties_line(props: dict) -> str:
 def show_plan(plan: Plan) -> None:
     print("--apply で行うこと")
     print("  1. Repository を作る（Private。 分類の値も作る要求に入れる）")
-    print("  2. 分類（Custom Properties）を稼働前の値にする")
+    print("  2. 分類（Custom Properties の `group`）を customer にする")
     print(f"       {_properties_line(plan.properties)}")
     print("  3. Merge を Squash だけにし、 merge 後に Branch を消す")
     print("  4. Team の権限: "
@@ -849,7 +840,7 @@ def check(api: Api, plan: Plan, audit=audit_one) -> int:
               if current.get(k) != v}
     if differ:
         add(NOTE, f"分類が作ったときの値と違う: {_properties_line(differ)}"
-                  "（稼働した後に変えた値なら問題ない。 正しさは監査が見る）")
+                  "（正しさは監査が見る）")
 
     findings, exceptions, unknown, listed = audit(api, name)
     if not listed:
@@ -883,11 +874,6 @@ def main(argv=None, env=None, api: "Api | None" = None,
     ap.add_argument("--title", help="案件の題名（README の見出しなど）。 既定は Repository の名前から"
                                     "作る（customer-example-part → example part）。 案件の名前"
                                     "（Core が引く鍵）はいつも Repository の名前から作る（→ example-part）")
-    ap.add_argument("--domain", choices=org_audit.STANDARD["domain"],
-                    default=PROPERTIES["domain"], help="分類の domain")
-    ap.add_argument("--criticality", choices=org_audit.STANDARD["criticality"],
-                    default=PROPERTIES["criticality"],
-                    help="分類の criticality")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true",
                       help="作る（Organization の Owner が実行する）")
@@ -907,7 +893,7 @@ def main(argv=None, env=None, api: "Api | None" = None,
               file=sys.stderr)
         return 2
 
-    props = dict(PROPERTIES, domain=a.domain, criticality=a.criticality)
+    props = dict(PROPERTIES)
     try:
         plan = make_plan(a.name, a.title, props,
                          src if src is not None else Source())

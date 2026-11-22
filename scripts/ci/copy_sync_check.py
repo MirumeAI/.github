@@ -42,6 +42,10 @@ SHARED = (
     # 全 Repository で同一になった。 **中に表を持たせていた間は照合できず、
     # ここだけ drift が野放しだった。**
     "scripts/ci/customer_data_check.py",
+    # 上の検査の試験。 Core は手で写して `tests/ci/` に持ち、 確かめを足した所が
+    # Repository ごとにずれていた（#206）。 どの Repository の木でも流れる形にして
+    # 写しにした。 Repository に固有の確かめは、 その Repository の試験に置く。
+    "scripts/ci/test_customer_data.py",
     # 顧客案件の起動の道具が、 開発の固定（`versions.dev.yaml`）の形を確かめるために
     # `--dev-pin` で呼ぶ（#166）。 起動の道具が決まりを shell で写していた間は、
     # 正本の決まりが変わっても写しが黙って追いつかなかった。

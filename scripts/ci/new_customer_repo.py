@@ -106,6 +106,9 @@ NOT_FOR_CUSTOMER = {
     "scripts/ci/customer_data_check.py":
         "顧客案件の config/ には PLC の接続先が正当に入る"
         "（再利用 workflow にも入れていない）",
+    "scripts/ci/test_customer_data.py":
+        "上の検査の試験。 検査を写さない顧客案件には要らない"
+        "（試験はその Repository の木で検査を流すので、 顧客案件では毎回 NG になる）",
 }
 
 #: `.claude/settings.json` は**正本から作る**。 顧客案件はライセンス

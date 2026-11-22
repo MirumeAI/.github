@@ -46,6 +46,12 @@ SHARED = (
     # `--dev-pin` で呼ぶ（#166）。 起動の道具が決まりを shell で写していた間は、
     # 正本の決まりが変わっても写しが黙って追いつかなかった。
     "scripts/ci/release_record_check.py",
+    # 変異の確かめの仕組みとその試験（#206）。 前は各 Core が `mutation_check.py` の中に
+    # 同じ仕組みを手で写して持ち、 直しが片方にだけ入るずれが起きえた。 各 Core の
+    # `mutation_check.py` には、 変異の表と Core の設定と入口だけを置く（名前が両 Core に
+    # あって中身が違うので、 `mutation_check.py` はここに入れない）。
+    "scripts/ci/mutation_engine.py",
+    "scripts/ci/test_mutation_engine.py",
     # Issue を作る手順。 種別の対応（#38）では、 正本を直した後に 5 件へ
     # 1 件ずつ同期した。 照合しないと、 同期を忘れた Repository だけ
     # 種別の無い Issue に戻る。

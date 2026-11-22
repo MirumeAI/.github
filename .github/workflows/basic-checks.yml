@@ -83,6 +83,13 @@ jobs:
       - name: 複製の照合そのもの
         run: python scripts/ci/test_copy_sync.py
 
+      # **変異の確かめの仕組みそのもの**（#206）。 各 Core の `mutation_check.py` が使う
+      # 共通の写し。 正本には変異の表と変異の job が無いので、 仕組みを小さな偽の
+      # Repository で確かめ、 仕組み自身を壊す行（`ENGINE_MUTATIONS`）が古びていない
+      # ことを見る（行で試験が落ちることは、 各 Core の変異の job が確かめる）。
+      - name: 変異の確かめの仕組み
+        run: python scripts/ci/test_mutation_engine.py
+
       # **写しの同期の Pull Request をまとめて作る道具。** 正本を変えるたびに
       # その都度の script で 6 つの Repository へ同期していた（#93・#95・#97）。
       # 顧客 Repository の名前を出さない・作業 Branch にだけ push する・二重に

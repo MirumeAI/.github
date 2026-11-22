@@ -106,6 +106,11 @@ NOT_FOR_CUSTOMER = {
     "scripts/ci/customer_data_check.py":
         "顧客案件の config/ には PLC の接続先が正当に入る"
         "（再利用 workflow にも入れていない）",
+    "scripts/ci/mutation_engine.py":
+        "変異の確かめの仕組み。 変異の表と変異の job を持つ Core だけが使う"
+        "（顧客案件には表も job も無い）",
+    "scripts/ci/test_mutation_engine.py":
+        "変異の確かめの仕組みの試験。 仕組みと同じく Core だけが使う",
 }
 
 #: `.claude/settings.json` は**正本から作る**。 顧客案件はライセンス

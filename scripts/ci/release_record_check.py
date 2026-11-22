@@ -22,7 +22,7 @@
     versions.yaml     選択のほかの項目（配置・検証・移行の経緯）がある
                       tag と commit の片方だけ・形の違う値（未選択は両方 null）
                       撮像側を選ばずに PDM だけを選んでいる
-                      配布物の束の hash（sums_sha256）・本体の wheel の sha256（wheel_sha256）が
+                      配布物の束の hash（sha256sums_sha256）・本体の wheel の sha256（wheel_sha256）が
                       64 桁の小文字の 16 進でない・未選択の Core に書いてある（#204。どちらも任意）
 
 根の `versions.dev.yaml`（任意。開発中に使う Core の commit）も見る（#153）。
@@ -182,9 +182,10 @@ TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
 #: `versions.yaml` の Core の節に書ける、 配布物の hash（任意。 #204。 development-docs#392 の 2026-11-22 の選択 2-a）。
-#: `sums_sha256` は配布物の束の `SHA256SUMS` の sha256、 `wheel_sha256` は本体の wheel の sha256。 据え付けの入れ方が、
-#: 束と wheel をこの値と照らしてから、 index を使わずに入れる
-VERSIONS_HASHES = ("sums_sha256", "wheel_sha256")
+#: `sha256sums_sha256` は配布物の束の `SHA256SUMS` の sha256、 `wheel_sha256` は本体の wheel の sha256（どちらも Core の
+#: 記録 `releases/vX.Y.Z.json` と撮像側の lock の同じ名前の鍵と同じ値。 そこから写す）。 据え付けの入れ方が、 束と wheel を
+#: この値と照らしてから、 index を使わずに入れる（無い・違うときは入れずに止める）
+VERSIONS_HASHES = ("sha256sums_sha256", "wheel_sha256")
 
 #: 配置の記録 schema 2 の機体の記号（中立。 IP・製造番号・装置名を書かない）と記録の ID。
 MACHINE_RE = re.compile(r"[A-Z][A-Z0-9]{1,7}")

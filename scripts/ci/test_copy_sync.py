@@ -134,6 +134,28 @@ class ItFindsDriftTest(unittest.TestCase):
                 self.assertEqual(code, 1, out[-400:])
                 self.assertIn(rel, out)
 
+    def test_the_mutation_engine_is_covered(self) -> None:
+        """**変異の確かめの仕組みとその試験も対象であること**（#206）。
+
+        前は各 Core が同じ仕組みを手で写して持ち、 直しが片方にだけ入るずれが
+        起きえた。 Core の `mutation_check.py` は名前が同じで中身（変異の表）が
+        違うので、 対象に入れない。
+        """
+        self.assertNotIn("scripts/ci/mutation_check.py", C.SHARED)
+        for rel in ("scripts/ci/mutation_engine.py",
+                    "scripts/ci/test_mutation_engine.py"):
+            with self.subTest(file=rel), tempfile.TemporaryDirectory() as td:
+                self.assertIn(rel, C.SHARED)
+                base = Path(td)
+                can, tgt = base / "can", base / "tgt"
+                _canonical_tree(can)
+                _canonical_tree(tgt)
+                f = tgt / rel
+                f.write_bytes(f.read_bytes() + b"\n# drift\n")
+                code, out = self._run(tgt, can)
+                self.assertEqual(code, 1, out[-400:])
+                self.assertIn(rel, out)
+
     def test_every_shared_command_is_compared(self) -> None:
         """**共通 command と script は、 すべて照合の対象であること。**
 

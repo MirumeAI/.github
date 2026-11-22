@@ -741,14 +741,38 @@ def workflow_parts(wf: str) -> "list[tuple[int, int]]":
     return out
 
 
+#: jobs の節の頭（行の終わりの注釈を許す）と、 2 文字下げの job の名前（引用符を許す）
+_JOBS_HEAD = re.compile(r"^jobs:[ \t]*(?:#.*)?$", re.M)
+_JOB_NAME = re.compile(r"""^  (["']?)([A-Za-z0-9_-]+)\1:[ \t]*(?:#.*)?$""")
+
+
+def _lf(wf: str) -> str:
+    return wf.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _code_lines(text: str) -> "list[str]":
+    """注釈と空行を除いた行。"""
+    return [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
 def workflow_jobs(wf: str) -> "dict[str, str]":
-    """workflow の job の名前と、 その中身の文（2 文字下げの名前から次の job まで）。"""
-    body = wf.split("\njobs:\n", 1)[1] if "\njobs:\n" in wf else ""
-    out, name = {}, None
-    for ln in body.splitlines():
-        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", ln)
+    """workflow の job の名前と、 その中身の文（2 文字下げの名前から次の job まで。 jobs の節の後の上位の鍵で終わる）。
+
+    改行（CRLF）・jobs の行の注釈・引用符つきの job の名前も読む。 読めない書き方は `workflow_problems` が、 流す行の数と
+    読めた job の数の食い違いとして止める（読めないときに黙って通さない。 #208 の Reviewer B の MAJOR-1）。
+    """
+    wf = _lf(wf)
+    head = _JOBS_HEAD.search(wf)
+    out: "dict[str, str]" = {}
+    if head is None:
+        return out
+    name = None
+    for ln in wf[head.end():].split("\n"):
+        if ln and not ln[0].isspace() and not ln.startswith("#"):
+            break                                    # jobs の節の外（次の上位の鍵）
+        m = _JOB_NAME.match(ln)
         if m:
-            name = m[1]
+            name = m[2]
             out[name] = ""
         elif name is not None:
             out[name] += ln + "\n"
@@ -774,9 +798,11 @@ def workflow_problems(wf: str) -> "list[str]":
         out.append(f"分け方（N）がそろっていない: {sorted(ns)}")
     elif sorted(k for k, _n in calls) != list(range(1, calls[0][1] + 1)):
         out.append("部分（K）が 1〜N まで漏れなく並んでいない")
-    jobs = {k: v for k, v in workflow_jobs(wf).items() if "mutation_check.py" in v}
-    norm = {re.sub(r"[0-9]+/[0-9]+", "K/N", "\n".join(
-        ln for ln in v.splitlines() if ln.strip() and not ln.lstrip().startswith("#"))) for v in jobs.values()}
+    jobs = {k: v for k, v in workflow_jobs(wf).items() if any("mutation_check.py" in ln for ln in _code_lines(v))}
+    if len(jobs) != len(calls):
+        # 読めない書き方の workflow で、 job をそろえる照らしを黙って飛ばさない
+        out.append(f"変異の job を読めない（変異の道具を流す行 {len(calls)} に対し、 読めた変異の job {len(jobs)}）")
+    norm = {re.sub(r"[0-9]+/[0-9]+", "K/N", "\n".join(_code_lines(v))) for v in jobs.values()}
     if len(norm) > 1:
         out.append("分けた変異の job の中身が、 部分の番号のほかで違う")
     for key in ("if:", "timeout-minutes:"):
@@ -792,6 +818,17 @@ def workflow_problems(wf: str) -> "list[str]":
 #: 向けて持っていた（PDM 44 行・撮像側 57 行）。
 _T = ENGINE_TESTS
 ENGINE_MUTATIONS = (
+    # ---- workflow の照らし（#208 の Reviewer B の MAJOR-1）
+    ("変異の仕組み: workflow の変異の job を読めないときに、 job をそろえる照らしを黙って飛ばす",
+     ENGINE_FILE, "    if len(jobs) != len(calls):\n", "    if False:\n",
+     f"{_T}.WorkflowTest.test_jobs_that_cannot_be_read_are_a_problem"),
+    ("変異の仕組み: workflow の CRLF の改行で job を読めない",
+     ENGINE_FILE, "    wf = _lf(wf)\n    head = _JOBS_HEAD.search(wf)\n", "    head = _JOBS_HEAD.search(wf)\n",
+     f"{_T}.WorkflowTest.test_other_ways_to_write_the_jobs_are_still_checked"),
+    ("変異の仕組み: 引用符つきの job の名前を読めない",
+     ENGINE_FILE, """_JOB_NAME = re.compile(r\"\"\"^  (["']?)([A-Za-z0-9_-]+)\\1:[ \\t]*(?:#.*)?$\"\"\")\n""",
+     """_JOB_NAME = re.compile(r"^  ()([A-Za-z0-9_-]+):[ \\t]*(?:#.*)?$")\n""",
+     f"{_T}.WorkflowTest.test_other_ways_to_write_the_jobs_are_still_checked"),
     # ---- 壊す前の確かめと、 行ごとの秒
     ("変異の仕組み: 壊す前の確かめをしない（入れ忘れた依存で落ちる検査を、 守りが効いたと数える）",
      ENGINE_FILE, "        bad = baseline(src, rows)\n", "        bad = []\n",

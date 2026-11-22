@@ -762,6 +762,26 @@ class WorkflowTest(unittest.TestCase):
                 got = E.workflow_problems(wf)
                 self.assertTrue(any(p.startswith(want) for p in got), got)
 
+    def test_other_ways_to_write_the_jobs_are_still_checked(self) -> None:
+        """jobs の行の注釈・CRLF・引用符つきの job の名前でも、 片方だけ緩めた job を見逃さない（#208 の Reviewer B）。"""
+        loose = self.WF.replace("--part 2/2\n", "--part 2/2\n    continue-on-error: true\n")
+        for name, wf in (("注釈", loose.replace("\njobs:\n", "\njobs:  # 注釈\n")),
+                         ("CRLF", loose.replace("\n", "\r\n")),
+                         ("引用符", loose.replace("  mutation-1:", '  "mutation-1":').replace("  mutation-2:", "  'mutation-2':"))):
+            with self.subTest(name):
+                got = E.workflow_problems(wf)
+                self.assertTrue(any(p.startswith("分けた変異の job の中身が") for p in got), got)
+                self.assertEqual(E.workflow_problems(wf.replace("    continue-on-error: true\n", "")
+                                                     .replace("    continue-on-error: true\r\n", "")), [])
+
+    def test_jobs_that_cannot_be_read_are_a_problem(self) -> None:
+        """job を読めない書き方は、 流す行の数との食い違いとして止める（黙って通さない）。"""
+        for name, wf in (("jobs の節が無い", self.WF.replace("\njobs:\n", "\nother:\n")),
+                         ("job の下げが違う", self.WF.replace("\n  mutation-", "\n    mutation-"))):
+            with self.subTest(name):
+                got = E.workflow_problems(wf)
+                self.assertTrue(any(p.startswith("変異の job を読めない") for p in got), got)
+
     def test_unusual_ways_to_run_the_tool_are_not_let_through(self) -> None:
         self.assertEqual(E.workflow_parts("      python3 scripts/ci/mutation_check.py --part=2/2\n"), [(2, 2)])
         for bad in ("      python scripts/ci/mutation_check.py\n",

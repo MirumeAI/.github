@@ -7,6 +7,13 @@ Core 2 件にはあり、 **必要な順番が逆になっていた**。
 Private 側では実際に 3 回混入した。 どれも説明文・テストの見本・コメントに
 顧客名を書いたもので、 **書いた本人は混入だと思っていなかった**。
 
+**この試験は、 検査と一緒に写しとして Core にも置く**（`copy_sync_check.py` の
+`SHARED`。 #206）。 前は各 Core が手で写して直し、 確かめを足した所が
+Repository ごとにずれていた。 そのため、 ここに書く確かめは、 どの Repository の
+木の上でも同じ意味で流れる形にする（正本にしか無いファイルを読む確かめは、
+そのファイルがあるときだけ見る）。 Repository に固有の確かめ（その Repository に
+しか無い置き場所を見るもの）は、 その Repository の試験に置く。
+
 **試験の値はすべて架空。** 検査や試験に実在の値を書くと、 検査とこの試験を
 `.ci-leak-allow` で除外しないと通らなくなり、 除外がその値を検査から隠す。
 そうならないように:
@@ -60,14 +67,18 @@ FOUND = {
     "現場の IP（10.x）": f"plc = {SITE_IP_10}\n",
     "現場の IP（172.16-31）": f"nas = {SITE_IP_172}\n",
     "リンクローカル": f"cam = {LINK_LOCAL}\n",
+    "JSON の中の IP": f'{{"host": "{SITE_IP_192}"}}\n',
     "シリアルらしい並び": f"serial = {SERIAL}\n",
 }
 
 #: 通すべき値。
 PASSED = {
-    "文書用の予約 IP": "host = 192.0.2.20\n",
-    "別の予約 IP": "host = 198.51.100.7\n",
+    "文書用の予約 IP（192.0.2）": "host = 192.0.2.20\n",
+    "文書用の予約 IP（198.51.100）": "host = 198.51.100.7\n",
+    "文書用の予約 IP（203.0.113）": "host = 203.0.113.9\n",
     "ループバック": "host = 127.0.0.1\n",
+    "すべてのアドレス": "host = 0.0.0.0\n",
+    "ネットマスク": "mask = 255.255.255.0\n",
     "版の番号": '{"v": "1.2.3"}\n',
     "ふつうの文": "この Repository は Public です。\n",
     "記号で区切った架空の ID": "camera = TST-CAMERA-0001\n",
@@ -94,7 +105,12 @@ LONG_ONE_LINE = " ".join(f"FICT_{i:04d}_CO" for i in range(60))
 NOT_SHOWN = (SITE_IP_192, SITE_IP_10, SITE_IP_172, LINK_LOCAL, SERIAL,
              "EXAMPLE_CUSTOMER", "架空精機")
 
-WORKFLOW = HERE.parents[1] / ".github" / "workflows" / "basic-checks.yml"
+#: 検査と試験を置いた Repository の根（正本でも、 写しを置いた Core でも）。
+ROOT = HERE.parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+WORKFLOW = WORKFLOWS / "basic-checks.yml"
+#: 再利用 workflow。 正本（この Repository）にだけある。
+REUSABLE = WORKFLOWS / "basic-checks-reusable.yml"
 STEP = "現場の値が混ざっていないか"
 
 
@@ -143,9 +159,13 @@ def _secret_uses(text: str) -> "list[str]":
 def _step(name: str = STEP) -> "list[str]":
     """workflow の 1 つの段の行（コメントを除く）。 PyYAML に頼らない。"""
     lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.strip() == f"- name: {name}")
-    out = [lines[start].strip()]
-    for ln in lines[start + 1:]:
+    starts = [i for i, ln in enumerate(lines) if ln.strip() == f"- name: {name}"]
+    if len(starts) != 1:
+        # 同じ名前の段が 2 つあると、 前の段だけを見て、 後ろの段（env や引数を足した物）を見逃す
+        raise AssertionError(f"{WORKFLOW.name} に段「{name}」が 1 つだけあること"
+                             f"（見つかった数: {len(starts)}）")
+    out = [lines[starts[0]].strip()]
+    for ln in lines[starts[0] + 1:]:
         s = ln.strip()
         if s.startswith("- "):
             break
@@ -206,6 +226,7 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
             "大文字と小文字の違い": "dir = example_customer/\n",
             "日本語の名前": "顧客: 架空精機株式会社\n",
             "語としての一致": "FACT: 値\n",
+            "記号に挟まれた語": "data/fact_samples/\n",
         }
         for label, body in cases.items():
             with self.subTest(label=label):
@@ -213,7 +234,8 @@ class CustomerNamesComeFromTheRegistryTest(unittest.TestCase):
 
     def test_a_name_inside_another_word_is_not_found(self) -> None:
         """**部分一致で拾わない。** 以前は実在の名前で 6 ファイルを誤検出した。"""
-        for body in ("factory = 1\n", "artifact\n", "TEST_FACTORY\n"):
+        for body in ("factory = 1\n", "artifact\n", "TEST_FACTORY\n",
+                     "factory_settings.json\n", '{"x": "factory.json"}\n', "factory/\n", "facts/\n"):
             with self.subTest(body=body):
                 self.assertEqual(_hits(body, self.names), [])
 
@@ -627,6 +649,8 @@ class TheCommandLineTest(_TempRepo, unittest.TestCase):
                                 "run: python scripts/ci/customer_data_check.py"],
                          "通常の CI の段に env（secret）や引数を足していないこと")
         args = shlex.split(step[-1].partition("run:")[2])
+        # 流すのが、 この検査そのものであること（引数だけを流すと、 段が別の物を流しても気づけない）
+        self.assertEqual(args[:2], ["python", "scripts/ci/customer_data_check.py"])
         code, out = self.run_check(*args[2:])
         self.assertEqual(code, 0, out)
         self.assertIn("登録表が無いので照合していません", out)
@@ -847,23 +871,38 @@ class TheAllowListNeedsAReasonTest(unittest.TestCase):
             self.assertEqual(C._allow(Path(td)), {})
 
     def test_this_repository_has_reasons_for_every_entry(self) -> None:
-        for path, why in C._allow(HERE.parents[1]).items():
+        for path, why in C._allow(ROOT).items():
             with self.subTest(path=path):
                 self.assertNotIn("理由が書かれていません", why)
+
+    def test_every_entry_points_at_a_real_file(self) -> None:
+        """**実在しないパスを対象外にしないこと。**
+
+        Core で、 その Repository に無いパスが一覧に入っていた（別の Repository の
+        一覧をそのまま写していた）。 先に書いてあると、 後でそのパスを作った人の
+        混入が黙って通る。
+        """
+        missing = [p for p in C._allow(ROOT) if not (ROOT / p).is_file()]
+        self.assertEqual(missing, [], f"実在しないのに対象外です: {missing}")
 
     def test_the_check_and_its_test_are_not_exempted(self) -> None:
         """**検査とその試験を除外しない。** 除外すると、 そこに書いた実在の値を
         検査が見逃す（試験の値は架空にし、 見つけるべき値は実行時に組み立てる）。"""
-        got = C._allow(HERE.parents[1])
+        got = C._allow(ROOT)
         for f in ("scripts/ci/customer_data_check.py", "scripts/ci/test_customer_data.py"):
             with self.subTest(file=f):
                 self.assertNotIn(f, got)
 
 
 class ItRunsOnThisRepositoryTest(unittest.TestCase):
+    """検査と試験を置いた Repository（正本でも、 写しを置いた Core でも）の木で流す。"""
 
     def test_the_current_contents_pass(self) -> None:
-        """**Public に置いてよい状態であること。**
+        """**追跡しているファイルに、 現場の値が無いこと**（正本は Public に置いてよい状態）。
+
+        **検査を本当に起動して見る。** `check()` を直に呼ぶと、 対象外の一覧を
+        読み込む前の状態を見ることになり、 許可したはずのファイルで落ちる。 逆に、
+        読み込みを忘れた実装も見逃す。 入口ごと通せば、 どちらも起きない。
 
         手元に登録表（~/.config/mirumeai/customer_registry.txt など）があれば、
         それとも照合する。 通常の CI には登録表を渡さないので、 名前以外を
@@ -873,20 +912,42 @@ class ItRunsOnThisRepositoryTest(unittest.TestCase):
         r = subprocess.run([sys.executable,
                             str(HERE / "customer_data_check.py")],
                            capture_output=True, text=True,
-                           cwd=str(HERE.parents[1]))
+                           cwd=str(ROOT))
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-600:])
 
-    def test_the_workflow_calls_it(self) -> None:
-        """**再利用 workflow には入れないこと。**
+    def test_a_brand_new_file_is_checked_before_add(self) -> None:
+        """**`git add` する前の新しいファイルも検査に入ること。**
 
-        顧客 Repository の `config/` には PLC の IP が正当に入る。 そこで
-        走らせると毎回 NG になり、 誰も見なくなる。
+        Core で、 `git ls-files` だけを見ていた間は、 新しく作ったファイルを
+        `git add` するまで検査しなかった。 手元で「OK」と出たものが、 commit した
+        後の CI で初めて落ちた（新しく作った説明文に顧客名を書いていた）。
+
+        木の根に一時のファイルを置くので、 落ちても必ず消す（addCleanup）。
+        """
+        probe = ROOT / "zz_leak_probe_for_test.py"
+        self.assertFalse(probe.exists(), "同じ名前のファイルが既にあります")
+        self.addCleanup(probe.unlink, missing_ok=True)
+        probe.write_text(f"# {SITE_IP_10} のこと\n", encoding="utf-8")
+        files = [str(f.relative_to(ROOT)) for f in C.tracked()]
+        self.assertIn(probe.name, files,
+                      "add していない新しいファイルが検査に入っていません")
+        self.assertTrue(C.check(probe), "中身を見ていません")
+
+    def test_the_workflow_calls_it(self) -> None:
+        """**この Repository の workflow が呼ぶこと。 再利用 workflow には入れないこと。**
+
+        再利用 workflow は顧客 Repository でも走る。 顧客 Repository の `config/` には
+        PLC の IP が正当に入るので、 そこで走らせると毎回 NG になり、 誰も見なくなる。
+
+        再利用 workflow は正本にだけある。 写しを置いた Core には無いので、 そこでは
+        この Repository の workflow が呼ぶことだけを見る（飛ばさない）。
         """
         own = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("customer_data_check.py", own,
                       "本 Repository の workflow が呼んでいません")
-        reusable = (HERE.parents[1] / ".github" / "workflows"
-                    / "basic-checks-reusable.yml").read_text(encoding="utf-8")
+        if not REUSABLE.is_file():
+            return
+        reusable = REUSABLE.read_text(encoding="utf-8")
         self.assertNotIn("customer_data_check.py", reusable,
                          "再利用 workflow に入れると顧客 Repository で"
                          "毎回 NG になります")
@@ -895,11 +956,15 @@ class ItRunsOnThisRepositoryTest(unittest.TestCase):
         """**PR の code が動く workflow に、 登録表（secret）を渡さない。**
 
         書き込み権限があれば、 workflow や試験を書き換えて secret を読み出せる。
-        この Repository の workflow は secret を一切使わない。 特権のイベント
+        この Repository の workflow は secret を一切使わない（Release を作る
+        workflow があっても `github.token` だけ）。 特権のイベント
         （pull_request_target・workflow_run）も、 信頼の境界を決めて試験ごと
         足すまでは使わない。
         """
-        for wf in sorted((HERE.parents[1] / ".github" / "workflows").glob("*.y*ml")):
+        workflows = sorted(WORKFLOWS.glob("*.y*ml"))
+        # 置き場所を取り違えて 0 件になり、 何も見ずに通ることのないように
+        self.assertIn(WORKFLOW, workflows)
+        for wf in workflows:
             text = wf.read_text(encoding="utf-8")
             with self.subTest(workflow=wf.name):
                 self.assertNotIn(C.REGISTRY_ENV, text)
@@ -926,24 +991,37 @@ class ItRunsOnThisRepositoryTest(unittest.TestCase):
 
     def test_a_registry_left_in_the_repository_is_ignored(self) -> None:
         """誤ってリポジトリへ置いた登録表を commit しない（.gitignore）。 正式な
-        置き場所はリポジトリの外。 追跡しているファイルまで無視しないこと。"""
-        root = str(HERE.parents[1])
-        for rel in ("customer_registry.txt", "sub/dir/customer_registry.txt",
-                    "customer_registry.txt.bak"):
+        置き場所はリポジトリの外。 **追跡しているファイルまで無視しないこと。**
+
+        追跡しているファイルが、 別の無視の規則に当たることはある（Core にそういう
+        ファイルがある）。 ここでは、 登録表の規則に当たる追跡ファイルが無いことを、
+        規則ごとに見る（無視の規則全部に当たる追跡ファイルが 0 件であることは求めない）。
+        """
+        for rel in ("customer_registry.txt", "sub/customer_registry.txt",
+                    "sub/dir/customer_registry.txt", "customer_registry.txt.bak"):
             with self.subTest(path=rel):
-                r = subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=root)
+                r = subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=ROOT,
+                                   check=False)
                 self.assertEqual(r.returncode, 0, f"{rel} を無視していません")
-        ignored = subprocess.run(["git", "ls-files", "-ci", "--exclude-standard"],
-                                 cwd=root, capture_output=True, text=True, check=True)
-        self.assertEqual(ignored.stdout, "", "追跡しているファイルまで無視しています")
+        rules = [ln.strip() for ln in (ROOT / ".gitignore").read_text(encoding="utf-8")
+                 .splitlines() if "customer_registry" in ln and not ln.lstrip().startswith("#")]
+        self.assertTrue(rules, ".gitignore に登録表の規則がありません")
+        for rule in rules:
+            with self.subTest(rule=rule):
+                hit = subprocess.run(["git", "ls-files", "-z", "-ci", f"--exclude={rule}"],
+                                     cwd=ROOT, capture_output=True, check=True).stdout
+                self.assertEqual(hit, b"", "登録表の規則が、 追跡しているファイルまで無視しています")
 
     def test_no_registry_is_kept_in_this_repository(self) -> None:
-        """**公開のこのリポジトリに、 顧客の名前の登録表を置かない。**"""
-        own = WORKFLOW.read_text(encoding="utf-8")
-        self.assertNotIn("--allow-registry-in-repo", own)
-        files = subprocess.run(["git", "ls-files"], cwd=str(HERE.parents[1]),
-                               capture_output=True, text=True, check=True).stdout
-        self.assertNotIn("customer_registry", files)
+        """**このリポジトリに、 顧客の名前の登録表を置かない**（非公開の Core でも同じ。
+        Core は納品の雛形の元になり、 置くと他の現場へ配られる）。 置くと決めて
+        `--allow-registry-in-repo` を使う workflow も作らない。"""
+        for wf in sorted(WORKFLOWS.glob("*.y*ml")):
+            with self.subTest(workflow=wf.name):
+                self.assertNotIn("--allow-registry-in-repo", wf.read_text(encoding="utf-8"))
+        files = subprocess.run(["git", "ls-files", "-z"], cwd=str(ROOT),
+                               capture_output=True, check=True).stdout
+        self.assertNotIn(b"customer_registry", files)
 
 
 if __name__ == "__main__":

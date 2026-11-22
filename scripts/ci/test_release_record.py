@@ -344,6 +344,40 @@ class VersionsYamlTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("Core の写しを", out)
 
+    def test_the_bundle_and_wheel_hashes_are_optional_and_checked(self) -> None:
+        """Core の節の配布物の束の hash（sums_sha256）と本体の wheel の sha256（wheel_sha256）は任意。 書くなら 64 桁の
+        小文字の 16 進で、 選んだ Core にだけ書ける（#204）。"""
+        h1, h2 = "1" * 64, "f" * 64
+        ok = _versions(("v1.2.3", self.A40), ("v0.4.0", self.B40)).replace(
+            f"commit: {self.A40}}}", f"commit: {self.A40}, sums_sha256: '{h1}', wheel_sha256: '{h2}'}}").replace(
+            f"commit: {self.B40}}}", f"commit: {self.B40}, sums_sha256: '{h2}'}}")
+        self.assertIn("sums_sha256", ok)
+        code, out = self._run(ok)
+        self.assertEqual(code, 0, out)
+        bad = {
+            "大文字": h2.upper(),
+            "短い": "f" * 63,
+            "長い": "f" * 65,
+            "16 進でない": "g" * 64,
+            "数として読まれる": "1" * 64,
+            "null": None,
+        }
+        for label, value in bad.items():
+            with self.subTest(value=label):
+                v = "null" if value is None else (value if label == "数として読まれる" else f"'{value}'")
+                text = _versions(("v1.2.3", self.A40)).replace(
+                    f"commit: {self.A40}}}", f"commit: {self.A40}, wheel_sha256: {v}}}")
+                code, out = self._run(text)
+                self.assertEqual(code, 1, out)
+                self.assertIn("image_acquisition_pdm.wheel_sha256 は 64 桁の小文字の 16 進", out)
+        code, out = self._run(VERSIONS_UNSELECTED.replace("commit: null}\npdm", f"commit: null, sums_sha256: '{h1}'}}\npdm"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("未選択の image_acquisition_pdm に sums_sha256 は書けません", out)
+        code, out = self._run(_versions(("v1.2.3", self.A40)).replace(
+            f"commit: {self.A40}}}", f"commit: {self.A40}, bundle_sha256: '{h1}'}}"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("知らない項目", out)
+
     def test_the_old_form_is_read_but_not_judged(self) -> None:
         code, out = self._run("schema_version: 1\npdm: {repository: MirumeAI/PDM}\n")
         self.assertEqual(code, 0, out)

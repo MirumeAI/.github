@@ -10,8 +10,7 @@
 据え付けの確かめ（`--dry-run`）も通った。
 
 **「この案件にあってよいもの」を案件自身が宣言し、 それ以外を落とす。** ほかの
-顧客の値も、 顧客の名前の登録表も、 secret も使わない。 PR の CI で、 読むだけの
-権限で動かせる。
+顧客の値も secret も使わない。 PR の CI で、 読むだけの権限で動かせる。
 
     python scripts/ci/customer_isolation_check.py                  # CI_ROOT か今のフォルダ
     python scripts/ci/customer_isolation_check.py --root <顧客リポジトリ>

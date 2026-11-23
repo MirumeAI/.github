@@ -12,7 +12,7 @@
 **試験の値はすべて架空で、 実行するときに組み立てる。** 実在の値から作らない。
 
   ・IP は文書用の網（RFC 5737）。 **検査はこの網を除かない**ので、 B の宛先として
-    働く。 名前の検査（customer_data_check.py）は、 この網を見本として通す
+    働く。 現場の値の検査（customer_data_check.py）は、 この網を見本として通す
   ・製造番号・番地・構成の名前・検査の性質は `EXAMPLE`・`example` を含む形。
     トリガと面は `trig_example_` で始まる形。 PLC の表の向きや信号の名前も架空
     （検査は形で読むので、 Core の名前を写さない）
@@ -1974,7 +1974,7 @@ class MutationTest(unittest.TestCase):
 class SyntheticValuesTest(unittest.TestCase):
     """架空の値が、 公開のリポジトリに置ける形であること。"""
 
-    def test_the_name_check_does_not_take_them_for_site_values(self) -> None:
+    def test_the_site_value_check_does_not_take_them_for_site_values(self) -> None:
         """現場の値の検査（`customer_data_check.py`）は、 架空の値を現場の値として拾わない。"""
         body = "\n".join(NOT_SHOWN) + "\n"
         with tempfile.TemporaryDirectory() as td:

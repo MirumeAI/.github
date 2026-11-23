@@ -5,13 +5,13 @@
 起きたこと: 顧客リポジトリの最初の登録で、 撮像側の別のブランチの設定を
 そのまま写した。 別の案件の本番の構成のファイルが 1 つと、 別の案件の PLC の
 表（`plc.enabled` は false）が入った。 混ざったのは名前ではなく値なので、
-名前の検査（`customer_data_check.py`）では見つからない。 配る道具は知らない
+当時の名前の検査では見つからなかった（今の `customer_data_check.py` は現場の IP と
+シリアルらしい並びだけを見て、 顧客 Repository では流さない）。 配る道具は知らない
 名前のファイルを黙って配らず、 PLC を使わない案件は PLC の表を読まないので、
 据え付けの確かめ（`--dry-run`）も通った。
 
 **「この案件にあってよいもの」を案件自身が宣言し、 それ以外を落とす。** ほかの
-顧客の値も、 顧客の名前の登録表も、 secret も使わない。 PR の CI で、 読むだけの
-権限で動かせる。
+顧客の値も secret も使わない。 PR の CI で、 読むだけの権限で動かせる。
 
     python scripts/ci/customer_isolation_check.py                  # CI_ROOT か今のフォルダ
     python scripts/ci/customer_isolation_check.py --root <顧客リポジトリ>

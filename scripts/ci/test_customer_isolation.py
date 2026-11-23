@@ -12,7 +12,7 @@
 **試験の値はすべて架空で、 実行するときに組み立てる。** 実在の値から作らない。
 
   ・IP は文書用の網（RFC 5737）。 **検査はこの網を除かない**ので、 B の宛先として
-    働く。 名前の検査（customer_data_check.py）は、 この網を見本として通す
+    働く。 現場の値の検査（customer_data_check.py）は、 この網を見本として通す
   ・製造番号・番地・構成の名前・検査の性質は `EXAMPLE`・`example` を含む形。
     トリガと面は `trig_example_` で始まる形。 PLC の表の向きや信号の名前も架空
     （検査は形で読むので、 Core の名前を写さない）
@@ -1974,8 +1974,8 @@ class MutationTest(unittest.TestCase):
 class SyntheticValuesTest(unittest.TestCase):
     """架空の値が、 公開のリポジトリに置ける形であること。"""
 
-    def test_the_name_check_does_not_take_them_for_site_values(self) -> None:
-        """名前の検査（T0-01）は、 架空の値を現場の値として拾わない。"""
+    def test_the_site_value_check_does_not_take_them_for_site_values(self) -> None:
+        """現場の値の検査（`customer_data_check.py`）は、 架空の値を現場の値として拾わない。"""
         body = "\n".join(NOT_SHOWN) + "\n"
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "zz_values.md"
@@ -1983,7 +1983,7 @@ class SyntheticValuesTest(unittest.TestCase):
             orig, C.ROOT = C.ROOT, Path(td)
             allow, C._ALLOW_CACHE = C._ALLOW_CACHE, {}
             try:
-                hits = C.check(p, ())
+                hits = C.check(p)
             finally:
                 C.ROOT, C._ALLOW_CACHE = orig, allow
         self.assertEqual(hits, [])
@@ -2071,7 +2071,7 @@ class WorkflowTest(unittest.TestCase):
     def test_it_reads_only_and_gets_no_secret(self) -> None:
         self.assertEqual(self.wf.get("permissions"), {"contents": "read"})
         text = (WORKFLOWS / "basic-checks-reusable.yml").read_text(encoding="utf-8")
-        for word in ("secrets.", "pull_request_target", "workflow_run", C.REGISTRY_ENV):
+        for word in ("secrets.", "pull_request_target", "workflow_run"):
             self.assertNotIn(word, text)
         step = next(s for s in self.steps if self.STEP_RUN in s.get("run", ""))
         # 基準の commit は環境変数で渡す（式を run の中に書かない）

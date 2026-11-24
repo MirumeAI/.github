@@ -16,7 +16,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 - **開発**: Core の clone は、この Repository の下でなく隣に置きます（同じ親のフォルダに `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository のコードが Core の内部を誤って参照しえます
 - **今ある機体（LEGACY）**: この案件に今ある機体がある場合だけ、その機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み。今ある機体が無い案件でも、下に clone したときの守りとして残します）。新しい配置はこの形に頼りません
-- **新しい形**（下の「目標の形と移る間」）: 製品のパッケージが両 Core を wheel の依存として読み込み、clone の道に頼りません。入れ方の正本は `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「製品のパッケージの入れ方」です
+- **新しい形**（下の「目標の形と移る間」）: 製品のパッケージが両 Core の wheel と組み合わせ、clone の道に頼りません。Core の名前は依存に書かず、組める Core の版の範囲を製品のパッケージが持って、入れるときと起動の前に照らします。入れ方の正本は `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「製品のパッケージの入れ方」です
 
 ## 構造
 
@@ -53,7 +53,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 この雛形は**前の形**です。案件の値は `config/` に置き、Core 側の `setup_customer.sh` で機体へ配ります。
 
-目標の形は、この Repository を、案件を組み立てる 1 つの製品のパッケージにする形です。両 Core を wheel の依存として読み込み、起動の命令 1 つで組み立てます。案件の値の正本は `recipes/`、機体の設定は `machines/` です（正本は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md`。`MirumeAI/development-docs#392`）。
+目標の形は、この Repository を、案件を組み立てる 1 つの製品のパッケージにする形です。両 Core の wheel と組み合わせ（Core の名前は依存に書かず、組める版の範囲を自分で持って照らす）、起動の命令 1 つで組み立てます。案件の値の正本は `recipes/`、機体の設定は `machines/` です（正本は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md`。`MirumeAI/development-docs#392`）。
 
 新しい形への移り方は、最初の案件で作って確かめてから、この雛形に入れます（#392 の段 4 と段 6）。それまでは、新しい形の置き場を作りません。
 

@@ -46,7 +46,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の題名> �
 - **今ある機体（LEGACY）**: この案件に今ある機体がある場合だけ、その機体の上では、この Repository の根の
   `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いている（`.gitignore` 済み）。新しい配置はこの形に頼らない
   （`MirumeAI/development-docs` の `03_customer_development/core_verification_status.md` の H5）
-- **新しい形**: 製品のパッケージが両 Core の wheel と組み合わせ、clone の道に頼らない。Core の名前は依存に書かず、組める Core の版の範囲を製品のパッケージが持って照らす。
+- **新しい形**: 製品のパッケージが両 Core の wheel と組み合わせ、clone の道に頼らない。Core の名前は `pyproject.toml` に書かず、組める Core の版の範囲を製品のパッケージが持って照らす。
   この雛形は前の形で、新しい形の置き場（`recipes/case.yaml`・`recipes/products/`・`machines/` の中の
   ファイル・根の `pyproject.toml`・`src/`）は、最初の案件で確かめた形を雛形に入れるまで作らない
   （`README.md` の「目標の形と移る間」。`MirumeAI/development-docs#392` の段 4 と段 6）

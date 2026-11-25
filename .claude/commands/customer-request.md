@@ -33,7 +33,7 @@ argument-hint: [顧客要求の内容]
             └─ NO  → Architecture Review
 ```
 
-`Plugin・Adapter` 候補の差し込む仕組みは、Python の entry points の群にそろえると決めた（development-docs#392）。群は**まだどの Core にも無い**。群の名前と部品の形は各 Core の `docs/public_api.md` に書く。群を足すときは、具体の要求で Architecture Review をする。差し込む部品は、顧客 Repository の製品のパッケージ（新しい形の `src/`）に置く。
+`Plugin・Adapter` 候補の差し込む仕組みは、Python の entry points の群にそろえると決めた（development-docs#392）。今ある群は PDM の追加の照合 `mirumeai_pdm.extra_checks` と切り出しの方式 `mirumeai_pdm.extract_methods` の 2 つで、撮像側には無い。群の名前と部品の形は各 Core の `docs/public_api.md` に書く。群を足すときは、具体の要求で Architecture Review をする。差し込む部品は、顧客 Repository の製品のパッケージ（新しい形の `src/`）に置く。
 
 製品アプリ（起動・製品画面・API・Adapter）は顧客 Repository に置き、両 Core の `docs/public_api.md` の公開の面と入口だけを使う。Core の内部は、公開の面や入口ができた後も直に import しない（development-docs の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Core の入口」）。
 
@@ -54,7 +54,7 @@ argument-hint: [顧客要求の内容]
 
 - Core Source 全体のコピー
 - Core 内の顧客名による `if` 分岐
-- Core Repository に顧客別の長期 Branch を新しく作ること（今ある長期 Branch は LEGACY として移行まで残す。入れてよいのは動いている機体の不具合と安全の直しだけで、新しい機能は `main` に入れる。名前の変更・削除・作り直しはしない。同じ文書の「今ある長期Branch（LEGACY）」）
+- Core Repository に顧客別の長期 Branch を新しく作ること（今ある長期 Branch は LEGACY として移行まで残す。入れてよいのは動いている機体の不具合と安全の直しだけで、Pull Request で入れて `main` にも戻す〔Core から外した案件の部品の所は、`main` の代わりに顧客 Repository の製品のパッケージへ〕。新しい機能は `main` に入れる。名前の変更・削除・作り直しはしない〔人が使い終えたと決めた物は、人が先端を注釈つきのタグで残してから消す。Agent は消さず、タグも打たない〕。merge はいつも人の判断の後。同じ文書の「今ある長期Branch（LEGACY）」）
 - 顧客 Repository のコードから Core の内部を直に import すること
 - 製品アプリが認証とライセンスの門番を外す・迂回すること
 - 顧客固有 Patch を恒久的に放置すること

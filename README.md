@@ -12,7 +12,7 @@ MirumeAI Organization の Repository で共通に使うものの正本です。I
 |---|---|---|
 | `.github/ISSUE_TEMPLATE/`・`.github/PULL_REQUEST_TEMPLATE.md` | Issue Form（Feature・Bug・Experiment。白紙の Issue は止める）と Pull Request の雛形 | 各 Repository の既定（同種のファイルが無いとき。複製しない） |
 | `SECURITY.md`・`.github/VULNERABILITY_REPORT.yml`・`SUPPORT.md` | 脆弱性と秘密の漏れの非公開の報告、困ったときの案内 | 同上 |
-| `.claude/hooks/guard-main.sh` | ガード。作業 Branch でない Branch への commit・push・削除や、ガードと設定の書き換えを止める | 各 Repository に写す |
+| `.claude/hooks/guard-main.sh` | ガード。作業 Branch でない Branch への commit・push・削除や、ガードと設定の書き換えなどを止める | 各 Repository に写す |
 | `.claude/commands/`・`.claude/scripts/issue-form.sh` | 共通の command（`/issue`・`/branch`・`/pr`・`/docs-sync`・`/customer-request`）と、Issue Form の雛形と本文の形の確かめ | 各 Repository に写す |
 | `.claude/settings.json` | この Repository のガードのフックと権限 | 新しい顧客 Repository の設定の元 |
 | `scripts/ci/` | 共通の検査の道具とその試験。使い方は各道具の冒頭の説明 | 再利用 workflow から呼ぶ・各 Repository に写す・手で流す |
@@ -61,7 +61,7 @@ python3 $G merged <作業ツリー> --pr 42 --head <固定した head> --out mer
 python scripts/ci/customer_isolation_check.py --root <顧客 Repository> --report-only
 ```
 
-PyYAML が要ります。終了コードは 0 が合格、1 が混入の疑い、2 が宣言・設定・検査の誤り（照らせないときは合格にしない）です。見るもの（層 1・S1〜S6、新しい形のレシピと機体の設定）は道具の冒頭、運用の決まり（人の確認・宣言の増え方・有効にする順）は development-docs の `03_customer_development/customer_isolation_check.md` にあります。宣言は次の例のように書きます（値は文書用の架空のもの）。
+PyYAML が要ります。終了コードは 0 が合格（`--report-only` のときは、混入の疑いがあっても 0。最後の行を見る）、1 が混入の疑い、2 が宣言・設定・検査の誤り（照らせないときは合格にしない）です。見るもの（層 1・S1〜S6、新しい形のレシピと機体の設定）は道具の冒頭、運用の決まり（人の確認・宣言の増え方・有効にする順）は development-docs の `03_customer_development/customer_isolation_check.md` にあります。宣言は次の例のように書きます（値は文書用の架空のもの）。
 
 <!-- customer-profile.yaml の例 -->
 ```yaml

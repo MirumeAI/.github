@@ -23,6 +23,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 RUNNER = HERE / "run_required_verification.py"
 PYVER = "%d.%d" % sys.version_info[:2]
+#: 同じ利用者の検査を重ねないロックの置き場を変える環境変数（#219。 道具の LOCK_ENV と同じことを試験で確かめる）
+LOCK_ENV = "MIRUME_RV_LOCK_DIR"
 
 _spec = importlib.util.spec_from_file_location("run_required_verification", RUNNER)
 R = importlib.util.module_from_spec(_spec)
@@ -80,11 +82,16 @@ class E2E(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)  # 最後に消す（後で足す片付けは、 先に動く）
         self.root = Path(self._tmp.name)
         self.runs = 0
-
-    def tearDown(self):
-        self._tmp.cleanup()
+        # 同じ利用者の検査を重ねないロック（#219）は、 試験ごとの一時の置き場で取る。 本物の利用者の置き場に
+        # 触れない（流している本物の検査を待たない・止めない）。 子の process にも渡る（os.environ を写す）
+        from unittest import mock
+        self.lock_dir = self.root / "lock"
+        patcher = mock.patch.dict(os.environ, {LOCK_ENV: str(self.lock_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_it(self, target: Path, *extra, canonical: Path | None = None, env: dict | None = None):
         self.runs += 1
@@ -960,18 +967,20 @@ def _meet(me: str, other: str, at: Path, wait_s: int = 20) -> str:
 class ParallelJobsTest(E2E):
     """待ち合わせの無い job は `--jobs` まで同時に流す（#149）。 `needs` の順と結果の表示の順は変えない。"""
 
-    def two(self) -> Path:
-        return _repo(self.root, self.wf(f"""\
+    def two(self, at: Path | None = None, wait_s: int = 20) -> Path:
+        """待ち合わせる 2 つの job。 印は at（既定 self.root）に置く。"""
+        at = at or self.root
+        return _repo(at, self.wf(f"""\
             on: pull_request
             jobs:
               a:
                 runs-on: ubuntu-latest
                 steps:
-                  - run: {_meet("a", "b", self.root)}
+                  - run: {_meet("a", "b", at, wait_s)}
               b:
                 runs-on: ubuntu-latest
                 steps:
-                  - run: {_meet("b", "a", self.root)}
+                  - run: {_meet("b", "a", at, wait_s)}
             """), {})
 
     def test_independent_jobs_run_at_the_same_time(self):
@@ -980,9 +989,55 @@ class ParallelJobsTest(E2E):
         self.assertEqual((self.root / "a.result").read_text().strip(), "together")
         self.assertEqual((self.root / "b.result").read_text().strip(), "together")
 
+    def in_process(self, target: Path, *extra, cpus: int, mem: int | None) -> tuple:
+        """CPU の数と空きメモリを決めて、 同じ process で流す（既定の `--jobs` を機械によらずに確かめる。 #219）。"""
+        import contextlib
+        import io
+        from unittest import mock
+        self.runs += 1
+        out = io.StringIO()
+        with mock.patch.object(R, "_cpus", return_value=cpus), \
+                mock.patch.object(R, "_available_memory", return_value=mem), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = R.main([str(target), "--head", "pr", "--base", "main", "--canonical", str(target),
+                         "--canonical-ref", "main", "--python", f"{PYVER}={sys.executable}",
+                         "--work", str(self.root / f"work-{self.runs}"), *extra])
+        return rc, out.getvalue()
+
     def test_the_default_runs_jobs_at_the_same_time(self):
+        rc, out = self.in_process(self.two(), cpus=16, mem=64 * 1024 ** 3)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((self.root / "a.result").read_text().strip(), "together")
+        self.assertIn("同時に流す job の数: 2（--jobs の既定。 使える CPU 16 − 2 = 14・空きメモリ 64.0 GiB", out)
+        self.assertIn("job ごとに 8 に絞ります", out)
+
+    def test_the_default_runs_one_at_a_time_on_a_small_machine(self):
+        """CPU が少ない・空きメモリが少ない機械では、 既定で 1 つずつ流す（スレッドも絞らない）。"""
+        for name, cpus, mem in (("CPU", 3, 64 * 1024 ** 3), ("メモリ", 16, R.JOB_MEMORY * 3 // 2)):
+            with self.subTest(name):
+                at = self.root / f"small-{self.runs}"
+                at.mkdir()
+                rc, out = self.in_process(self.two(at, wait_s=3), cpus=cpus, mem=mem)
+                self.assertEqual(rc, 0, out)
+                self.assertIn("同時に流す job の数: 1（--jobs の既定", out)
+                self.assertEqual((at / "a.result").read_text().strip(), "alone")
+                self.assertNotIn("に絞ります", out)
+
+    def test_the_default_shows_the_cpus_of_this_machine(self):
+        """mock なしでも、 決めた数と根拠（この機械の使える CPU の数）を出す。 記録の行には出さない。"""
         p = self.run_it(self.two())
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn(f"（--jobs の既定。 使える CPU {len(os.sched_getaffinity(0))} − 2 = ", p.stdout)
+        record = [ln for ln in p.stdout.splitlines() if ln.startswith(R.RECORD_PASS)]
+        self.assertEqual(len(record), 1, p.stdout)
+        self.assertNotIn("CPU", record[0])
+        self.assertNotIn("jobs", record[0])
+
+    def test_an_explicit_jobs_is_used_as_given(self):
+        """`--jobs N` を渡せば、 今までどおりその数。 既定の根拠の行は出さない。"""
+        rc, out = self.in_process(self.two(), "--jobs", "2", cpus=1, mem=None)   # 既定なら 1 つずつになる機械
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("--jobs の既定", out)
         self.assertEqual((self.root / "a.result").read_text().strip(), "together")
 
     def test_jobs_1_runs_one_at_a_time(self):
@@ -1271,6 +1326,403 @@ class StoppedTest(E2E):
                 self.assertFalse(_alive(pid), "段の process が残った")
                 self.assertEqual([x.name for x in self.work.iterdir() if x.name.startswith("job-")], [],
                                  "2 回目の合図で、 job の作業の場所を消すのを途中でやめた")
+
+
+class DefaultJobsTest(unittest.TestCase):
+    """`--jobs` の既定は、 使える CPU の数 − 2 と、 空きメモリ ÷ 1 job の見込み の小さい方。 1 以上で、 plan の job の数まで（#219）。"""
+
+    G = 1024 ** 3
+
+    def default(self, cpus: int, mem, n_jobs: int) -> tuple:
+        from unittest import mock
+        with mock.patch.object(R, "_cpus", return_value=cpus), \
+                mock.patch.object(R, "_available_memory", return_value=mem):
+            return R._default_jobs(n_jobs)
+
+    def test_the_smaller_of_cpus_and_memory_up_to_the_plan(self):
+        per = R.JOB_MEMORY
+        cases = (((16, 64 * self.G, 20), 14),        # CPU で決まる（2 つ残す）
+                 ((16, 64 * self.G, 12), 12),        # plan の job の数まで
+                 ((16, 5 * per + 1, 20), 5),         # 空きメモリで決まる
+                 ((16, per - 1, 20), 1),             # 空きメモリが 1 job に足りなくても 1
+                 ((2, 64 * self.G, 20), 1),          # CPU が 2 以下でも 1
+                 ((3, 64 * self.G, 20), 1),
+                 ((8, None, 20), 6),                 # 空きメモリが読めなければ CPU だけ
+                 ((16, 64 * self.G, 1), 1))
+        for args, want in cases:
+            with self.subTest(args=args):
+                self.assertEqual(self.default(*args)[0], want)
+
+    def test_the_reason_names_the_cpus_and_the_memory(self):
+        _, why = self.default(16, 54 * self.G, 20)
+        self.assertIn("使える CPU 16 − 2 = 14", why)
+        self.assertIn(f"空きメモリ 54.0 GiB ÷ {R.JOB_MEMORY / self.G:g} GiB = {54 * self.G // R.JOB_MEMORY}", why)
+        _, why = self.default(16, None, 20)
+        self.assertIn("空きメモリは読めない", why)
+
+    def test_available_memory_is_read_from_meminfo(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "meminfo"
+            f.write_text("MemTotal:       65768900 kB\nMemFree:  1 kB\nMemAvailable:   56413276 kB\n")
+            self.assertEqual(R._available_memory(f), 56413276 * 1024)
+            for text in ("MemTotal: 1 kB\n", "MemAvailable: x kB\n", "MemAvailable: 5 MB\n", "MemAvailable:\n", ""):
+                with self.subTest(text=text):
+                    f.write_text(text)
+                    self.assertIsNone(R._available_memory(f))
+            self.assertIsNone(R._available_memory(Path(d) / "none"))
+
+    def test_this_machine_can_be_read(self):
+        if Path("/proc/meminfo").exists():
+            self.assertGreater(R._available_memory(), 0)
+        n, _ = R._default_jobs(1000)
+        self.assertGreaterEqual(n, 1)
+
+
+def _hold(me: str, at: Path) -> str:
+    """job の段: 始まった印（段の process の組の番号）を置き、 at/release が来るまで待つ（最大 120 秒）。"""
+    return (f'echo $$ > "{at}/{me}.started"; for i in $(seq 1200); do [ -e "{at}/release" ] && break; '
+            f'sleep 0.1; done; touch "{at}/{me}.done"')
+
+
+class LockTest(E2E):
+    """同じ利用者の検査を重ねない（#219）。 2 本目は 1 本目の終わりを待ち、 `--no-wait` なら止まる。 止めた・落ちた
+    ときにロックを残さない。 ロックは試験ごとの一時の置き場（E2E の setUp）で取る。"""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self.cleanup_steps)
+
+    def cleanup_steps(self):
+        """後ろに残った段（道具を SIGKILL した試験など）を止める。"""
+        (self.root / "release").touch()
+        for f in self.root.glob("*.started"):
+            try:
+                os.killpg(int(f.read_text()), signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+
+    def start(self, name: str, run: str, *extra):
+        """1 つの job の検査を後ろで流し始める。 出力（stdout と stderr）はファイルに書く。"""
+        t = _repo(self.root, self.wf(f"""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: {run}
+            """), {}, name=name)
+        log = self.root / f"{name}.out"
+        fh = open(log, "w", encoding="utf-8")
+        self.addCleanup(fh.close)
+        proc = subprocess.Popen([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main",
+                                 "--canonical", str(t), "--canonical-ref", "main",
+                                 "--python", f"{PYVER}={sys.executable}", "--work", str(self.root / f"work-{name}"),
+                                 *extra], stdout=fh, stderr=subprocess.STDOUT)
+        self.addCleanup(self.finish, proc)
+        return proc, log, _git(t, "rev-parse", "pr")
+
+    @staticmethod
+    def finish(proc):
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    def wait_for(self, cond, what: str, timeout: float = 120):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if cond():
+                return
+            time.sleep(0.1)
+        self.fail(f"{what} が起きない")
+
+    def first(self):
+        """1 本目: 段が始まり、 at/release まで終わらない検査。"""
+        proc, log, head = self.start("first", _hold("first", self.root))
+        self.wait_for(lambda: (self.root / "first.started").exists() and (self.root / "first.started").read_text().strip(),
+                      "1 本目の段の始まり")
+        return proc, log, head
+
+    def hold_lock(self, record: bytes) -> int:
+        """試験の process でロックを持つ（record を持ち主の記録として書く）。 閉じれば外れる。"""
+        import fcntl
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.lock_dir / R.LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, record, 0)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def assertLockIsFree(self):
+        import fcntl
+        fd = os.open(self.lock_dir / R.LOCK_NAME, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)      # 取れなければ BlockingIOError で落ちる
+        finally:
+            os.close(fd)
+
+    def test_the_lock_env_is_the_one_the_tests_use(self):
+        self.assertEqual(R.LOCK_ENV, LOCK_ENV)
+        self.assertEqual(R._lock_path(), self.lock_dir / R.LOCK_NAME)
+
+    def test_the_default_place_is_under_the_cache_of_the_user(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.root / "c")}):
+            os.environ.pop(R.LOCK_ENV)
+            self.assertEqual(R._lock_path(), self.root / "c" / "mirumeai" / R.LOCK_NAME)
+
+    def test_a_second_run_waits_for_the_first(self):
+        at = self.root
+        first, _, head1 = self.first()
+        second, log2, _ = self.start(
+            "second", f'if [ -e "{at}/first.done" ]; then echo after; else echo before; fi > "{at}/second.order"')
+        self.wait_for(lambda: "終わるまで待ちます" in log2.read_text(encoding="utf-8"), "2 本目の待ちの知らせ")
+        time.sleep(1.5)                     # 待ちの間に、 2 本目の job が始まらないこと
+        self.assertIsNone(second.poll())
+        self.assertFalse((at / "second.order").exists(), "1 本目が終わる前に 2 本目の job が始まった")
+        self.assertFalse((at / "work-second").exists(), "待つ間に作業の場所を作った")
+        text = log2.read_text(encoding="utf-8")
+        waiting = [ln for ln in text.splitlines() if "終わるまで待ちます" in ln]
+        self.assertEqual(len(waiting), 1, text)
+        self.assertIn(f"（local/first・head {head1[:12]}・", waiting[0])
+        self.assertRegex(waiting[0], r"・\d{4}-\d\d-\d\d \d\d:\d\d:\d\d に始めた・process \d+）")
+        self.assertIn("--no-wait", waiting[0])
+        self.assertNotIn(str(self.root), waiting[0], "道を出さない")
+        (at / "release").touch()
+        self.assertEqual(first.wait(120), 0)
+        self.assertEqual(second.wait(120), 0, log2.read_text(encoding="utf-8"))
+        self.assertEqual((at / "second.order").read_text().strip(), "after")
+        text = log2.read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^待ち終えました（\d+ 秒）$")
+        self.assertRegex(text, rf"(?m)^{R.RECORD_PASS}（")
+        self.assertLockIsFree()
+        self.assertEqual((self.lock_dir / R.LOCK_NAME).read_bytes(), b"", "終わったら持ち主の記録を消す")
+
+    def test_no_wait_stops_while_another_runs(self):
+        at = self.root
+        first, _, head1 = self.first()
+        second, log2, _ = self.start("second", f'touch "{at}/second.ran"', "--no-wait")
+        self.assertEqual(second.wait(120), 2, log2.read_text(encoding="utf-8"))
+        text = log2.read_text(encoding="utf-8")
+        self.assertRegex(text, rf"(?m)^流せません: 同じ利用者の別の検査が流れています（local/first・head {head1[:12]}・"
+                               r".*）。 --no-wait なので待たずに止めます$")
+        self.assertNotIn("終わるまで待ちます", text)
+        self.assertNotIn(R.RECORD_PASS, text)
+        self.assertFalse((at / "second.ran").exists())
+        self.assertFalse((at / "work-second").exists(), "止めるときは作業の場所を作らない")
+        (at / "release").touch()
+        self.assertEqual(first.wait(120), 0)
+
+    def test_the_lock_is_not_left_when_the_run_is_stopped(self):
+        """流している検査を SIGTERM で止めると、 すぐ次の検査が流せる。"""
+        at = self.root
+        first, log1, _ = self.first()
+        first.send_signal(signal.SIGTERM)
+        self.assertEqual(first.wait(120), 128 + signal.SIGTERM, log1.read_text(encoding="utf-8"))
+        self.assertLockIsFree()
+        second, log2, _ = self.start("second", "echo ok", "--no-wait")
+        self.assertEqual(second.wait(120), 0, log2.read_text(encoding="utf-8"))
+        self.assertFalse((at / "first.done").exists())
+
+    def test_the_lock_is_not_left_when_the_tool_dies(self):
+        """道具が落ちても（SIGKILL。 後片付けの処理は動かない）、 OS がロックを外す。 段の process は、 道具が止まらず
+        後ろに残っても、 ロックを持たない（fd は子に渡らない）。"""
+        at = self.root
+        first, _, _ = self.first()
+        step = int((at / "first.started").read_text())
+        first.kill()
+        first.wait(120)
+        self.assertTrue(_alive(step), "段の process が残っていない（この試験の前提）")
+        self.assertLockIsFree()
+        second, log2, _ = self.start("second", "echo ok", "--no-wait")
+        self.assertEqual(second.wait(120), 0, log2.read_text(encoding="utf-8"))
+
+    def test_stopping_a_waiting_run_leaves_the_holder_alone(self):
+        """待っている検査を止めても（SIGTERM・Ctrl-C）、 traceback を出さず、 何も流さず、 持ち主の記録を消さない。"""
+        at = self.root
+        first, _, head1 = self.first()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(sig=sig.name):
+                name = f"waiter-{sig.name}"
+                w, logw, _ = self.start(name, f'touch "{at}/{name}.ran"')
+                self.wait_for(lambda: "終わるまで待ちます" in logw.read_text(encoding="utf-8"), "待ちの知らせ")
+                w.send_signal(sig)
+                self.assertEqual(w.wait(120), 128 + sig, logw.read_text(encoding="utf-8"))
+                text = logw.read_text(encoding="utf-8")
+                self.assertIn("止めました（job を流す前。 何も流していません）", text)
+                self.assertNotIn("Traceback", text)
+                self.assertFalse((at / f"{name}.ran").exists())
+                self.assertFalse((at / f"work-{name}").exists())
+        third, log3, _ = self.start("third", "echo ok", "--no-wait")
+        self.assertEqual(third.wait(120), 2)
+        self.assertIn(f"（local/first・head {head1[:12]}・", log3.read_text(encoding="utf-8"),
+                      "待っていた検査が、 持ち主の記録を消した")
+        (at / "release").touch()
+        self.assertEqual(first.wait(120), 0)
+
+    def test_list_and_refusals_do_not_take_the_lock(self):
+        """`--list` と、 流す前に止まるとき（知らない書き方）は、 ロックを待たない。"""
+        fd = self.hold_lock(b"{}")
+        self.addCleanup(os.close, fd)
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: example/unknown@v1
+            """), {})
+        p = subprocess.run([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main", "--canonical",
+                            str(t), "--canonical-ref", "main", "--work", str(self.root / "work-x")],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("流せません", p.stderr)
+        self.assertNotIn("待ちます", p.stdout + p.stderr)
+        self.assertFalse((self.root / "work-x").exists())
+        ok = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {}, name="ok")
+        p = subprocess.run([sys.executable, str(RUNNER), str(ok), "--head", "pr", "--base", "main", "--canonical",
+                            str(ok), "--canonical-ref", "main", "--list"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("待ちます", p.stdout + p.stderr)
+
+    def test_the_record_of_the_holder_cannot_break_the_output(self):
+        """持ち主の記録は同じ利用者のほかの process が書くもの。 行を崩す字・形の違う値・読めない記録でも、
+        記録の行に似た行を作らず、 道や値をそのまま出さない。"""
+        import json
+        ok = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+        records = {
+            "崩す字": json.dumps({"repository": "x\n" + R.RECORD_PASS + "（", "head": "/home/user/secret",
+                                 "started": "now\nx", "pid": "1"}).encode(),
+            "読めない": b"\xff\xfe not json",
+            "長い": json.dumps({"repository": "r" * 3000, "head": "a" * 40}).encode(),
+        }
+        for name, record in records.items():
+            with self.subTest(name):
+                fd = self.hold_lock(record)
+                try:
+                    p = self.run_it(ok, "--no-wait")
+                finally:
+                    os.close(fd)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertNotRegex(p.stdout + p.stderr, rf"(?m)^\s*{R.RECORD_PASS}")
+                self.assertNotIn("/home/user", p.stderr)
+                line = [ln for ln in p.stderr.splitlines() if "別の検査が流れています" in ln]
+                self.assertEqual(len(line), 1, p.stderr)
+                self.assertLess(len(line[0]), 400)
+                if name == "崩す字":
+                    self.assertIn("x\\u000a" + R.RECORD_PASS, line[0])
+                    self.assertIn("head は不明・始めた時刻は不明）", line[0])
+                if name == "読めない":
+                    self.assertIn("ロックを持つ検査の記録を読めません", line[0])
+                if name == "長い":
+                    self.assertIn("r" * 100 + f"・head {'a' * 12}・", line[0])
+                    self.assertNotIn("r" * 101, line[0])
+
+    def test_the_lock_is_held_while_jobs_run_and_released_after_an_unexpected_error(self):
+        """job を流す間は持ち主の記録を書いてロックを持ち、 道具の中の誤りで止まっても外す（同じ process で
+        次の main() も流せる）。"""
+        import contextlib
+        import fcntl
+        import io
+        import json
+        from unittest import mock
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+        seen = {}
+
+        def broken(*_args, **_kw):
+            fd = os.open(self.lock_dir / R.LOCK_NAME, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.update(json.loads(os.pread(fd, 4096, 0)))
+            finally:
+                os.close(fd)
+            raise RuntimeError("壊れた")
+
+        out = io.StringIO()
+        with mock.patch.object(R, "_run_job", side_effect=broken), mock.patch.object(R, "_rmtree"), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t), "--canonical-ref", "main",
+                         "--jobs", "1", "--work", str(self.root / "work-broken")])
+        self.assertEqual(rc, 1, out.getvalue())
+        self.assertEqual(seen.get("repository"), "local/target")
+        self.assertEqual(seen.get("head"), _git(t, "rev-parse", "pr"))
+        self.assertEqual(seen.get("pid"), os.getpid())
+        self.assertLockIsFree()
+        self.assertEqual((self.lock_dir / R.LOCK_NAME).read_bytes(), b"")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t), "--canonical-ref", "main",
+                         "--python", f"{PYVER}={sys.executable}", "--no-wait", "--work", str(self.root / "work-again")])
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertLockIsFree()
+
+    def ok_repo(self) -> Path:
+        return _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {})
+
+    def test_the_lock_file_is_only_for_the_user(self):
+        """作るときも、 前からあるときも、 この利用者だけが読み書きできる形にする。"""
+        t = self.ok_repo()
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        lock = self.lock_dir / R.LOCK_NAME
+        self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+        lock.chmod(0o644)
+        p = self.run_it(t)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+
+    def test_a_planted_link_is_not_followed(self):
+        """ロックの道に置いた symlink・hard link の先のファイルを、 切り詰めない（流さずに止める）。"""
+        t = self.ok_repo()
+        self.lock_dir.mkdir()
+        lock = self.lock_dir / R.LOCK_NAME
+        for kind in ("symlink", "hardlink"):
+            with self.subTest(kind):
+                victim = self.root / f"victim-{kind}"
+                victim.write_text("大事な中身")
+                if kind == "symlink":
+                    lock.symlink_to(victim)
+                else:
+                    os.link(victim, lock)
+                p = self.run_it(t)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("流せません: 同じ利用者の検査を重ねないロックを取れません", p.stderr)
+                self.assertNotIn(R.RECORD_PASS, p.stdout)
+                self.assertEqual(victim.read_text(), "大事な中身")
+                self.assertFalse(self.work.exists())
+                lock.unlink()
 
 
 class ExprAndGlobTest(unittest.TestCase):

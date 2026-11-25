@@ -133,17 +133,15 @@ SETTINGS_EXTRA_DENY = ("Read(**/*.lic)", "Edit(**/*.lic)")
 #: 呼び出し側の workflow と、 顧客の間の混入の検査の宣言（どちらも雛形にある）。
 WORKFLOW = ".github/workflows/basic-checks.yml"
 PROFILE = "customer-profile.yaml"
-#: 新しい形の印（レシピ）と製品のパッケージの宣言（どちらも雛形にある）。 **レシピが無いと、 混入の検査と
-#: 記録の検査は、 その Repository を前の形として照らす**（`recipes/`・`machines/` を照らさない）。
-CASE = "recipes/case.yaml"
+#: 製品のパッケージの宣言（雛形にある）。
 PYPROJECT = "pyproject.toml"
 #: 宣言の初期形の状態の行。 **人の確認の前に VERIFIED で作らない。**
 UNVERIFIED = "# 状態: REQUIRES HUMAN VERIFICATION"
 
 #: main に無ければならないもの（`--check` が確かめる）。 hook・設定・CI が
 #: 無いと、 main を守る壁が無いまま始まる。 宣言が無いと、 混入の検査を
-#: 始める手順に入れない。 レシピが無いと、 検査が前の形として照らす。
-MUST_HAVE = ("CLAUDE.md", SETTINGS, WORKFLOW, PROFILE, CASE, PYPROJECT, *FROM_CANONICAL)
+#: 始める手順に入れない。 製品のパッケージの宣言が無いと、 その試験（workflow の product の job）が流れない。
+MUST_HAVE = ("CLAUDE.md", SETTINGS, WORKFLOW, PROFILE, PYPROJECT, *FROM_CANONICAL)
 
 #: Team と権限（As-Is Inventory の D12）。 既存の顧客案件と同じ。
 TEAMS = (("developers", "push"), ("maintainers", "admin"))
@@ -394,7 +392,6 @@ def check_isolation_defaults(tree: dict) -> None:
 
     - 宣言（`customer-profile.yaml`）があり、 状態の行は人の確認待ちの 1 つだけ
       （VERIFIED で作らない。 値は人が案件の資料と照らして確かめてから書く）
-    - 新しい形の印（`recipes/case.yaml`）がある（検査が新しい形として照らす）
     - 雛形のどの workflow でも、 混入の照合を有効にしていない（false か、 渡さない）
     """
     if PROFILE not in tree:
@@ -404,9 +401,6 @@ def check_isolation_defaults(tree: dict) -> None:
     if status != [UNVERIFIED]:
         raise SourceError(f"雛形の {PROFILE} は、 状態の行が「{UNVERIFIED[2:]}」の 1 つだけ"
                           "で始めます（人の確認の前に VERIFIED で作らない）")
-    if CASE not in tree:
-        raise SourceError(f"雛形に {CASE} がありません（新しい形の印。 無いと混入の検査と記録の検査が"
-                          " 前の形として照らし、 recipes/・machines/ を照らさない）")
     if WORKFLOW not in tree:
         raise SourceError(f"雛形に {WORKFLOW} がありません")
     # 拡張子の大文字と小文字は区別しない（`.YML` も確かめる。 #111）
@@ -866,12 +860,15 @@ def check(api: Api, plan: Plan, audit=audit_one) -> int:
              if e.get("type") == "blob"}
     missing = [p for p in MUST_HAVE if p not in paths]
     if not missing:
-        add(OK, f"Claude Code 一式・検査の workflow・宣言とレシピが {base} にある（{len(MUST_HAVE)} ファイル）")
+        add(OK, f"Claude Code 一式・検査の workflow・宣言・製品のパッケージの宣言が {base} にある（{len(MUST_HAVE)} ファイル）")
     elif "CLAUDE.md" in missing:
         add(NG, f"Claude Code 一式と検査の workflow が {base} に無い"
                 "（最初の Pull Request がまだ merge されていない）")
     else:
-        add(NG, f"{base} に無い: {', '.join(missing)}")
+        # 製品のパッケージの骨組みは #216 で雛形に入れた。 それより前の雛形で作った Repository に無いのは正しい
+        note = ("（前の雛形で作った Repository には製品のパッケージの骨組みが無いのが正しい。 足すかは人が決める）"
+                if PYPROJECT in missing else "")
+        add(NG, f"{base} に無い: {', '.join(missing)}{note}")
 
     _, now = api.get(f"/repos/{ORG}/{name}/properties/values")
     current = {p["property_name"]: p.get("value") for p in now or []}

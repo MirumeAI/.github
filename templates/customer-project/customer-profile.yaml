@@ -1,11 +1,11 @@
-# この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 レシピ（recipes/）・機体の設定（machines/）・
-# 設定（config/・dev/config/・deploy/・versions.yaml）と記録（deployment/・validation/）と照らす。
-# 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
+# この案件の宣言（customer-profile.yaml）。 顧客の間の混入の検査が、 設定（config/・dev/config/・
+# deploy/・versions.yaml）と記録（deployment/・validation/）と照らす。 新しい形（recipes/case.yaml が
+# ある）では、 レシピ（recipes/）と機体の設定（machines/）とも照らす。 書き方の正本は MirumeAI/.github の README「顧客の間の混入の検査」、
 # 運用の手順は MirumeAI/development-docs の 03_customer_development/customer_isolation_check.md。
 #
 # 状態: REQUIRES HUMAN VERIFICATION
 #   雛形から作った初期形で、 値はまだ無い。 空のままでは、 検査は照らせずに止まる（合格にしない）。
-#   値は recipes/・machines/（と config/）を書くのと同じ Pull Request で書く（README の「顧客の間の混入の検査を始める」）。
+#   値は config/ を書くのと同じ Pull Request で書く（README の「顧客の間の混入の検査を始める」）。
 #   今の設定にあることは、 この案件の値である根拠にならない。 人が案件の資料と照らして確かめるまで、
 #   正本とみなさない。 確かめたら、 この状態の行の印を、 VERIFIED と確かめた Pull Request の番号に替える。
 #
@@ -14,7 +14,7 @@ schema_version: 1
 
 project:
   flow:                                 # config.json の flow と同じ（inspection で書く案件は、 flow の代わりに inspection: に軸ごと）
-  profiles: []                          # recipes/case.yaml の case.name（と config.json の _profile）に使ってよい名前
+  profiles: []                          # config.json の _profile に使ってよい名前
 
 capabilities:                           # 使うかどうか。 推測しないので、 true か false を必ず書く
   plc:
@@ -22,7 +22,7 @@ capabilities:                           # 使うかどうか。 推測しない�
   ai:
 
 equipment:
-  cameras: []                           # カメラの役（camera と shot の鍵）ごとに {id: …, ip: …, serial: "…"}
+  cameras: []                           # config.json の camera と shot の鍵ごとに {id: …, ip: …, serial: "…"}
 
 endpoints: []                           # カメラと PLC のほかの宛先（ちょうどの値。 網は本当に要るときだけ、 理由をつけて）
 
@@ -32,9 +32,9 @@ plc:
 
 triggers: []                            # shot の triggers と、 PLC の shot_request の項目
 faces: []                               # face_dict の鍵
-products: []                            # 製品の名前（recipes/products/<製品>.yaml のファイルの名前と product）
+products: []                            # 製品の名前（新しい形の recipes/products/<製品>.yaml のファイルの名前と product）
 
 config_files:
-  extra: []                             # Core が読む決まった名前の外のファイル（path と reason。 recipes/・machines/・config/ の下）
+  extra: []                             # Core が読む決まった名前の外のファイル（path と reason。 config/ の下か、 新しい形の recipes/・machines/ の下）
 
-extensions: []                          # 差し込む部品の名前（pyproject.toml の entry points）
+extensions: []                          # 差し込む部品の名前（新しい形の entry points）

@@ -6,8 +6,8 @@
 release/<System Release ID>.yaml     例: PJxxx-R2026.10.1.yaml
 ```
 
-- Core の版は `versions.yaml` を参照します（写さない）。Model・設定・Dataset・実行環境・ハードウェアと製品のパッケージ（`product_package`）を合わせたものが System Release です
-- ずれ（`deployment/` の記録の `recipe_drift`）を残したまま、次の System Release を作りません
+- Core の版は `versions.yaml` を参照します（写さない）。Model・設定・Dataset・実行環境・ハードウェアを合わせたものが System Release です
+- 製品のパッケージ（`product_package`）とずれの記録は、目標の形（`recipes/case.yaml` がある）で載せます（正本の「新しい形の System Release」）
 
 ## 置かないもの
 

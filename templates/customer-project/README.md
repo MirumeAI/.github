@@ -16,17 +16,16 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `versions.yaml` | 出荷に使う Core の組合せ（Product Release のタグと commit）。開発中の固定は任意の `versions.dev.yaml`（機体に配らない） |
 | `pyproject.toml`・`src/case_package/` | 製品のパッケージ（命令 `doctor` と、組める Core の版の範囲の表 `cores.py`） |
 | `tests/product/` | Core を使わない試験（検査の `product` の job が流す） |
-| `recipes/` | 案件の値（`case.yaml`・`products/<製品の名前>.yaml`） |
-| `machines/` | 機体の値（`<機体の記号>.yaml`。開発の機体は見本 `dev.example.yaml` だけ） |
-| `config/` | 機体へ配る設定（撮像側の `setup_customer.sh` で配る） |
+| `config/` | 案件の値で、機体へ配る設定（撮像側の `setup_customer.sh` で配る） |
 | `dev/` | 開発の機体だけの設定（機体へ配らない） |
+| `recipes/`・`machines/` | 目標の形のレシピと機体の設定の置き場。組み立て器と一緒に決めるまで、説明のほかは置かない |
 | `deploy/` | 起動・配置の設定と、機体の記号の対応表 |
 | `evaluation/` | 評価の結果と、値を選んだ記録 |
 | `release/`・`deployment/`・`validation/` | System Release・配置・検証の記録 |
-| `requirements/`・`quick-diagnosis/`・`poc/`・`acceptance/` | 要求・初期確認・PoC・受入の記録 |
+| `requirements/`・`acceptance/` | 顧客要求と検査仕様・受入の記録 |
 | `.claude/`・`scripts/ci/`・`.github/workflows/` | 正本（`MirumeAI/.github`）の写しと、その再利用 workflow を呼ぶ検査。ここでは直さない |
 
-各フォルダの README に「置くもの・置かないもの」があります。レシピと機体の設定から Core の設定を作る組み立て器と起動の命令は、まだ置いていません。機体で動かす設定は `config/`（配る）と `dev/`（開発の機体）に置きます。
+各フォルダの README に「置くもの・置かないもの」があります。
 
 ## Core の置き方
 
@@ -36,7 +35,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 ## 置かないもの
 
 - Core の Source とその写し
-- 顧客の画像・Dataset・Model Weight の本体、データの manifest そのもの
+- 顧客の画像・Dataset・Model Weight の本体、データの manifest そのもの、データの置き場の実際の道
 - ライセンスファイル（`*.lic`）・Credential・パスワード
 
 この Repository は Private にし、内容を Public な場所へ写しません。
@@ -53,10 +52,11 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 
 `customer-profile.yaml` は、この案件にあってよい識別子の宣言です。作ったときは値の無い初期形で、検査は照らせずに止まるので、混入の照合（`.github/workflows/basic-checks.yml` の `run-isolation-check`）は `false` で始まります。
 
-1. `recipes/`・`machines/`（と `config/`・`dev/config/`）に値を書き、同じ Pull Request で `customer-profile.yaml` の下書きを書く（状態の行は確認待ちのまま。値を Issue・Pull Request の本文・検査の記録に書かない）
-2. 報告だけの形で流し、`NG` の行を分けて直す: `python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only`
+1. `config/` に案件の設定を書き、同じ Pull Request で `customer-profile.yaml` の下書きを書く（状態の行は確認待ちのまま。値を Issue・Pull Request の本文・検査の記録に書かない）。主の設定 `config/image-acquisition/config.json` が無いと照らせません（開発の機体の設定だけを置く案件の扱いは、正本の「照らす範囲と前提」）
+2. 報告だけの形で流す: `python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only`。終了コードは 0 なので、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して消さない
 3. 作成者と別の人が、宣言の値を案件の資料と照らして確かめ、自分で Pull Request に記録する（Agent は確かめた扱いにしない）
-4. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す（値は変えない）
-5. `--report-only` を付けずに流して `結果: PASS` になったら、`run-isolation-check` を `true` にする
+4. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す。値は変えず、YAML として読んだ値が確かめた版と同じことを Pull Request に書く
+5. `--report-only` を付けずに流して `結果: PASS`（`NG` と `ERROR` の行が無い）になったら、`run-isolation-check` を `true` にする
+6. その Pull Request の Required Verification で、混入の照合の段が動いて `結果: PASS` になることを確かめる
 
 宣言を変えた Pull Request は、人が値を確かめるまで merge しません。正本は `customer_isolation_check.md` の「有効にする順」と、`MirumeAI/.github` の README「顧客の間の混入の検査」です。

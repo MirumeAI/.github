@@ -1018,7 +1018,7 @@ def scenarios() -> "list[Scenario]":
     add("N1c. 両方あるときは、 前の形の config/ の混入も見つける", _with(n_files(), **{
         k.replace("/", "__"): v for k, v in mixed.items()}), 1,
         {"S2-plc", "L1-plc-endpoint", "L1-plc-address", "L1-trigger"})
-    add("N1d. 前の形（case.yaml が無い）の、 前の雛形の recipes/ と説明だけの machines/ は今のまま照らさない",
+    add("N1d. 前の形（case.yaml が無い）の、 今の雛形の recipes/ と説明だけの machines/ は今のまま照らさない",
         a_with(**{
             "recipes__README.md": "# recipes/\n", "recipes__x.yaml": f"peer: '{B_IPS[0]}'\n",
             "recipes__capture__README.md": f"{B_IPS[0]}\n",
@@ -1034,13 +1034,6 @@ def scenarios() -> "list[Scenario]":
                      ("i", "machines__.gitkeep")):
         add(f"N1{tag}. case.yaml が無いのに新しい置き場がある・書き違いなら止める", a_with(**{
             rel: "x: 1\n"}), 2, error="config-missing")
-    # 雛形（templates/customer-project/。 #216）は新しい形。 見本は値が無いので、 そのままで通る。 レシピは値の無い
-    # 初期形なので、 そのままでは照らせずに止まる（合格にしない）
-    tpl = HERE.parents[1] / "templates" / "customer-project"
-    add("N1j. 雛形の見本 machines/dev.example.yaml は、 そのままで通る", n_with(**{
-        EXAMPLE: (tpl / EXAMPLE).read_text(encoding="utf-8")}), 0)
-    add("N1k. 雛形のレシピ（値の無い初期形）のままでは、 照らせずに止まる", n_with(**{
-        CASE: (tpl / CASE).read_text(encoding="utf-8")}), 2, error="config-field")
 
     # 層 1: 決まった場所（機体の設定とレシピの profile）
     m = a_machine()

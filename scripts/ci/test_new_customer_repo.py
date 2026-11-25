@@ -15,11 +15,13 @@
     GitHub は値の無い要求を断る。 #179）
   ・照合の対象のうち、 顧客案件へ写さないものには理由がある
   ・案件の題名と案件の名前（Core が案件を引く鍵）を、 README・CLAUDE.md・開発の設定の
-    ファイルの名前の所に分けて入れる（#181）
+    ファイルの名前の所に分けて入れる（#181）。 製品のパッケージの Python の名前を、 中身と
+    道 `src/<パッケージ>/` に入れる（#216）
+  ・作った Repository の製品のパッケージの試験（workflow の `product` の job）が通る
   ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
     混入の照合は有効にしない。 初期形のままでは検査が合格にならない
-  ・架空の案件で、 雛形の README の手順どおりに、 宣言の下書き → 報告だけの形 →
-    VERIFIED → 有効化 → CI と同じ検査 まで通る（合成の E2E）
+  ・架空の案件で、 雛形の README の手順どおりに、 レシピと機体の設定と宣言の下書き →
+    報告だけの形 → VERIFIED → 有効化 → CI と同じ検査 まで通る（合成の E2E。 新しい形）
 
 混入の検査を流す試験には PyYAML が要る。 CI（環境変数 CI がある）で無ければ、
 飛ばさずに落とす。
@@ -168,26 +170,46 @@ def _head(root: Path) -> str:
 #: 架空の案件の値（合成の E2E）。 **実行するときに組み立てる。** IP は文書用の網
 #: （RFC 5737）、 ほかは `EXAMPLE`・`example` を含む形（test_customer_isolation.py と同じ決まり）。
 EX_FLOW = "example-flow-" + "new"
-EX_PROFILE = "example-" + "new"
 EX_IP = "192.0.2." + str(30)
 EX_SERIAL = "EXAMPLE-SN-" + "0100"
 EX_TRIGGER = "trig_example_" + "new_top"
 EX_CAMERA = "camera_" + "example"
-EX_VALUES = (EX_FLOW, EX_PROFILE, EX_IP, EX_SERIAL, EX_TRIGGER, EX_CAMERA)
+EX_MACHINE = "M01"
+#: 案件の名前は Repository の名前から作る（レシピの case.name）
+EX_CASE = "example-part"
+EX_VALUES = (EX_FLOW, EX_IP, EX_SERIAL, EX_TRIGGER, EX_CAMERA, EX_CASE)
+CASE = "recipes/case.yaml"
+MACHINE = f"machines/{EX_MACHINE}.yaml"
 
 
-def _ex_config() -> dict:
-    """架空の案件の撮像側の設定（PLC なし・カメラ 1 台）。"""
+def _ex_case_profile() -> dict:
+    """架空の案件のレシピの profile（撮像側の案件の設定から機体の値を除いた物。 PLC なし・カメラ 1 台）。"""
     return {
-        "_profile": EX_PROFILE,
         "flow": EX_FLOW,
-        "camera": {EX_CAMERA: {"ip_address": EX_IP, "serial_number": EX_SERIAL}},
+        "camera": {EX_CAMERA: {"camera_type": "area"}},
         "shot": {EX_CAMERA: {"triggers": [EX_TRIGGER]}},
         "face_dict": {EX_TRIGGER: "上面"},
         "nas": {"enabled": False},
         "plc": {"enabled": False},
         "ai": {"enabled": True},
     }
+
+
+def _ex_machine() -> dict:
+    """架空の案件の据え付けた機体の設定（カメラの個体だけ）。"""
+    return {"schema_version": 1, "machine": {"symbol": EX_MACHINE, "kind": "installed"},
+            "work_root": "/srv/example/work_root",
+            "profile": {"camera": {EX_CAMERA: {"ip_address": EX_IP, "serial_number": EX_SERIAL}}}}
+
+
+def _fill_recipes(root: Path) -> None:
+    """雛形のレシピ（値の無い初期形）の profile の行に架空の案件の値を書き、 据え付けた機体の設定を足す。"""
+    case = root / CASE
+    body = yaml.safe_dump({"profile": _ex_case_profile()}, allow_unicode=True, sort_keys=False).rstrip("\n")
+    text, n = re.subn(r"(?m)^profile: \{\}.*$", lambda m: body, case.read_text(encoding="utf-8"))
+    assert n == 1, n
+    case.write_text(text, encoding="utf-8")
+    (root / MACHINE).write_text(yaml.safe_dump(_ex_machine(), allow_unicode=True), encoding="utf-8")
 
 
 def _fill_profile(text: str) -> str:
@@ -197,7 +219,7 @@ def _fill_profile(text: str) -> str:
     """
     reps = (
         (r"^(  flow:)[ \t]*(#.*)?$", rf"\1 {EX_FLOW}  \2"),
-        (r"^  profiles: \[\]", f"  profiles: [{EX_PROFILE}]"),
+        (r"^  profiles: \[\]", f"  profiles: [{EX_CASE}]"),
         (r"^  plc:[ \t]*$", "  plc: false"),
         (r"^  nas:[ \t]*$", "  nas: false"),
         (r"^  ai:[ \t]*$", "  ai: true"),
@@ -407,15 +429,32 @@ class NameTest(unittest.TestCase):
         self.assertEqual(PLAN.case, "example-part")
         self.assertNotIn(" ", PLAN.case)
 
+    def test_the_python_name(self) -> None:
+        """製品のパッケージの Python の名前は、 案件の名前の `-` を `_` にした物（#216）。 Python の名前にならない
+        （数字で始まる）なら作らない。"""
+        self.assertEqual(N.python_name(NAME), "example_part")
+        self.assertEqual(PLAN.package, "example_part")
+        self.assertEqual(N.python_name("customer-a1-b2-c3"), "a1_b2_c3")
+        with self.assertRaises(ValueError) as cm:
+            N.make_plan("customer-3d-part", None, N.PROPERTIES, SRC)
+        self.assertIn("'3d_part'", str(cm.exception))
+
 
 class TheFirstContentTest(unittest.TestCase):
     """最初の中身に、 手で写していたものが漏れなく入ること。"""
 
     def test_every_template_file_is_there(self) -> None:
+        """雛形のファイルはすべて入る。 製品のパッケージの道 `src/case_package/` は Python の名前にする（#216）。"""
         tpl = {p.relative_to(ROOT / N.TEMPLATE).as_posix()
-               for p in (ROOT / N.TEMPLATE).rglob("*") if p.is_file()}
-        self.assertIn("CLAUDE.md", tpl)
-        self.assertLessEqual(tpl, set(PLAN.tree))
+               for p in (ROOT / N.TEMPLATE).rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+        for rel in ("CLAUDE.md", "pyproject.toml", "src/case_package/__init__.py", "src/case_package/cli.py",
+                    "src/case_package/cores.py", "recipes/case.yaml", "machines/dev.example.yaml"):
+            self.assertIn(rel, tpl)
+        self.assertFalse({"app/README.md", "manifests/README.md"} & tpl, "目標の形に無い置き場")
+        pkg = "src/case_package/"
+        made = {"src/example_part/" + r[len(pkg):] if r.startswith(pkg) else r for r in tpl}
+        self.assertLessEqual(made, set(PLAN.tree))
+        self.assertEqual([p for p in PLAN.tree if "case_package" in p], [])
 
     def test_the_guard_comes_from_the_canonical(self) -> None:
         """**hook と command は正本と 1 バイトも違わない。**
@@ -442,6 +481,15 @@ class TheFirstContentTest(unittest.TestCase):
             with self.subTest(file=rel):
                 self.assertNotIn(N.PLACEHOLDER.encode("utf-8"), data)
                 self.assertNotIn(N.TITLE_PLACEHOLDER.encode("utf-8"), data)
+                self.assertNotIn(b"case_package", data)
+        # 配布物と命令の名前は案件の名前、 Python の名前は `_` の形（#216）
+        pyproject = PLAN.tree["pyproject.toml"][1].decode("utf-8")
+        for line in ('name = "example-part"\n', '"example-part" = "example_part.cli:main"\n',
+                     'version = {attr = "example_part.__version__"}\n', 'include = ["example_part*"]\n'):
+            self.assertIn(line, pyproject)
+        self.assertIn('PROG = "example-part"\n', PLAN.tree["src/example_part/cli.py"][1].decode("utf-8"))
+        self.assertIn("from example_part import cores", PLAN.tree["tests/product/test_pyproject.py"][1].decode("utf-8"))
+        self.assertIn('  name: "example-part"', PLAN.tree["recipes/case.yaml"][1].decode("utf-8"))
 
     def test_file_names_get_the_case_name_not_the_title(self) -> None:
         """**ファイルの名前の所には案件の名前、 見出しには題名**（#181）。
@@ -463,6 +511,8 @@ class TheFirstContentTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("案件の題名  example part\n", out)
         self.assertIn("案件の名前  example-part（", out)
+        self.assertIn("Python の名前  example_part（", out)
+        self.assertIn("製品のパッケージの Python の名前は `example_part`（`src/example_part/`）", body)
 
     def test_claude_md_gets_the_title_and_the_case_name_apart(self) -> None:
         """**雛形の CLAUDE.md も、 題名と案件の名前を分けて入れる**（#181）。
@@ -481,6 +531,7 @@ class TheFirstContentTest(unittest.TestCase):
                 self.assertEqual(len(case), 1, case)
                 self.assertTrue(case[0].endswith("）は `example-part` です。"), case[0])
                 self.assertIn("`dev/config/image-acquisition/example-part.json`", claude)
+                self.assertIn("\n製品のパッケージの Python の名前は `example_part` です（`src/example_part/`）。\n", claude)
                 # Repository の説明も題名で作る（`plugins/` を外す前の言い方に戻さない）
                 self.assertEqual(plan.description, f"{title} 向けの顧客固有の設定・記録・開発")
         # 題名を変えたら、 既定の題名はどこにも残らない
@@ -533,6 +584,37 @@ class ItPassesTheFirstCITest(unittest.TestCase):
                         # 照合を飛ばして合格、 になっていないこと
                         self.assertIn(f"照合: {len(N.FROM_CANONICAL)} ファイル",
                                       out)
+
+    def test_the_product_job_passes(self) -> None:
+        """**製品のパッケージの試験（workflow の `product` の job）が、 作った Repository で通る**（#216）。
+
+        job は守りの検査（checks）の後に、 3.10 で、 PyYAML だけを入れて `tests/product/` を流す。 流すのは
+        workflow に書いた命令そのもの（pip は流さず、 この試験の Python の PyYAML を使う）。
+        """
+        _need_yaml(self)
+        wf = yaml.safe_load(PLAN.tree[N.WORKFLOW][1].decode("utf-8"))
+        self.assertEqual(sorted(wf["jobs"]), ["checks", "product"])
+        job = wf["jobs"]["product"]
+        self.assertEqual(job["needs"], "checks")
+        self.assertEqual([s.get("uses") for s in job["steps"] if "uses" in s],
+                         ["actions/checkout@v4", "actions/setup-python@v5"])
+        self.assertEqual(job["steps"][1]["with"], {"python-version": "3.10"})
+        runs = [s["run"] for s in job["steps"] if "run" in s]
+        self.assertEqual(runs, ["python -m pip install --quiet pyyaml==6.0.3",
+                                "python -m unittest discover -s tests/product -v"])
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td) / "target"
+            _materialize(PLAN.tree, tgt)
+            r = subprocess.run([sys.executable, "-B", *runs[1].split()[1:]], cwd=str(tgt),
+                               capture_output=True, text=True)
+            out = r.stdout + r.stderr
+            self.assertEqual(r.returncode, 0, out[-2000:])
+            ran = re.search(r"^Ran (\d+) tests? in ", out, re.M)
+            self.assertTrue(ran and int(ran.group(1)) >= 10, out[-600:])
+            self.assertNotIn("skipped", out)
+            # 雛形の守りの試験がそろっている（外すと、 どの案件にも当てはまる守りが抜ける）
+            self.assertEqual(sorted(p.name for p in (tgt / "tests/product").glob("test_*.py")),
+                             ["test_doctor.py", "test_no_core_import.py", "test_pyproject.py"])
 
 
 class EverySharedFileIsDecidedTest(unittest.TestCase):
@@ -872,14 +954,16 @@ class CheckTest(unittest.TestCase):
         self.assertIn("developers=なし", out)
 
     def test_a_missing_profile_is_found(self) -> None:
-        """宣言が main に無いと、 混入の検査を始める手順に入れない。"""
-        routes = _created()
-        routes[("GET", f"{REPO}/git/trees/main?recursive=1")] = (
-            200, {"tree": [{"path": p, "type": "blob"} for p in PLAN.tree
-                           if p != "customer-profile.yaml"]})
-        code, out, _ = self._check(routes)
-        self.assertEqual(code, 1, out)
-        self.assertIn("customer-profile.yaml", out)
+        """宣言が main に無いと、 混入の検査を始める手順に入れない。 レシピが無いと、 検査が前の形として
+        照らす（#216）。"""
+        for rel in ("customer-profile.yaml", CASE, "pyproject.toml"):
+            with self.subTest(rel=rel):
+                routes = _created()
+                routes[("GET", f"{REPO}/git/trees/main?recursive=1")] = (
+                    200, {"tree": [{"path": p, "type": "blob"} for p in PLAN.tree if p != rel]})
+                code, out, _ = self._check(routes)
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"main に無い: {rel}", out)
 
     def test_a_changed_group_is_found_by_the_audit(self) -> None:
         """group を customer から変えると、 監査の所見で NG になる（#195）。"""
@@ -943,15 +1027,34 @@ class TheIsolationStartsOffTest(unittest.TestCase):
                     code, out = _isolation(tgt, *args)
                     self.assertEqual(code, 2, out)
                     self.assertIn("結果: ERROR", out)
-            # 設定を書いても、 宣言が初期形のままなら合格にならない
-            cfg = tgt / "config/image-acquisition/config.json"
-            cfg.parent.mkdir(parents=True)
-            cfg.write_text(json.dumps(_ex_config(), ensure_ascii=False), encoding="utf-8")
+            # レシピと機体の設定を書いても、 宣言が初期形のままなら合格にならない
+            _fill_recipes(tgt)
             code, out = _isolation(tgt)
             self.assertEqual(code, 2, out)
             self.assertIn("ERROR [profile-schema]", out)
             for v in EX_VALUES:
                 self.assertNotIn(v, out)
+
+    def test_the_recipe_starts_without_values(self) -> None:
+        """**レシピも値の無い初期形**（#216）。 名前は Repository の名前から作った案件の名前だけ。 Git に置く機体の
+        設定は、 値の無い開発の機体の見本だけ。"""
+        _need_yaml(self)
+        case = yaml.safe_load(PLAN.tree[CASE][1].decode("utf-8"))
+        self.assertEqual(case, {"schema_version": 1, "profile": {},
+                                "case": {"name": "example-part", "title": None, "description": None}})
+        self.assertEqual(sorted(p for p in PLAN.tree if p.startswith(("recipes/", "machines/"))),
+                         ["machines/README.md", "machines/dev.example.yaml", "recipes/README.md", CASE])
+        ex = yaml.safe_load(PLAN.tree["machines/dev.example.yaml"][1].decode("utf-8"))
+        self.assertEqual(ex["machine"]["kind"], "dev")
+
+    def test_the_new_form_comes_with_its_skeleton(self) -> None:
+        """**レシピ（新しい形の印）と製品のパッケージの骨組みを一緒に入れる**（#216）。 どれかが雛形に無ければ
+        作らない（レシピが無いと、 混入の検査と記録の検査が前の形として照らす）。"""
+        for rel in (CASE, "pyproject.toml", "src/case_package/__init__.py"):
+            with self.subTest(rel=rel):
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({rel: None}))
+                self.assertIn(rel.replace("case_package", "example_part"), str(cm.exception))
 
     def test_the_check_is_off_in_the_workflow(self) -> None:
         """呼び出し側の workflow は、 混入の照合を false で始める。 ほかは変えない。"""
@@ -1124,9 +1227,11 @@ class TheIsolationStartsOffTest(unittest.TestCase):
 class TheIsolationPathTest(unittest.TestCase):
     """**作った Repository が、 混入の検査を始める手順をそのまま通れること**（合成の E2E）。
 
-    架空の案件で、 雛形の README の手順どおりに進める: 作る → 設定と宣言の下書き →
-    報告だけの形 → 人の確認（を模した状態の行の書き換え）→ VERIFIED → 有効化 →
-    CI と同じ検査。 **値は出力に出ない**ことも見る。 人の確認そのものは試験では
+    架空の案件で、 雛形の README の手順どおりに進める: 作る → レシピ（`recipes/case.yaml`）と
+    据え付けた機体の設定（`machines/`）と宣言の下書き → 報告だけの形 → 人の確認（を模した
+    状態の行の書き換え）→ VERIFIED → 有効化 → CI と同じ検査。 雛形はレシピを持つので、
+    検査は新しい形として照らす（前の形の主の設定 `config/image-acquisition/config.json` は
+    置かない。 #216）。 **値は出力に出ない**ことも見る。 人の確認そのものは試験では
     代われない（ここで行うのは、 確かめた後に人が直す行の書き換えだけ）。
     """
 
@@ -1140,11 +1245,9 @@ class TheIsolationPathTest(unittest.TestCase):
             prof = tgt / "customer-profile.yaml"
             wf_path = tgt / ".github/workflows/basic-checks.yml"
 
-            # 1・2. 設定と、 同じ変更で宣言の下書き（状態は確認待ちのまま）
-            cfg = tgt / "config/image-acquisition/config.json"
-            cfg.parent.mkdir(parents=True)
-            cfg.write_text(json.dumps(_ex_config(), ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
+            # 1・2. レシピと機体の設定と、 同じ変更で宣言の下書き（状態は確認待ちのまま）
+            _fill_recipes(tgt)
+            self.assertFalse((tgt / "config/image-acquisition/config.json").exists())
             prof.write_text(_fill_profile(prof.read_text(encoding="utf-8")),
                             encoding="utf-8")
             draft = yaml.safe_load(prof.read_text(encoding="utf-8"))
@@ -1162,6 +1265,8 @@ class TheIsolationPathTest(unittest.TestCase):
             self.assertEqual(code, 0, out)
             self.assertIn("結果: PASS", out)
             self.assertNotIn("NG [", out)
+            self.assertIn("新しい形（recipes/case.yaml がある）として", out)
+            self.assertIn("（recipes/・machines/）のファイル 3", out)
             self.assertIn("今の決まりでは読めません", out)
             self.assertIn("PROFILE EXPANSION DETECTED", out)
             self.assertNotIn("比べていません", out)

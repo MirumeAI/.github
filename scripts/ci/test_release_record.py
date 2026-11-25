@@ -317,9 +317,12 @@ class VersionsYamlTest(unittest.TestCase):
 
     A40, B40 = "a" * 40, "b" * 40
 
-    def _run(self, text: str, env_extra: "dict | None" = None) -> tuple:
+    def _run(self, text: str, env_extra: "dict | None" = None, extra: "dict | None" = None) -> tuple:
         with tempfile.TemporaryDirectory() as td:
             (Path(td) / "versions.yaml").write_text(text, encoding="utf-8")
+            for rel, body in (extra or {}).items():
+                (Path(td) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(td) / rel).write_text(body, encoding="utf-8")
             env = dict(os.environ, CI_ROOT=td, **(env_extra or {}))
             for k in ("CORE_ROOT_IMAGE_ACQUISITION_PDM", "CORE_ROOT_PDM"):
                 if not (env_extra and k in env_extra):
@@ -334,10 +337,13 @@ class VersionsYamlTest(unittest.TestCase):
         self.assertIn("versions.yaml: 未選択", out)
 
     def test_the_template_passes(self) -> None:
-        tpl = (HERE.parents[1] / "templates" / "customer-project" / "versions.yaml")
-        code, out = self._run(tpl.read_text(encoding="utf-8"))
-        self.assertEqual(code, 0, out)
-        self.assertIn("versions.yaml: 未選択", out)
+        """雛形の versions.yaml は、 雛形のレシピ（新しい形の印。 #216）と一緒でも通る。"""
+        tpl = HERE.parents[1] / "templates" / "customer-project"
+        for extra in (None, {"recipes/case.yaml": (tpl / "recipes" / "case.yaml").read_text(encoding="utf-8")}):
+            with self.subTest(new_form=bool(extra)):
+                code, out = self._run((tpl / "versions.yaml").read_text(encoding="utf-8"), extra=extra)
+                self.assertEqual(code, 0, out)
+                self.assertIn("versions.yaml: 未選択", out)
 
     def test_a_selection_passes_the_form_and_says_what_it_did_not_check(self) -> None:
         code, out = self._run(_versions(("v1.2.3", self.A40), ("v0.4.0", self.B40)))
@@ -795,6 +801,27 @@ class NewFormProductAndDriftTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_the_first_pull_request_from_the_template_passes(self) -> None:
+        """雛形から作った Repository の最初の Pull Request（レシピがあり、 記録の無い新しい形。 #216）は、
+        基準の commit と比べても通る。"""
+        tpl = HERE.parents[1] / "templates" / "customer-project"
+        with tempfile.TemporaryDirectory() as td:
+            self.root = Path(td)
+            self.git("init", "-q")
+            (self.root / "README.md").write_text("x\n", encoding="utf-8")
+            self.git("add", "-A")
+            self.git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+            base = self.git("rev-parse", "HEAD")
+            for rel in ("versions.yaml", "recipes/case.yaml", "release/README.md", "deployment/README.md",
+                        "validation/README.md"):
+                (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (self.root / rel).write_bytes((tpl / rel).read_bytes())
+            self.git("add", "-A")
+            self.git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "first")
+            code, out = self.run_check("--base-ref", base)
+        self.assertEqual(code, 0, out)
+        self.assertIn("OK: 記録は形式どおりです", out)
 
     def write(self, releases, deployments) -> None:
         for folder in ("release", "deployment"):

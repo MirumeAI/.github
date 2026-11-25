@@ -19,3 +19,22 @@ jobs:
     # （README の「顧客の間の混入の検査を始める」）。
     with:
       run-isolation-check: false
+
+  # 製品のパッケージの試験（Core を使わない物。 tests/product/）。 この Repository だけの試験なので、
+  # 共通の再利用 workflow には入れない。 守りの検査（checks）の後に流す（手元の正本の検査は、 待ち合わせの
+  # 無い job を同時に流すので、 先に流すと PR のコードが守りの検査と同じ時に動く）。
+  # この job を変えるのは、 守りの検査の workflow を変えること（人の判断が要る）。
+  product:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 機体と同じ 3.10 で見る（字として書く。 数として読むと 3.1 になる）
+          python-version: >-
+            3.10
+      # 製品のパッケージの依存（PyYAML。 入れる先の venv の lock の版）
+      - run: python -m pip install --quiet pyyaml==6.0.3
+      - run: python -m unittest discover -s tests/product -v

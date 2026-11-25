@@ -6,6 +6,7 @@
 # 移行の経緯はここに書かない（deployment/・validation/・Issue）。
 #
 # - 使う Core を決めるまでは、 tag と commit の両方を null（未選択）にする
+# - 選んだら、 同じ Pull Request で src/case_package/cores.py の組める版の範囲も書く（選んだ版を含める）
 # - pdm の行は、 撮像側のタグの commit にある pdm.lock.json と同じにする（組合せの
 #   正本は撮像側の lock で、 ここは写し）。 撮像側を選ばずに pdm だけを選ばない
 # - 開発中に Core の commit を固定するときは、 このファイルでなく versions.dev.yaml

@@ -1,0 +1,11 @@
+# この案件のレシピ（案件に 1 つの値）。 形の正本は MirumeAI/development-docs の
+# 03_customer_development/recipes_and_machines.md（版 1）。
+#
+# - 値は人が案件の資料から書く。 機体の値（カメラの個体・通信の相手・置き場の道）は machines/ に書く
+# - このファイルがあるので、 混入の検査と記録の検査は、 この Repository を新しい形として照らす。 消さない
+schema_version: 1
+case:
+  name: "<案件の名前>"      # Core が案件を引く鍵。 変えない（customer-profile.yaml の project.profiles にも載せる）
+  title:                   # 画面に出す名前
+  description:
+profile: {}                # 撮像側の案件の設定の形から、 機体の値を除いた物

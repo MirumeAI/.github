@@ -1,6 +1,6 @@
 # acceptance/ — 受入の記録
 
-顧客・現場が受け入れた事実を残します。
+顧客・現場が受け入れた事実を置きます（System Release の記録がここを指す）。
 
 - FAT / SAT の記録
 - 受入条件に対する結果
@@ -9,5 +9,3 @@
 ## 置かないもの
 
 - 技術検証の詳細（`validation/` に置く）
-
-System Release の manifest がここを参照します。

@@ -1,0 +1,4 @@
+# 雛形（templates/customer-project/）の製品のパッケージの名前の印。 Repository を作るときに、 案件の Python の
+# 名前へ置き換える（scripts/ci/new_customer_repo.py の PACKAGE_PLACEHOLDER）。 作った Repository では src/ の
+# 下にあるので、 この許しは要らない
+case_package

@@ -5,9 +5,12 @@
 /PDM/
 /Image-Acquisition-PDM/
 
-# 生成物
+# 生成物（製品のパッケージを組んだときの物も）
 __pycache__/
 *.py[cod]
+*.egg-info/
+/build/
+/dist/
 
 # 顧客のライセンス・認証情報・秘密（置かない。 うっかりの add を止める）
 *.lic

@@ -3,52 +3,17 @@
 どの機体に、いつ、何を入れたか（棚卸しでは、何が入っていたか）を、1 回の出来事で 1 ファイル、足すだけで記録します（書き換えない）。
 
 ```
-deployment/<機体の記号>-<通し番号 4 桁>.yaml     例: M01-0001.yaml・M01-0002.yaml
+deployment/<機体の記号>-<通し番号 4 桁>.yaml     例: M01-0001.yaml
 ```
 
-「版が存在する」ことと「この機体へ配置した」ことは別の事実です。混ぜると、次のときに答えられません。
-
-- 1号機と2号機で判定が違う。どちらに何が入っているのか
-- 不良が流出した。そのとき動いていた Model と閾値は何か
-- 戻したい。**どの状態へ戻せば動くと分かっているのか**
-
-**今の状態は、機体ごとに通し番号が一番大きい記録です。** ファイルの更新日時では決めません。
-
-```yaml
-schema_version: 2
-record_id: M01-0002        # <機体の記号>-<その機体の通し番号 4 桁>。ファイル名と同じ
-machine: M01               # 中立の機体の記号（IP・製造番号・装置名を書かない。実物との対応は deploy/README.md）
-sequence: 2                # 機体ごとに 1 から。抜けも重なりも無し
-supersedes: M01-0001       # その機体の前の記録（最初は null）
-status: ACTIVE             # LEGACY（棚卸しで見た状態）/ ACTIVE（配置した状態）/ RETIRED（使わなくなった）
-recorded_by: { role: <役割>, account: <GitHub のアカウント> }   # 人
-
-# ACTIVE のとき
-deployed_release: PJxxx-R2026.10.1   # release/ にある System Release
-rollback_to: M01-0001                # 戻せる先（同じ機体の前の記録。LEGACY の状態でもよい）
-config_commit: <40 桁>               # 配った案件の設定の commit
-artifacts:
-  - { name: pdm, version: 0.4.0, sha256: <64 桁> }
-model_sha256: <64 桁>
-rolled_back_from: null               # 戻したときは、戻す前の記録
-recipe_drift:                        # 新しい形で、製品のパッケージのある System Release を配った記録だけ
-  compared_commit: <40 桁>           # 作業ルートの製品の設定と比べた、レシピの commit
-  products: {}                       # ずれた製品ごとの、ずれた鍵の名前（値は書かない）。例 <製品の名前>: [judge.threshold]
-
-# LEGACY のとき（棚卸しで、人が読むだけで確かめた状態）
-# observed:
-#   working_copies: [ { repository: <Core>, commit: <40 桁>, modified: false } ]
-#   packages: [ { name: <名前>, version: <版>, sha256: <64 桁> } ]
-#   config_sha256: <64 桁>
-#   model_sha256: <64 桁>
-```
-
-- 確かめた結果（smoke test・受入）はここに書きません。`validation/` の検証の記録に書き、検証の記録がこの記録の ID を指します
-- 戻せる先（`rollback_to`）は**必ず書きます**。書けないなら、戻せる状態になっていないということです
-- 新しい形（根に `recipes/case.yaml` がある）で、製品のパッケージのある System Release を配った記録には、組み立て器が見たずれ（`recipe_drift`）と、その wheel（`artifacts`）を書きます。ずれの無いときも `products: {}` と書きます
-- **ずれの確かめ**: 配置を変えずに、機体の作業ルートの値を次に出すレシピの commit と比べたときも、1 回の出来事として記録を足します。`deployed_release`・`rollback_to`・`config_commit`・`artifacts`・`model_sha256` は前の記録と同じにし、`recipe_drift` に比べた結果を書きます。次の System Release は、配った機体のすべてで、その System Release のレシピの commit と比べてずれ無しになってから作ります。確かめるのは人です（記録の Pull Request に、確かめた人の Human Verification が要ります）
-- 新しい形では、記録の検査が、前からある記録の書き換えと削除を断ります（足すだけ）。`recipe_drift` に書く製品は、`recipes/products/` にある製品だけです。製品のパッケージのある System Release を配った記録は schema 2 で書き、その System Release を配って戻した記録の `rolled_back_from` は前の記録にし、戻す前と違う System Release を配ります
+- 今の状態は、機体ごとに通し番号が一番大きい記録です（ファイルの更新日時では決めない）
+- 戻せる先（`rollback_to`）を必ず書きます
 - 記録の Pull Request には、配置した人・確かめた人の Human Verification が要ります
-- 前の形（`schema_version: 1`。`<site>-<line>-<日付>.yaml`）の記録も、確かめる道具は読みます
+
+## 置かないもの
+
+- 確かめた結果（`validation/` の検証の記録に書く）
+- IP・製造番号・装置名（機体の記号で書く。対応は `deploy/README.md`）
+- `dev/` と `MIRUME_DEV_CONFIG` を指す書き方
 
 形式の正本: `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`。確かめる道具: `MirumeAI/.github` の `scripts/ci/release_record_check.py`

@@ -1,113 +1,62 @@
 # <案件の題名>
 
-この Repository は **この案件だけの差分**を持ちます。Core の Source は持ちません。
+この Repository は **この案件だけの差分**（設定・記録・製品のパッケージ）を持ちます。Core の Source は持ちません。
 
 ```
 PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査システム
 ```
 
-## 使う Core の版
-
-`versions.yaml` が出荷に使う Core を **commit SHA で固定**します。浮動 Branch 名や `latest` で本番構成を管理しません。どの版で動いているかが分からないと、不具合の再現も切り戻しもできません。
-
-開発中に Core の直しを試すときは、根の `versions.dev.yaml`（任意）に Core ごとの 40 桁の commit を書けます。**開発の版は機体に配置しません**（System Release が参照するのは `versions.yaml` だけです）。
-
-## Core の置き方
-
-- **開発**: Core の clone は、この Repository の下でなく隣に置きます（同じ親のフォルダに `PDM/`・`Image-Acquisition-PDM/`・この Repository を並べる）。下に置くと、この Repository のコードが Core の内部を誤って参照しえます
-- **今ある機体（LEGACY）**: この案件に今ある機体がある場合だけ、その機体の上では、この Repository の根の `PDM/`・`Image-Acquisition-PDM/` に Core の作業コピーがある形で動いています（`.gitignore` 済み。今ある機体が無い案件でも、下に clone したときの守りとして残します）。新しい配置はこの形に頼りません
-- **新しい形**（下の「目標の形と移る間」）: 製品のパッケージが両 Core の wheel と組み合わせ、clone の道に頼りません。Core の名前は `pyproject.toml` に書かず、組める Core の版の範囲を製品のパッケージが持って、入れるときと起動の前に照らします。入れ方の正本は `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「製品のパッケージの入れ方」です
+決まりの正本は `MirumeAI/development-docs` の `03_customer_development/` です（並びは `customer_repository_structure.md`、レシピと機体の設定は `recipes_and_machines.md`）。
 
 ## 構造
 
-表の「要る段」は、そのフォルダに初めて物を置く案件の段です（`MirumeAI/development-docs#392` の段〔作り直しの順〕とは別）。前の段で置いた物は、後の段でも使い続けます。
-
-- **PoC**: 案件を受けるかを決め、実現性を確かめる（本番のコードは作らない）
-- **開発**: 案件の設定と値を作り、開発の機体で動かす
-- **出荷**: System Release を作り、据え付けた機体へ配置して確かめ、顧客・現場が受け入れる
-
-| 場所 | 何を置くか | 要る段 |
-|---|---|---|
-| `requirements/` | 顧客要求と検査仕様、受入条件 | PoC から |
-| `quick-diagnosis/` | 案件を受けるかの初期確認と判断 | PoC（受けるかを決めるとき） |
-| `poc/` | 実現性の検証（**本番のコードは置かない**） | PoC |
-| `config/` | Core へ配る設定 | 機体へ配るとき（配るときの記録と決まりは `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`）。開発の機体だけで動かす間は `dev/` に置く |
-| `manifests/` | 移る間の物で、**今は置く物が無い**（Dataset とモデルの ID・ファイルの数・大きさ・manifest の sha256 は `release/` の System Release の記録に書く。`manifests/README.md`） | なし |
-| `evaluation/` | 評価の結果と、この案件で値を選んだ記録 | 開発から（PoC で値を選んだときは PoC から） |
-| `validation/` | 仕様に対する技術検証 | 出荷（System Release が指す。配置の後の確かめも） |
-| `acceptance/` | 顧客・現場が受け入れた記録 | 出荷（System Release が指す） |
-| `release/` | System Release の manifest | 出荷 |
-| `deployment/` | 配置した事実の記録 | 出荷（機体へ配置したとき） |
-| `deploy/` | この機体固有の起動・配置設定 | 機体へ配るとき（`config/` と同じ） |
-| `dev/` | 開発の機体だけの設定（機体へ配らない。`dev/config/image-acquisition/<案件の名前>.json` を `MIRUME_DEV_CONFIG` に渡す） | 開発の機体で動かすとき（PoC で動かすなら PoC から） |
-| `app/` | 製品アプリ（起動・製品画面・API・Adapter。Core の公開の面ができた範囲から） | 開発 |
-| `recipes/` | 製品・検査条件（新しい形では、案件の値の正本） | 開発から（前の形では撮像の条件の記録 `recipes/capture/`） |
-| `machines/` | 機体の設定（新しい形。移るまで置く物は無い） | なし（新しい形に移ってから） |
-| `tests/` | この案件の組合せの検証 | 開発（最初の試験を置ける時は `tests/README.md`） |
-| `.claude/`・`scripts/ci/` | Claude Code 一式（hook・command）と手元で流す検査。**正本（`MirumeAI/.github`）の写し**で、作るときに道具が写した。この Repository では直さない（正本との照合で、ずれると検査が止まる。直すときは正本を直して同期する）。`.claude/settings.json` も直さない（正本に `*.lic` の拒否を足して作った物で、照合の対象の外なので、ずれても検査では止まらない。変えるときは正本の `MirumeAI/.github` の Pull Request から） | 作ったときからある |
-| `.github/workflows/` | Pull Request の検査。正本の再利用 workflow を呼ぶだけ（検査の中身は正本にある） | 作ったときからある |
-
-各フォルダの README に「置くもの / 置かないもの」が書いてあります。
-
-## 目標の形と移る間
-
-この雛形は**前の形**です。案件の値は `config/` に置き、Core 側の `setup_customer.sh` で機体へ配ります。
-
-目標の形は、この Repository を、案件を組み立てる 1 つの製品のパッケージにする形です。両 Core の wheel と組み合わせ（Core の名前は `pyproject.toml` に書かず、組める版の範囲を自分で持って照らす）、起動の命令 1 つで組み立てます。案件の値の正本は `recipes/`、機体の設定は `machines/` です（正本は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md`。`MirumeAI/development-docs#392`）。
-
-新しい形への移り方は、最初の案件で作って確かめてから、この雛形に入れます（#392 の段 4 と段 6）。それまでは、新しい形の置き場を作りません。
-
-- 作らない物: `recipes/case.yaml`・`recipes/products/`・`machines/` の中のファイル（説明の `.md` を除く）・根の `pyproject.toml`・`src/`
-- 理由: `recipes/case.yaml` があると、混入の検査と記録の検査が新しい形として照らします。組み立て器が無いので、起動もできません。`case.yaml` が無いのに `machines/`・`recipes/products/` にファイルがあると、混入の検査が止まります
-
-| 前の形（今） | 新しい形の行き先 |
+| 場所 | 置くもの |
 |---|---|
-| `config/` | `recipes/case.yaml` と `machines/<機体の記号>.yaml`（鍵ごとに分ける）。面ごとに判定する流れの設定（`config/pdm/` など）と門番の設定（`pdm_guard_policy.json`）は、版 1 では行き先が無く、今の置き場のまま（`MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md` の「まだ決めないこと」） |
-| `dev/` | Git の外の開発の機体の設定（Git には見本の `machines/dev.example.yaml` だけ） |
-| `app/` | `src/<パッケージ>/`（製品のパッケージ） |
-| `recipes/capture/` | `recipes/products/<製品の名前>.yaml` |
-| 差し込む部品 | `src/<パッケージ>/` の部品を、根の `pyproject.toml` の entry points で Core の差し込みの群に登録する（群ができてから） |
+| `customer-profile.yaml` | 混入の検査の宣言（下の「顧客の間の混入の検査を始める」） |
+| `versions.yaml` | 出荷に使う Core の組合せ（Product Release のタグと commit）。開発中の固定は任意の `versions.dev.yaml`（機体に配らない） |
+| `pyproject.toml`・`src/case_package/` | 製品のパッケージ（命令 `doctor` と、組める Core の版の範囲の表 `cores.py`） |
+| `tests/product/` | Core を使わない試験（検査の `product` の job が流す） |
+| `config/` | 案件の値で、機体へ配る設定（撮像側の `setup_customer.sh` で配る） |
+| `dev/` | 開発の機体だけの設定（機体へ配らない） |
+| `recipes/`・`machines/` | 目標の形のレシピと機体の設定の置き場。組み立て器と一緒に決めるまで、説明のほかは置かない |
+| `deploy/` | 起動・配置の設定と、機体の記号の対応表 |
+| `evaluation/` | 評価の結果と、値を選んだ記録 |
+| `release/`・`deployment/`・`validation/` | System Release・配置・検証の記録 |
+| `requirements/`・`acceptance/` | 顧客要求と検査仕様・受入の記録 |
+| `.claude/`・`scripts/ci/`・`.github/workflows/` | 正本（`MirumeAI/.github`）の写しと、その再利用 workflow を呼ぶ検査。ここでは直さない |
 
-`requirements/`・`quick-diagnosis/`・`poc/`・`acceptance/`・`manifests/` は、目標の並びにまだ書かれていません。行き先は `MirumeAI/development-docs#422` で決めます。それまでは上の「構造」の表のとおり使います（`manifests/` は置く物がありません）。
+各フォルダの README に「置くもの・置かないもの」があります。
 
-この Repository では、設定と記録に加えて、この案件の開発もします（値を選んだ記録・回帰の試験・製品アプリ。製品アプリは Core の公開の面ができた範囲から、公開の面だけを使います）。公開の面に無いものが要るときは Core の内部を使わず、この Repository に改善依頼を書きます。共通プラットフォームの側が分類し、Core に足すものは Core の Issue にします（`platform_evolution.md` の 4 章）。見つかった汎用の機能は Core へ還元します（`MirumeAI/development-docs` の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Coreへの還元」と `platform_evolution.md`）。
+## Core の置き方
+
+- 開発では、Core の clone をこの Repository の下でなく隣に置きます（根の `PDM/`・`Image-Acquisition-PDM/` は `.gitignore` 済み）
+- 製品のパッケージは Core の wheel と組みます。Core の名前は `pyproject.toml` に書かず、組める版の範囲を `src/case_package/cores.py` に持ちます。入れ方の正本は `recipes_and_machines.md` の「製品のパッケージの入れ方」です
 
 ## 置かないもの
 
-- Core の Source（`PDM` と `Image-Acquisition-PDM` の中身）
-- 顧客から提供された画像・Dataset・Model Weight の**本体**
-- データの manifest そのものと、データの置き場の実際の道（Git には ID・ファイルの数・大きさ・manifest の sha256 だけを書く。`MirumeAI/development-docs` の `03_customer_development/data_and_models.md`）
-- ライセンスファイル（`*.lic`）、Credential、パスワード
+- Core の Source とその写し
+- 顧客の画像・Dataset・Model Weight の本体、データの manifest そのもの、データの置き場の実際の道
+- ライセンスファイル（`*.lic`）・Credential・パスワード
 
-`config/` には PLC の接続先など内部ネットワークの情報が入ります。**この Repository は Private にし、Public な場所へ内容を転記しないでください。**
+この Repository は Private にし、内容を Public な場所へ写しません。
 
 ## 始めるときにやること
 
-この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました。Team の権限、Merge の設定、Dependabot Alerts、分類（Custom Properties の `group` は `customer`。稼働しても変えない）は、作ったときに設定済みです。作り方は `MirumeAI/development-docs` の `03_customer_development/customer_repository_structure.md` にあります。
+この Repository は `MirumeAI/.github` の `scripts/ci/new_customer_repo.py` で作りました（作り方は `customer_repository_structure.md`）。
 
-1. `versions.yaml` は未選択（`tag` と `commit` が `null`）で始まる。使う Core を決めたら、Product Release のタグと、タグが指す commit を書く（`pdm` の行は撮像側のタグの `pdm.lock.json` と同じにする）
-2. 機体（顧客に見せる機体・据え付けた機体）へ配るときは、`config/` に案件の設定を入れ、Core 側の `setup_customer.sh` で配る。開発の機体だけで動かす間は、`dev/config/image-acquisition/<案件の名前>.json` に置く（`dev/README.md`）。どちらも、同じ Pull Request で `customer-profile.yaml` も書く（下の「顧客の間の混入の検査を始める」）
+1. 使う Core を決めたら、`versions.yaml` に Product Release のタグと commit を書き、同じ Pull Request で `src/case_package/cores.py` の範囲を書く
+2. 製品のパッケージを Web と判定の venv に依存を入れない形で入れ、`<案件の名前> doctor`（判定の venv は `--judge-venv`）で確かめる
+3. 下の「顧客の間の混入の検査を始める」
 
 ### 顧客の間の混入の検査を始める
 
-根の `customer-profile.yaml` は、この案件にあってよい識別子の宣言です。作ったときは**値の無い初期形**で、状態は人の確認待ちです。初期形のままでは検査が照らせずに止まり、合格になりません。そのため、混入の照合（`.github/workflows/basic-checks.yml` の `run-isolation-check`）は `false` で始まります。運用の決まりの正本は `MirumeAI/development-docs` の `03_customer_development/customer_isolation_check.md` です。
+`customer-profile.yaml` は、この案件にあってよい識別子の宣言です。作ったときは値の無い初期形で、検査は照らせずに止まるので、混入の照合（`.github/workflows/basic-checks.yml` の `run-isolation-check`）は `false` で始まります。
 
-1. `config/` に案件の設定を書く（`config/image-acquisition/config.json` が無いと、検査は照らせない）。据え付けの計画が無く、開発の機体だけの設定 `dev/config/image-acquisition/<案件の名前>.json` だけを置く案件は、`config/` に説明のほかを置かなければ、検査がその設定を主の設定の代わりに照らす（`dev/README.md`）
-2. 同じ Pull Request で `customer-profile.yaml` の下書きを書く。書き方は `MirumeAI/.github` の README「顧客の間の混入の検査」。状態の行は確認待ちのまま。今の設定にあることは、この案件の値である根拠にならない。値を Issue・Pull Request の本文・検査の記録に書かない
-3. 報告だけの形で流す（PyYAML が要る。`MirumeAI/.github` の clone は main の最新にしてから流す）。終了コードではなく、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して黙らせない。`参考` の行の数（値なし）はこの Repository の Issue に記録し、`注意` の行は人が読む
+1. `config/` に案件の設定を書き、同じ Pull Request で `customer-profile.yaml` の下書きを書く（状態の行は確認待ちのまま。値を Issue・Pull Request の本文・検査の記録に書かない）。主の設定 `config/image-acquisition/config.json` が無いと照らせません（開発の機体の設定だけを置く案件の扱いは、正本の「照らす範囲と前提」）
+2. 報告だけの形で流す: `python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only`。終了コードは 0 なので、最後の行と `NG` の行を見る。`NG` は分けて直し、確かめずに宣言へ値を足して消さない
+3. 作成者と別の人が、宣言の値を案件の資料と照らして確かめ、自分で Pull Request に記録する（Agent は確かめた扱いにしない）
+4. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す。値は変えず、YAML として読んだ値が確かめた版と同じことを Pull Request に書く
+5. `--report-only` を付けずに流して `結果: PASS`（`NG` と `ERROR` の行が無い）になったら、`run-isolation-check` を `true` にする
+6. その Pull Request の Required Verification で、混入の照合の段が動いて `結果: PASS` になることを確かめる
 
-   ```bash
-   python <MirumeAI/.github の clone>/scripts/ci/customer_isolation_check.py --root . --report-only
-   ```
-
-4. 作成者と別の人が、宣言の値を案件の資料と 1 つずつ照らして確かめ、自分で Pull Request に記録する（記録の形は上の正本の「人の確認」。Agent は確かめた扱いにしない）
-5. 状態の行を `状態: VERIFIED（確かめた Pull Request の番号）` に直す（値は変えない。YAML として読んだ値が確かめた版と同じことを Pull Request に書く）
-6. `--report-only` を付けずに流して `結果: PASS`（`NG` と `ERROR` の行が無い）になったら、`run-isolation-check` を `true` にする
-7. Pull Request の Required Verification（`MirumeAI/.github` の `scripts/ci/run_required_verification.py` を手元で流す）で、混入の照合の段が動いて `結果: PASS` になることを確かめ、Merge の門に従って merge する
-
-初めて値を書く Pull Request では、基準（初期形）が今の決まりでは読めないので、検査の宣言の増減は空の宣言と比べて、すべてを増えたものとして数え、`PROFILE EXPANSION DETECTED` を出します。宣言を変えた Pull Request は、知らせが出ても出なくても、人が確かめるまで merge しません。
-
-## 参照
-
-- 開発ルールの正本: `MirumeAI/development-docs`
-- ReleaseとDeploymentの記録の形: `MirumeAI/development-docs` の `03_customer_development/release_and_deployment.md`
+宣言を変えた Pull Request は、人が値を確かめるまで merge しません。正本は `customer_isolation_check.md` の「有効にする順」と、`MirumeAI/.github` の README「顧客の間の混入の検査」です。

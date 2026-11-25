@@ -42,8 +42,8 @@ Required Verification（正本の検査を手元で流す）が PASS し、 作�
 この script の中で呼ぶ `gh` は見えないので、 ここでも止める。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
-案件の題名と案件の名前は、 実行時に受け取る Repository の名前から作る（題名は `--title` で
-変えられる。 案件の名前は変えない）。
+案件の題名・案件の名前・製品のパッケージの Python の名前は、 実行時に受け取る Repository の
+名前から作る（題名は `--title` で変えられる。 ほかの 2 つは変えない）。
 """
 from __future__ import annotations
 
@@ -77,6 +77,12 @@ PLACEHOLDER = "<案件の名前>"
 
 #: 雛形の中で、 案件の題名（README の見出しなど、 人が読む名前）に置き換える文字列。
 TITLE_PLACEHOLDER = "<案件の題名>"
+
+#: 雛形の中で、 製品のパッケージの Python の名前（案件の名前の `-` を `_` にした物）に置き換える文字列。
+#: 中身と、 道 `src/<この文字列>/` を置き換える。 雛形のままでも Python として読める名前にする
+#: （正本の検査が雛形のコードの構文を見るため）。
+PACKAGE_PLACEHOLDER = "case_package"
+PACKAGE_DIR = f"src/{PACKAGE_PLACEHOLDER}/"
 
 #: `customer-<会社>-<部品>`。 英小文字・数字・ハイフンだけ。
 NAME_RE = re.compile(r"^customer-[a-z0-9]+(?:-[a-z0-9]+)+$")
@@ -127,13 +133,15 @@ SETTINGS_EXTRA_DENY = ("Read(**/*.lic)", "Edit(**/*.lic)")
 #: 呼び出し側の workflow と、 顧客の間の混入の検査の宣言（どちらも雛形にある）。
 WORKFLOW = ".github/workflows/basic-checks.yml"
 PROFILE = "customer-profile.yaml"
+#: 製品のパッケージの宣言（雛形にある）。
+PYPROJECT = "pyproject.toml"
 #: 宣言の初期形の状態の行。 **人の確認の前に VERIFIED で作らない。**
 UNVERIFIED = "# 状態: REQUIRES HUMAN VERIFICATION"
 
 #: main に無ければならないもの（`--check` が確かめる）。 hook・設定・CI が
 #: 無いと、 main を守る壁が無いまま始まる。 宣言が無いと、 混入の検査を
-#: 始める手順に入れない。
-MUST_HAVE = ("CLAUDE.md", SETTINGS, WORKFLOW, PROFILE, *FROM_CANONICAL)
+#: 始める手順に入れない。 製品のパッケージの宣言が無いと、 その試験（workflow の product の job）が流れない。
+MUST_HAVE = ("CLAUDE.md", SETTINGS, WORKFLOW, PROFILE, PYPROJECT, *FROM_CANONICAL)
 
 #: Team と権限（As-Is Inventory の D12）。 既存の顧客案件と同じ。
 TEAMS = (("developers", "push"), ("maintainers", "admin"))
@@ -293,6 +301,11 @@ class Plan:
         return case_name(self.name)
 
     @property
+    def package(self) -> str:
+        """製品のパッケージの Python の名前。"""
+        return python_name(self.name)
+
+    @property
     def description(self) -> str:
         # 雛形の今の置き場に合わせる（`plugins/` は外した。 #181）
         return f"{self.title} 向けの顧客固有の設定・記録・開発"
@@ -320,6 +333,11 @@ def case_name(name: str) -> str:
     英小文字・数字・ハイフンだけで、 Core の案件の名前に使える。
     """
     return name[len("customer-"):]
+
+
+def python_name(name: str) -> str:
+    """`customer-example-part` → `example_part`（製品のパッケージの Python の名前。 配布物と命令の名前は案件の名前）。"""
+    return case_name(name).replace("-", "_")
 
 
 def customer_settings(canonical: bytes) -> bytes:
@@ -395,13 +413,16 @@ def check_isolation_defaults(tree: dict) -> None:
                               "有効にして始めません（run-isolation-check は false。 人の確認の後に true にする）")
 
 
-def build_tree(src: Source, title: str, case: str) -> tuple:
+def build_tree(src: Source, title: str, case: str, package: str) -> tuple:
     """最初の中身。 `({パス: (mode, 中身)}, {パス: 出どころ})`。"""
     tree, origin = {}, {}
     for path, (mode, data) in src.files(TEMPLATE).items():
         rel = path[len(TEMPLATE) + 1:]
+        if rel.startswith(PACKAGE_DIR):
+            rel = f"src/{package}/" + rel[len(PACKAGE_DIR):]
         data = data.replace(TITLE_PLACEHOLDER.encode("utf-8"), title.encode("utf-8"))
         data = data.replace(PLACEHOLDER.encode("utf-8"), case.encode("utf-8"))
+        data = data.replace(PACKAGE_PLACEHOLDER.encode("utf-8"), package.encode("utf-8"))
         tree[rel], origin[rel] = (mode, data), "雛形"
     canon = src.files(*FROM_CANONICAL, SETTINGS)
     for rel in (*FROM_CANONICAL, SETTINGS):
@@ -414,7 +435,7 @@ def build_tree(src: Source, title: str, case: str) -> tuple:
         tree[rel], origin[rel] = canon[rel], "正本"
     tree[SETTINGS] = ("100644", customer_settings(canon[SETTINGS][1]))
     origin[SETTINGS] = "作る"
-    for rel in ("README.md", "CLAUDE.md"):
+    for rel in ("README.md", "CLAUDE.md", PYPROJECT, f"src/{package}/__init__.py"):
         if rel not in tree:
             raise SourceError(f"雛形に {rel} がありません")
     check_isolation_defaults(tree)
@@ -433,7 +454,11 @@ def make_plan(name: str, title: "str | None", properties: dict,
     title = (title if title is not None else default_title(name)).strip()
     if not title or "\n" in title or "<" in title or ">" in title:
         raise ValueError("案件の題名は 1 行で、 < と > を含めないでください")
-    tree, origin = build_tree(src, title, case_name(name))
+    package = python_name(name)
+    if not package.isidentifier():
+        raise ValueError(f"製品のパッケージの Python の名前 {package!r} は英字で始めてください"
+                         "（Repository の名前の customer- の次を英字で始める）")
+    tree, origin = build_tree(src, title, case_name(name), package)
     return Plan(name, title, dict(properties), src.commit(), tree, origin)
 
 
@@ -540,7 +565,7 @@ def show_plan(plan: Plan) -> None:
           " main へ直接入れない）")
     print()
     print(f"最初の中身（{len(plan.tree)} ファイル）")
-    for kind, note in (("雛形", f"{TEMPLATE}/ から。 案件の題名と名前を入れる"),
+    for kind, note in (("雛形", f"{TEMPLATE}/ から。 案件の題名と名前、 Python の名前を入れる"),
                        ("正本", "この Repository から写す。 照合の対象"),
                        ("作る", f"正本に {' と '.join(SETTINGS_EXTRA_DENY)}"
                                 " の拒否を足す")):
@@ -616,7 +641,7 @@ def pr_body(plan: Plan) -> str:
 
 `MirumeAI/.github` の `{plan.commit[:12]}` から、`scripts/ci/new_customer_repo.py` で作った。
 
-- 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の題名は「{plan.title}」、案件の名前（開発の設定のファイルの名前・Core が案件を引く鍵）は `{plan.case}`
+- 雛形（`{TEMPLATE}/`）{plan.count("雛形")} ファイル。案件の題名は「{plan.title}」、案件の名前（開発の設定のファイルの名前・Core が案件を引く鍵）は `{plan.case}`、製品のパッケージの Python の名前は `{plan.package}`（`src/{plan.package}/`）
 - Claude Code 一式と、手元で実行する検査 {plan.count("正本")} ファイル。正本から写した（照合の対象なので、ずれると正本の検査が止まる）
 - `{SETTINGS}`。正本に `*.lic` の拒否を足して作った
 - `{PROFILE}`（顧客の間の混入の検査の宣言）は値の無い初期形で、状態は人の確認待ち。混入の照合はまだ動かない（`run-isolation-check: false`）。始め方は `README.md` の「顧客の間の混入の検査を始める」
@@ -638,7 +663,7 @@ def pr_body(plan: Plan) -> str:
 
 ## Reviewerに確認してほしい点
 
-案件の題名（「{plan.title}」）と案件の名前（`{plan.case}`）、`README.md` の「始めるときにやること」。
+案件の題名（「{plan.title}」）と案件の名前（`{plan.case}`）・Python の名前（`{plan.package}`）、`README.md` の「始めるときにやること」。
 """
 
 
@@ -835,12 +860,15 @@ def check(api: Api, plan: Plan, audit=audit_one) -> int:
              if e.get("type") == "blob"}
     missing = [p for p in MUST_HAVE if p not in paths]
     if not missing:
-        add(OK, f"Claude Code 一式と検査の workflow が {base} にある（{len(MUST_HAVE)} ファイル）")
+        add(OK, f"Claude Code 一式・検査の workflow・宣言・製品のパッケージの宣言が {base} にある（{len(MUST_HAVE)} ファイル）")
     elif "CLAUDE.md" in missing:
         add(NG, f"Claude Code 一式と検査の workflow が {base} に無い"
                 "（最初の Pull Request がまだ merge されていない）")
     else:
-        add(NG, f"{base} に無い: {', '.join(missing)}")
+        # 製品のパッケージの骨組みは #216 で雛形に入れた。 それより前の雛形で作った Repository に無いのは正しい
+        note = ("（前の雛形で作った Repository には製品のパッケージの骨組みが無いのが正しい。 足すかは人が決める）"
+                if PYPROJECT in missing else "")
+        add(NG, f"{base} に無い: {', '.join(missing)}{note}")
 
     _, now = api.get(f"/repos/{ORG}/{name}/properties/values")
     current = {p["property_name"]: p.get("value") for p in now or []}
@@ -918,6 +946,7 @@ def main(argv=None, env=None, api: "Api | None" = None,
             print(f"{ORG}/{plan.name} を作る計画です。 まだ何も変えていません。\n")
         print(f"  案件の題名  {plan.title}")
         print(f"  案件の名前  {plan.case}（開発の設定のファイルの名前・Core が案件を引く鍵）")
+        print(f"  Python の名前  {plan.package}（製品のパッケージ。 src/{plan.package}/）")
         print(f"  説明        {plan.description}")
         print(f"  中身の出どころ  {ORG}/.github の {plan.commit[:7]}\n")
         print("確かめたこと（読み取りだけ）")

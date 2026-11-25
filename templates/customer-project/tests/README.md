@@ -1,13 +1,13 @@
-# tests/ — この案件の検証
+# tests/ — この案件の試験
 
-顧客固有の差分と、Core の版の組合せを確かめるテストを置きます。
+| 置くもの | 流し方 |
+|---|---|
+| `product/` | 製品のパッケージの、Core を使わない試験。この Repository の検査（`.github/workflows/basic-checks.yml` の `product` の job）が流す。手元では `python3 -m unittest discover -s tests/product`（PyYAML が要る） |
+| Core を使う試験 | `versions.yaml` で選んだ Core の版の写しに対して流す。置くのは、その道具（`MirumeAI/.github#145`）ができてから |
 
-- 設定が読める形になっているか
-- 想定した面・製品がそろっているか
-- Core の版を上げたときに壊れないか
+`product/` には、どの案件にも当てはまる守り（Core の内部を import しない・`pyproject.toml` に Core の名前を書かない・`doctor` が動く）があります。外さずに足していきます。
 
-**Core の機能そのもののテストは Core 側に置きます。** ここは「この案件の組合せが成立するか」を見ます。
+## 置かないもの
 
-試験は、`versions.yaml` で選んだ 2 つの Core の版の写しに対して流します。最初の試験を置く Pull Request は、その道具（`MirumeAI/.github#145`）ができてから出します。
-
-新しい形では、製品のパッケージの試験もここに置きます。Core を使わない試験（組み立て器など）は、この Repository の検査で流す job を足してから置きます（最初の案件で作り、雛形には後で入れる。`MirumeAI/development-docs#392` の段 4 と段 6）。
+- Core の機能そのものの試験（Core 側に置く）
+- 顧客の画像・Dataset・Model Weight の本体

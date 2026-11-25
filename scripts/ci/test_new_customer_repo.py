@@ -15,7 +15,9 @@
     GitHub は値の無い要求を断る。 #179）
   ・照合の対象のうち、 顧客案件へ写さないものには理由がある
   ・案件の題名と案件の名前（Core が案件を引く鍵）を、 README・CLAUDE.md・開発の設定の
-    ファイルの名前の所に分けて入れる（#181）
+    ファイルの名前の所に分けて入れる（#181）。 製品のパッケージの Python の名前を、 中身と
+    道 `src/<パッケージ>/` に入れる（#216）
+  ・作った Repository の製品のパッケージの試験（workflow の `product` の job）が通る
   ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
     混入の照合は有効にしない。 初期形のままでは検査が合格にならない
   ・架空の案件で、 雛形の README の手順どおりに、 宣言の下書き → 報告だけの形 →
@@ -407,15 +409,33 @@ class NameTest(unittest.TestCase):
         self.assertEqual(PLAN.case, "example-part")
         self.assertNotIn(" ", PLAN.case)
 
+    def test_the_python_name(self) -> None:
+        """製品のパッケージの Python の名前は、 案件の名前の `-` を `_` にした物（#216）。 Python の名前にならない
+        （数字で始まる）なら作らない。"""
+        self.assertEqual(N.python_name(NAME), "example_part")
+        self.assertEqual(PLAN.package, "example_part")
+        self.assertEqual(N.python_name("customer-a1-b2-c3"), "a1_b2_c3")
+        with self.assertRaises(ValueError) as cm:
+            N.make_plan("customer-3d-part", None, N.PROPERTIES, SRC)
+        self.assertIn("'3d_part'", str(cm.exception))
+
 
 class TheFirstContentTest(unittest.TestCase):
     """最初の中身に、 手で写していたものが漏れなく入ること。"""
 
     def test_every_template_file_is_there(self) -> None:
+        """雛形のファイルはすべて入る。 製品のパッケージの道 `src/case_package/` は Python の名前にする（#216）。"""
         tpl = {p.relative_to(ROOT / N.TEMPLATE).as_posix()
-               for p in (ROOT / N.TEMPLATE).rglob("*") if p.is_file()}
-        self.assertIn("CLAUDE.md", tpl)
-        self.assertLessEqual(tpl, set(PLAN.tree))
+               for p in (ROOT / N.TEMPLATE).rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+        for rel in ("CLAUDE.md", "pyproject.toml", "src/case_package/__init__.py", "src/case_package/cli.py",
+                    "src/case_package/cores.py"):
+            self.assertIn(rel, tpl)
+        # 目標の形に無い置き場と、 案件を受ける前の記録（2026-11-26 の利用者の選択 1-a）は置かない
+        self.assertFalse({"app/README.md", "manifests/README.md", "quick-diagnosis/README.md", "poc/README.md"} & tpl)
+        pkg = "src/case_package/"
+        made = {"src/example_part/" + r[len(pkg):] if r.startswith(pkg) else r for r in tpl}
+        self.assertLessEqual(made, set(PLAN.tree))
+        self.assertEqual([p for p in PLAN.tree if "case_package" in p], [])
 
     def test_the_guard_comes_from_the_canonical(self) -> None:
         """**hook と command は正本と 1 バイトも違わない。**
@@ -442,6 +462,14 @@ class TheFirstContentTest(unittest.TestCase):
             with self.subTest(file=rel):
                 self.assertNotIn(N.PLACEHOLDER.encode("utf-8"), data)
                 self.assertNotIn(N.TITLE_PLACEHOLDER.encode("utf-8"), data)
+                self.assertNotIn(b"case_package", data)
+        # 配布物と命令の名前は案件の名前、 Python の名前は `_` の形（#216）
+        pyproject = PLAN.tree["pyproject.toml"][1].decode("utf-8")
+        for line in ('name = "example-part"\n', '"example-part" = "example_part.cli:main"\n',
+                     'version = {attr = "example_part.__version__"}\n', 'include = ["example_part*"]\n'):
+            self.assertIn(line, pyproject)
+        self.assertIn('PROG = "example-part"\n', PLAN.tree["src/example_part/cli.py"][1].decode("utf-8"))
+        self.assertIn("from example_part import cores", PLAN.tree["tests/product/test_pyproject.py"][1].decode("utf-8"))
 
     def test_file_names_get_the_case_name_not_the_title(self) -> None:
         """**ファイルの名前の所には案件の名前、 見出しには題名**（#181）。
@@ -463,6 +491,8 @@ class TheFirstContentTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("案件の題名  example part\n", out)
         self.assertIn("案件の名前  example-part（", out)
+        self.assertIn("Python の名前  example_part（", out)
+        self.assertIn("製品のパッケージの Python の名前は `example_part`（`src/example_part/`）", body)
 
     def test_claude_md_gets_the_title_and_the_case_name_apart(self) -> None:
         """**雛形の CLAUDE.md も、 題名と案件の名前を分けて入れる**（#181）。
@@ -481,6 +511,7 @@ class TheFirstContentTest(unittest.TestCase):
                 self.assertEqual(len(case), 1, case)
                 self.assertTrue(case[0].endswith("）は `example-part` です。"), case[0])
                 self.assertIn("`dev/config/image-acquisition/example-part.json`", claude)
+                self.assertIn("\n製品のパッケージの Python の名前は `example_part` です（`src/example_part/`）。\n", claude)
                 # Repository の説明も題名で作る（`plugins/` を外す前の言い方に戻さない）
                 self.assertEqual(plan.description, f"{title} 向けの顧客固有の設定・記録・開発")
         # 題名を変えたら、 既定の題名はどこにも残らない
@@ -533,6 +564,37 @@ class ItPassesTheFirstCITest(unittest.TestCase):
                         # 照合を飛ばして合格、 になっていないこと
                         self.assertIn(f"照合: {len(N.FROM_CANONICAL)} ファイル",
                                       out)
+
+    def test_the_product_job_passes(self) -> None:
+        """**製品のパッケージの試験（workflow の `product` の job）が、 作った Repository で通る**（#216）。
+
+        job は守りの検査（checks）の後に、 3.10 で、 PyYAML だけを入れて `tests/product/` を流す。 流すのは
+        workflow に書いた命令そのもの（pip は流さず、 この試験の Python の PyYAML を使う）。
+        """
+        _need_yaml(self)
+        wf = yaml.safe_load(PLAN.tree[N.WORKFLOW][1].decode("utf-8"))
+        self.assertEqual(sorted(wf["jobs"]), ["checks", "product"])
+        job = wf["jobs"]["product"]
+        self.assertEqual(job["needs"], "checks")
+        self.assertEqual([s.get("uses") for s in job["steps"] if "uses" in s],
+                         ["actions/checkout@v4", "actions/setup-python@v5"])
+        self.assertEqual(job["steps"][1]["with"], {"python-version": "3.10"})
+        runs = [s["run"] for s in job["steps"] if "run" in s]
+        self.assertEqual(runs, ["python -m pip install --quiet pyyaml==6.0.3",
+                                "python -m unittest discover -s tests/product -v"])
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td) / "target"
+            _materialize(PLAN.tree, tgt)
+            r = subprocess.run([sys.executable, "-B", *runs[1].split()[1:]], cwd=str(tgt),
+                               capture_output=True, text=True)
+            out = r.stdout + r.stderr
+            self.assertEqual(r.returncode, 0, out[-2000:])
+            ran = re.search(r"^Ran (\d+) tests? in ", out, re.M)
+            self.assertTrue(ran and int(ran.group(1)) >= 10, out[-600:])
+            self.assertNotIn("skipped", out)
+            # 雛形の守りの試験がそろっている（外すと、 どの案件にも当てはまる守りが抜ける）
+            self.assertEqual(sorted(p.name for p in (tgt / "tests/product").glob("test_*.py")),
+                             ["test_doctor.py", "test_no_core_import.py", "test_pyproject.py"])
 
 
 class EverySharedFileIsDecidedTest(unittest.TestCase):
@@ -872,14 +934,18 @@ class CheckTest(unittest.TestCase):
         self.assertIn("developers=なし", out)
 
     def test_a_missing_profile_is_found(self) -> None:
-        """宣言が main に無いと、 混入の検査を始める手順に入れない。"""
-        routes = _created()
-        routes[("GET", f"{REPO}/git/trees/main?recursive=1")] = (
-            200, {"tree": [{"path": p, "type": "blob"} for p in PLAN.tree
-                           if p != "customer-profile.yaml"]})
-        code, out, _ = self._check(routes)
-        self.assertEqual(code, 1, out)
-        self.assertIn("customer-profile.yaml", out)
+        """宣言が main に無いと、 混入の検査を始める手順に入れない。 製品のパッケージの宣言が無いときは、 前の雛形で
+        作った Repository には無いのが正しいことも添える（#216）。"""
+        for rel in ("customer-profile.yaml", "pyproject.toml"):
+            with self.subTest(rel=rel):
+                routes = _created()
+                routes[("GET", f"{REPO}/git/trees/main?recursive=1")] = (
+                    200, {"tree": [{"path": p, "type": "blob"} for p in PLAN.tree if p != rel]})
+                code, out, _ = self._check(routes)
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"main に無い: {rel}", out)
+                note = "前の雛形で作った Repository には製品のパッケージの骨組みが無いのが正しい"
+                (self.assertIn if rel == "pyproject.toml" else self.assertNotIn)(note, out)
 
     def test_a_changed_group_is_found_by_the_audit(self) -> None:
         """group を customer から変えると、 監査の所見で NG になる（#195）。"""
@@ -952,6 +1018,21 @@ class TheIsolationStartsOffTest(unittest.TestCase):
             self.assertIn("ERROR [profile-schema]", out)
             for v in EX_VALUES:
                 self.assertNotIn(v, out)
+
+    def test_no_recipe_or_machine_file_yet(self) -> None:
+        """**新しい形のレシピと機体の設定は、 まだ雛形に置かない**（#216。 2026-11-26 の利用者の選択 1-a）。 組み立て器が
+        無いまま置くと、 値を recipes/ と config/ の 2 か所に書くことになる。 case.yaml があると検査が新しい形として
+        照らし、 case.yaml が無いのに machines/・recipes/products/ にファイルがあると混入の検査が止まる。"""
+        self.assertEqual(sorted(p for p in PLAN.tree if p.startswith(("recipes/", "machines/"))),
+                         ["machines/README.md", "recipes/README.md"])
+
+    def test_the_skeleton_is_whole(self) -> None:
+        """**製品のパッケージの骨組みがそろっている**（#216）。 欠けていれば作らない。"""
+        for rel in ("pyproject.toml", "src/case_package/__init__.py"):
+            with self.subTest(rel=rel):
+                with self.assertRaises(N.SourceError) as cm:
+                    N.make_plan(NAME, None, N.PROPERTIES, _source_with({rel: None}))
+                self.assertIn(rel.replace("case_package", "example_part"), str(cm.exception))
 
     def test_the_check_is_off_in_the_workflow(self) -> None:
         """呼び出し側の workflow は、 混入の照合を false で始める。 ほかは変えない。"""

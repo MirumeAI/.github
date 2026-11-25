@@ -1,0 +1,28 @@
+# この案件の製品のパッケージ。 形の正本は MirumeAI/development-docs の
+# 03_customer_development/customer_repository_structure.md と recipes_and_machines.md の「製品のパッケージの入れ方」。
+#
+# - 依存は PyYAML だけ。 入れる先の venv の lock にある版に限る（ほかの依存を足すのは Architecture Review）
+# - Core（撮像側・PDM）の配布物の名前は、 どの節にも書かない（tests/product/test_pyproject.py が照らす）。
+#   組める Core の版の範囲は src/case_package/cores.py に持つ。 使う版の正本は versions.yaml
+# - Core の内部は import しない（tests/product/test_no_core_import.py が照らす）
+[build-system]
+# 組み立ての道具の版を固定する
+requires = ["setuptools==84.2.1", "wheel==0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "<案件の名前>"
+dynamic = ["version"]
+description = "この案件の製品のパッケージ"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.scripts]
+"<案件の名前>" = "case_package.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "case_package.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["case_package*"]

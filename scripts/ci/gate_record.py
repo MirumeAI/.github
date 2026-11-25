@@ -50,6 +50,8 @@ follow-up の分け方）は、 渡されたとおりに書く。
 Pull Request（`#<番号>`・`PR <番号>` など）と今の head（12 桁以上）だけを名指ししていなければ止まる**
 （番号だけの答え・古い head・別の Pull Request・別の Repository の判断は引かない）。
 Agent が head を別の欄に書いて、 人が名指ししたことにする道は作らない。
+道具が別の head と見分ける短い並びは、 a〜f を含む 7〜11 桁だけ。 数字だけの並びと 6 桁以下の
+並びは、 Agent が言葉を読んで確かめる。
 
 人の判断が Pull Request のコメントの形（`Human Adjudication: MERGE APPROVED` と対象の head）の
 ときも、 この道具の外（決まりの形で手で書く）。 言葉が番号（`#<番号>` など）を含まないので `gate` が止まる。

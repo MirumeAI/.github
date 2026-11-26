@@ -65,7 +65,7 @@ python3 <.github の clone>/scripts/ci/run_required_verification.py <この Repo
 ```
 
 - 流し方と記録の行の読み方は、`MirumeAI/.github` の README の「merge の前の検査」
-- 終了コード 1（FAIL）・2（流せない）のときは、直してから流し直す（今ある長期 Branch〔LEGACY〕を base にした PR で流せない〔終了コード 2〕ときだけは、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の LEGACY の決まりに従い、木にある試験を流して PASS した記録と、正本の機械チェックを変わったファイルだけで流して PASS した記録（`CI_ROOT=<作業ツリー> python3 <.github の clone>/scripts/ci/basic_checks.py --base origin/<長期 Branch>`）を書く。FAIL は LEGACY でも直してから流し直す）。「基準を含む: いいえ」なら、main を取り込んでから流し直す。飛ばした試験が 0 でなければ、理由を確かめる
+- 終了コード 1（FAIL）・2（流せない）のときは、直してから流し直す（今ある長期 Branch〔LEGACY〕を base にした PR で流せない〔終了コード 2。ロックで止まったときは除く〕ときだけは、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の LEGACY の決まりに従い、木にある試験を流して PASS した記録と、正本の機械チェックを変わったファイルだけで流して PASS した記録（`CI_ROOT=<作業ツリー> python3 <.github の clone>/scripts/ci/basic_checks.py --base origin/<長期 Branch>`）を書く。FAIL は LEGACY でも直してから流し直す）。ほかの検査が流れていて `--no-wait` で止まったときと、ロックを取れずに止まったときの終了コード 2 は、LEGACY の決まりの「流せない」に当たらず、ほかの検査が終わってから（ロックを取れないときは、出た理由を直してから）流し直す（`pull_request_review.md` の「検査と Merge」）。「基準を含む: いいえ」なら、main を取り込んでから流し直す。飛ばした試験が 0 でなければ、理由を確かめる
 - head が変わったら流し直し、記録の行を書き直す
 
 ## 6. 作成
@@ -78,6 +78,6 @@ gh pr create --draft --repo MirumeAI/<repository> --base main --title "<要約>"
 
 今ある長期 Branch（LEGACY）への直しの PR は `--base <長期 Branch>` にする。同じ直しを `main` へ戻す PR は、`main` から切った別の Branch で作る（長期 Branch を head にしない。merge のときに head の Branch が消える設定のため）。決まりは development-docs の `03_customer_development/customer_specific_development.md` の「禁止事項」。
 
-**この command では merge しない。** merge は、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の条件をすべて満たしてから行う（head の固定・Required Verification の PASS・Reviewer A・B の BLOCKER・MAJOR・IN-PR REQUIRED FIXES が 0・人の判断が要る変更でない）。LEGACY を base にした PR は、道具が流せないときだけ Required Verification を木にある試験の PASS の記録で代え、いつも人の判断の後に merge する。人の判断が要る変更と、follow-up が守り・構成・本番・壊す操作の判断を含むときは、人の判断を待つ。人の確認（Human Verification）が要る PR（顧客 Repository の混入の検査の宣言の値を変える PR など）は、人が自分で書いた人の確認の記録も待つ。
+**この command では merge しない。** merge は、development-docs の `02_github_workflow/pull_request_review.md` の「Merge の門」の条件をすべて満たしてから行う（head の固定・Required Verification の PASS・Reviewer A・B の BLOCKER・MAJOR・IN-PR REQUIRED FIXES が 0・人の判断が要る変更でない）。LEGACY を base にした PR は、道具が流せない（終了コード 2。ロックで止まったときは除く）ときだけ Required Verification を木にある試験の PASS の記録と、変わったファイルだけの正本の機械チェックの PASS の記録で代え（5 の終了コードの行）、いつも人の判断の後に merge する。人の判断が要る変更と、follow-up が守り・構成・本番・壊す操作の判断を含むときは、人の判断を待つ。人の確認（Human Verification）が要る PR（顧客 Repository の混入の検査の宣言の値を変える PR など）は、人が自分で書いた人の確認の記録も待つ。
 
 このリポジトリの変更なら `/docs-sync` の確認も併せて実施する。

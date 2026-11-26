@@ -1309,6 +1309,21 @@ class SocketPathTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
             self.assertEqual(list(work.iterdir()), [])
 
+    def test_make_rv_work_is_owner_only_under_a_setgid_root_and_any_umask(self) -> None:
+        # 置き場に setgid があると、 新しい dir が受け継ぐ（umask が緩いと group と others の権限も付く）
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "w"
+            root.mkdir()
+            os.chmod(root, 0o2775)
+            if not stat.S_IMODE(root.stat().st_mode) & stat.S_ISGID:
+                self.skipTest("この場所では dir に setgid を付けられない")
+            old = os.umask(0)
+            try:
+                work = S.make_rv_work(root)
+            finally:
+                os.umask(old)
+            self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
+
 
 class GuardCasesTest(unittest.TestCase):
     """件数は、 正本の main のガードの回帰テストを流して数える（不合格があれば止まる）。"""

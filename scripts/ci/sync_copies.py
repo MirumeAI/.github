@@ -665,6 +665,8 @@ def make_rv_work(work_root: Path) -> Path:
         try:
             work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
             work.mkdir(mode=0o700)
+            # umask と、 置き場の setgid（新しい dir が受け継ぐ）によらず 700 にする（状態の置き場と同じ）
+            os.chmod(work, 0o700)
         except FileExistsError:
             if work_root.is_dir():
                 continue

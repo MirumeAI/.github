@@ -937,8 +937,29 @@ class SyncTest(unittest.TestCase):
         pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
         pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 2, out)
+        self.assertIn("止まりました: 検査の作業の置き場（--work-dir）がリンクです", out)
         self.assertTrue((real / name).is_dir(), "置き場の根がリンクなら、 たどって消さない")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(st["targets"]["pdm"]["rv_work"], [name], "片付けていない名前を状態から消さない")
+
+    def test_a_linked_work_dir_stops_apply_before_anything(self) -> None:
+        # 根がリンクなら、 apply はリンクの先に作らず、 何かを作る前に止まる（cleanup が片付けられないため）
+        real = self.w.base / "real-w"
+        real.mkdir()
+        self.w.work.symlink_to(real)
+        code, out = self.w.main("apply", "--source", "97")
+        self.assertEqual(code, 2, out)
+        self.assertIn("止まりました: 検査の作業の置き場（--work-dir）がリンクです", out)
+        self.assertEqual(self.w.rv_calls, [])
+        self.assertEqual(self.w.db["issues"], {})
+        self.assertFalse(self.w.state.exists())
+        self.assertEqual(list(real.iterdir()), [])
+        # 検査を流さない plan は、 止まらずに注意を出す
+        code, out = self.w.main("plan")
+        self.assertEqual(code, 0, out)
+        self.assertIn("apply と cleanup は止まります", out)
+        self.assertEqual(list(real.iterdir()), [])
 
     def test_cleanup_stops_cleanly_when_rv_work_cannot_be_removed(self) -> None:
         # 消せないときは、 traceback でなく伏せた文で止まり、 流し直すと続きから片付ける（#123 の Reviewer A・B）
@@ -1273,7 +1294,7 @@ class SocketPathTest(unittest.TestCase):
         rel = S.DEFAULT_WORK.relative_to(Path.home())
         for home_len in (7, 15, 18, 20):
             home = "/" + "h" * (home_len - 1)
-            # #226: 状態の置き場（既定の道）の下の w/<8 字> では、 ホームが 15 バイト（状態の置き場が 44 バイト）でも
+            # #226: 状態の置き場（既定の道）の下の w/<8 字> では、 ホームが 15 バイト（状態の置き場が 43 バイト）でも
             # 上限を超えた
             state = f"{home}/.cache/mirumeai/sync-copies"
             self.assertGreater(nbytes(pdm_socket(f"{state}/w/abcd1234")), S.SOCKET_PATH_MAX)

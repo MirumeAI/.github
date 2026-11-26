@@ -71,6 +71,8 @@ clone は Repository の別名の道（`clones/c1` など）に置く。
 ときは、 44 バイトの状態の置き場でも落ちた）。 PDM の試験と同じ形のソケットの道が上限を超える
 長さの置き場なら、 `apply` は clone・Issue・検査の前に止まる（`plan` は注意を出す）。 置き場の道は
 39 バイトまで（既定の道なら、 ホームの道が 20 バイトまで）。 リンクをたどった道でも測る。
+置き場の根そのものがリンクなら、 apply と cleanup は止まる（plan は注意を出す。 cleanup は根のリンクをたどらない
+ので、 リンクの先に作った作業の場所を片付けられないため）。 短い置き場は、 本人だけが使う dir にする。
 #226 より前の版が状態の置き場の `w/` の下に作った作業の場所も、 `cleanup` が片付ける。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
@@ -690,7 +692,8 @@ def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     ctx.save()
     rc, text = ctx.rv(wt, head, work)
     # 記録は、 検査が終わってから名前を伏せて書く（途中で止めても、 伏せる前の記録を残さない）。
-    # 検査の道具の段ごとの記録は、 状態の置き場の中の新しい dir に置く（システムの一時の場所に残さない）
+    # 検査の道具の段ごとの記録は、 検査の作業の置き場（--work-dir）の下の新しい作業の場所に置く（システムの一時の場所に
+    # 残さない）
     log.write_text(ctx.run.mask(text), encoding="utf-8")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith(RECORD)]
     if rc != 0 or not lines:
@@ -711,7 +714,7 @@ def default_rv(canon_root: Path):
 
     def rv(wt: Path, head: str, work: Path) -> "tuple[int, str]":
         # 出力はファイルに書かずに受け取る（伏せる前の出力をディスクに残さない）。 検査の道具の段ごとの
-        # 記録（伏せていない）は、 状態の置き場の中の work に書かせる（システムの一時の場所に残さない）
+        # 記録（伏せていない）は、 検査の作業の置き場の下の work に書かせる（システムの一時の場所に残さない）
         r = subprocess.run([sys.executable, str(tool), str(wt), "--head", head, "--work", str(work)],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            env=dict(os.environ, PYTHONUNBUFFERED="1"))
@@ -901,7 +904,7 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
         p.add_argument("--work-dir", type=Path, default=DEFAULT_WORK,
                        help="検査（Required Verification）の作業の置き場（状態の置き場と別の短い道。"
-                       " 同じ --source には、 片付けるまで同じ道を渡す）")
+                       " 39 バイトまで・リンクでない dir。 同じ --source には、 片付けるまで同じ道を渡す）")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")
         p.add_argument("--canonical", type=Path, default=ROOT, help="正本（MirumeAI/.github）の clone")
         p.add_argument("--guard-cases", type=int, help="ガードの回帰テストの件数（省くと正本で流して数える）")
@@ -930,6 +933,15 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
         return 2
     if too_long and args.cmd == "plan":
         say(f"注意: {too_long}（apply は流す前に止まります）", err=True)
+    # 置き場の根がリンクなら、 apply はリンクの先に作業の場所を作れるが、 cleanup は根のリンクをたどらずに消さない
+    # （伏せていない記録が、 名前の記録の無いまま残る）。 apply と cleanup は、 何かを作る・消す前に止まる（plan は注意）
+    if work_root.is_symlink():
+        why = ("検査の作業の置き場（--work-dir）がリンクです。 cleanup は置き場の根のリンクをたどらないので、"
+               " 作った作業の場所を片付けられません。 リンクでない dir を渡してください")
+        if args.cmd in ("apply", "cleanup"):
+            say(f"止まりました: {why}", err=True)
+            return 2
+        say(f"注意: {why}（apply と cleanup は止まります）", err=True)
     state_dir = args.state_dir.expanduser().resolve()
     run_dir = state_dir / "runs" / (f"github-{args.source}" if args.source else "plan")
     # 顧客 Repository の clone を置くので、 本人だけが読める置き場にする。 既にある置き場の

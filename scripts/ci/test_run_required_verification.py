@@ -1401,8 +1401,9 @@ class LockTest(E2E):
             except (ValueError, ProcessLookupError, PermissionError):
                 pass
 
-    def start(self, name: str, run: str, *extra):
-        """1 つの job の検査を後ろで流し始める。 出力（stdout と stderr）はファイルに書く。"""
+    def start(self, name: str, run: str, *extra, origin: str | None = None):
+        """1 つの job の検査を後ろで流し始める。 出力（stdout と stderr）はファイルに書く。 origin は架空の
+        GitHub の Repository（例 `ExampleOrg/tool-a`）。 渡さなければ GitHub の外の clone（`local/<name>`）。"""
         t = _repo(self.root, self.wf(f"""\
             on: pull_request
             jobs:
@@ -1411,6 +1412,8 @@ class LockTest(E2E):
                 steps:
                   - run: {run}
             """), {}, name=name)
+        if origin:
+            _git(t, "remote", "add", "origin", f"https://github.com/{origin}.git")
         log = self.root / f"{name}.out"
         fh = open(log, "w", encoding="utf-8")
         self.addCleanup(fh.close)
@@ -1427,19 +1430,30 @@ class LockTest(E2E):
             proc.kill()
             proc.wait()
 
-    def wait_for(self, cond, what: str, timeout: float = 120):
+    def wait_for(self, cond, what: str, proc=None, log: Path | None = None, timeout: float = 120):
+        """cond を待つ。 **proc が終わったら、 上限まで待たずに落とす**（壊した版で上限まで待たない）。"""
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             if cond():
                 return
+            if proc is not None and proc.poll() is not None:
+                if cond():
+                    return
+                shown = log.read_text(encoding="utf-8") if log else ""
+                self.fail(f"{what} が起きないまま、 検査が終わった（終了コード {proc.returncode}）\n{shown}")
             time.sleep(0.1)
         self.fail(f"{what} が起きない")
 
-    def first(self):
+    def wait_until_waiting_or_done(self, proc, log: Path) -> None:
+        """proc が終わるか、 ほかの検査を待ち始めるまで待つ。"""
+        self.wait_for(lambda: proc.poll() is not None or "終わるまで待ちます" in log.read_text(encoding="utf-8"),
+                      "終わるか待ち始める", proc, log)
+
+    def first(self, origin: str | None = None):
         """1 本目: 段が始まり、 at/release まで終わらない検査。"""
-        proc, log, head = self.start("first", _hold("first", self.root))
+        proc, log, head = self.start("first", _hold("first", self.root), origin=origin)
         self.wait_for(lambda: (self.root / "first.started").exists() and (self.root / "first.started").read_text().strip(),
-                      "1 本目の段の始まり")
+                      "1 本目の段の始まり", proc, log)
         return proc, log, head
 
     def hold_lock(self, record: bytes) -> int:
@@ -1476,10 +1490,12 @@ class LockTest(E2E):
 
     def test_a_second_run_waits_for_the_first(self):
         at = self.root
-        first, _, head1 = self.first()
+        first, _, head1 = self.first(origin="ExampleOrg/tool-a")
         second, log2, _ = self.start(
-            "second", f'if [ -e "{at}/first.done" ]; then echo after; else echo before; fi > "{at}/second.order"')
-        self.wait_for(lambda: "終わるまで待ちます" in log2.read_text(encoding="utf-8"), "2 本目の待ちの知らせ")
+            "second", f'if [ -e "{at}/first.done" ]; then echo after; else echo before; fi > "{at}/second.order"',
+            origin="ExampleOrg/tool-b")
+        self.wait_for(lambda: "終わるまで待ちます" in log2.read_text(encoding="utf-8"), "2 本目の待ちの知らせ",
+                      second, log2)
         time.sleep(1.5)                     # 待ちの間に、 2 本目の job が始まらないこと
         self.assertIsNone(second.poll())
         self.assertFalse((at / "second.order").exists(), "1 本目が終わる前に 2 本目の job が始まった")
@@ -1487,10 +1503,11 @@ class LockTest(E2E):
         text = log2.read_text(encoding="utf-8")
         waiting = [ln for ln in text.splitlines() if "終わるまで待ちます" in ln]
         self.assertEqual(len(waiting), 1, text)
-        self.assertIn(f"（local/first・head {head1[:12]}・", waiting[0])
+        self.assertIn(f"（ExampleOrg/tool-a・head {head1[:12]}・", waiting[0])
         self.assertRegex(waiting[0], r"・\d{4}-\d\d-\d\d \d\d:\d\d:\d\d に始めた・process \d+）")
         self.assertIn("--no-wait", waiting[0])
         self.assertNotIn(str(self.root), waiting[0], "道を出さない")
+        self.assertNotIn("同時に流す job の数", text, "待つ前に同時に流す数を決めた")
         (at / "release").touch()
         self.assertEqual(first.wait(120), 0)
         self.assertEqual(second.wait(120), 0, log2.read_text(encoding="utf-8"))
@@ -1498,17 +1515,23 @@ class LockTest(E2E):
         text = log2.read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^待ち終えました（\d+ 秒）$")
         self.assertRegex(text, rf"(?m)^{R.RECORD_PASS}（")
+        # 同時に流す数（既定）は、 待ち終えた後に、 その時の空きメモリで決める（#219 の Reviewer A）
+        self.assertLess(text.index("待ち終えました"), text.index("同時に流す job の数: 1（--jobs の既定"))
         self.assertLockIsFree()
         self.assertEqual((self.lock_dir / R.LOCK_NAME).read_bytes(), b"", "終わったら持ち主の記録を消す")
 
     def test_no_wait_stops_while_another_runs(self):
+        """`--no-wait` なら待たずに止まる。 持ち主が別の顧客 Repository なら、 その名前を出さない（架空の名前で確かめる）。"""
         at = self.root
-        first, _, head1 = self.first()
-        second, log2, _ = self.start("second", f'touch "{at}/second.ran"', "--no-wait")
-        self.assertEqual(second.wait(120), 2, log2.read_text(encoding="utf-8"))
+        first, _, head1 = self.first(origin="ExampleOrg/customer-alpha-part")
+        second, log2, _ = self.start("second", f'touch "{at}/second.ran"', "--no-wait",
+                                     origin="ExampleOrg/customer-beta-part")
+        self.wait_until_waiting_or_done(second, log2)
+        self.assertEqual(second.poll(), 2, log2.read_text(encoding="utf-8"))
         text = log2.read_text(encoding="utf-8")
-        self.assertRegex(text, rf"(?m)^流せません: 同じ利用者の別の検査が流れています（local/first・head {head1[:12]}・"
+        self.assertRegex(text, rf"(?m)^流せません: 同じ利用者の別の検査が流れています（顧客 Repository・head {head1[:12]}・"
                                r".*）。 --no-wait なので待たずに止めます$")
+        self.assertNotIn("alpha", text, "別の顧客 Repository の名前を出した")
         self.assertNotIn("終わるまで待ちます", text)
         self.assertNotIn(R.RECORD_PASS, text)
         self.assertFalse((at / "second.ran").exists())
@@ -1548,7 +1571,7 @@ class LockTest(E2E):
             with self.subTest(sig=sig.name):
                 name = f"waiter-{sig.name}"
                 w, logw, _ = self.start(name, f'touch "{at}/{name}.ran"')
-                self.wait_for(lambda: "終わるまで待ちます" in logw.read_text(encoding="utf-8"), "待ちの知らせ")
+                self.wait_for(lambda: "終わるまで待ちます" in logw.read_text(encoding="utf-8"), "待ちの知らせ", w, logw)
                 w.send_signal(sig)
                 self.assertEqual(w.wait(120), 128 + sig, logw.read_text(encoding="utf-8"))
                 text = logw.read_text(encoding="utf-8")
@@ -1557,9 +1580,12 @@ class LockTest(E2E):
                 self.assertFalse((at / f"{name}.ran").exists())
                 self.assertFalse((at / f"work-{name}").exists())
         third, log3, _ = self.start("third", "echo ok", "--no-wait")
-        self.assertEqual(third.wait(120), 2)
-        self.assertIn(f"（local/first・head {head1[:12]}・", log3.read_text(encoding="utf-8"),
+        self.wait_until_waiting_or_done(third, log3)
+        self.assertEqual(third.poll(), 2, log3.read_text(encoding="utf-8"))
+        # GitHub の外の clone（local/<フォルダの名前>）の持ち主は、 名前を出さずに「手元の clone」と出す
+        self.assertIn(f"（手元の clone・head {head1[:12]}・", log3.read_text(encoding="utf-8"),
                       "待っていた検査が、 持ち主の記録を消した")
+        self.assertNotIn("local/first", log3.read_text(encoding="utf-8"))
         (at / "release").touch()
         self.assertEqual(first.wait(120), 0)
 
@@ -1575,12 +1601,9 @@ class LockTest(E2E):
                 steps:
                   - uses: example/unknown@v1
             """), {})
-        p = subprocess.run([sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main", "--canonical",
-                            str(t), "--canonical-ref", "main", "--work", str(self.root / "work-x")],
-                           capture_output=True, text=True, timeout=60)
-        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("流せません", p.stderr)
-        self.assertNotIn("待ちます", p.stdout + p.stderr)
+        proc, log = self.run_bg([str(t), "--work", str(self.root / "work-x")], "refused")
+        self.assertEqual(proc.poll(), 2, log.read_text(encoding="utf-8"))
+        self.assertIn("流せません", log.read_text(encoding="utf-8"))
         self.assertFalse((self.root / "work-x").exists())
         ok = _repo(self.root, self.wf("""\
             on: pull_request
@@ -1590,10 +1613,78 @@ class LockTest(E2E):
                 steps:
                   - run: echo ok
             """), {}, name="ok")
-        p = subprocess.run([sys.executable, str(RUNNER), str(ok), "--head", "pr", "--base", "main", "--canonical",
-                            str(ok), "--canonical-ref", "main", "--list"], capture_output=True, text=True, timeout=60)
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertNotIn("待ちます", p.stdout + p.stderr)
+        proc, log = self.run_bg([str(ok), "--list"], "list")
+        self.assertEqual(proc.poll(), 0, log.read_text(encoding="utf-8"))
+        self.assertIn("同時に流す job の数: 1（--jobs の既定", log.read_text(encoding="utf-8"))
+
+    def run_bg(self, args: list, name: str):
+        """道具を後ろで流し、 終わるか待ち始めるまで待つ（待ち始めたら、 上限まで待たずに落とす）。"""
+        log = self.root / f"{name}.out"
+        fh = open(log, "w", encoding="utf-8")
+        self.addCleanup(fh.close)
+        target = args[0]
+        proc = subprocess.Popen([sys.executable, str(RUNNER), target, "--head", "pr", "--base", "main",
+                                 "--canonical", target, "--canonical-ref", "main", *args[1:]],
+                                stdout=fh, stderr=subprocess.STDOUT)
+        self.addCleanup(self.finish, proc)
+        self.wait_until_waiting_or_done(proc, log)
+        self.assertIsNotNone(proc.poll(), "ロックを待った\n" + log.read_text(encoding="utf-8"))
+        return proc, log
+
+    def test_the_name_of_the_holder_is_shown_only_when_it_is_safe(self):
+        """待つ・止まるときの知らせに、 別の顧客の顧客 Repository の名前と、 GitHub の外の clone のフォルダの名前を
+        出さない（同じ利用者が別の顧客の検査を流すと、 ある顧客の検査の記録に載る。 #219 の Reviewer B）。 名前は架空。"""
+        import json
+        cases = (("ExampleOrg/customer-alpha-part", "ExampleOrg/customer-beta-part", "顧客 Repository"),
+                 ("ExampleOrg/Customer-Alpha-Part", "ExampleOrg/tool-a", "顧客 Repository"),
+                 ("ExampleOrg/customer-alpha-part", "ExampleOrg/customer-alpha-part", "ExampleOrg/customer-alpha-part"),
+                 ("ExampleOrg/tool-a", "ExampleOrg/customer-beta-part", "ExampleOrg/tool-a"),
+                 ("ExampleOrg/tool-a", "ExampleOrg/tool-b", "ExampleOrg/tool-a"),
+                 ("local/alpha-case-folder", "ExampleOrg/tool-a", "手元の clone"),
+                 ("local/alpha-case-folder", "local/alpha-case-folder", "local/alpha-case-folder"))
+        for holder, own, want in cases:
+            with self.subTest(holder=holder, own=own):
+                self.assertEqual(R._holder_repo(holder, own), want)
+                fd = self.hold_lock(json.dumps({"repository": holder, "head": "b" * 40}).encode())
+                try:
+                    shown = R._holder(fd, own)
+                finally:
+                    os.close(fd)
+                self.assertTrue(shown.startswith(f"{want}・head {'b' * 12}"), shown)
+                if want != holder:
+                    self.assertNotIn("alpha", shown.lower())
+
+    def test_the_default_is_decided_after_taking_the_lock(self):
+        """既定の同時に流す数は、 ロックを取った後の空きメモリで決める（待つ間に空きメモリが変わる。 #219 の
+        Reviewer A）。 空きメモリの mock は、 道具がロックを持つ間だけ多い値を返す。"""
+        import contextlib
+        import fcntl
+        import io
+        from unittest import mock
+        t = ParallelJobsTest.two(self, self.root, wait_s=3)
+
+        def memory():
+            try:
+                fd = os.open(self.lock_dir / R.LOCK_NAME, os.O_RDWR)
+            except FileNotFoundError:
+                return R.JOB_MEMORY                       # まだロックを取っていない: 1 つずつの空き
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                return R.JOB_MEMORY                       # 誰もロックを持っていない: 1 つずつの空き
+            except BlockingIOError:
+                return 64 * 1024 ** 3                     # 道具がロックを持っている: 同時に流せる空き
+            finally:
+                os.close(fd)
+
+        out = io.StringIO()
+        with mock.patch.object(R, "_cpus", return_value=16), mock.patch.object(R, "_available_memory", side_effect=memory), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = R.main([str(t), "--head", "pr", "--base", "main", "--canonical", str(t), "--canonical-ref", "main",
+                         "--python", f"{PYVER}={sys.executable}", "--work", str(self.root / "work-after")])
+        self.assertEqual(rc, 0, out.getvalue())
+        self.assertIn("同時に流す job の数: 2（--jobs の既定", out.getvalue())
+        self.assertEqual((self.root / "a.result").read_text().strip(), "together")
 
     def test_the_record_of_the_holder_cannot_break_the_output(self):
         """持ち主の記録は同じ利用者のほかの process が書くもの。 行を崩す字・形の違う値・読めない記録でも、

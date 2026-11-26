@@ -29,7 +29,7 @@ Pull Request を、 まとめて作る。
 **merge はしない。** Reviewer A・B と Merge の門は、 Pull Request ごとに通す。
 
 `cleanup` は、 merge された同期の Pull Request の作業ツリーとローカルの作業 Branch と、
-その同期の検査の作業の置き場（`w/` の下に道具が作った dir）を片付ける（merge されていない・
+その同期の検査の作業の場所（検査の作業の置き場〔`--work-dir`〕の下に道具が作った dir）を片付ける（merge されていない・
 作業ツリーに commit していない変更がある・ローカルの Branch の先頭が merge された head と
 違う、 のどれかなら触らない。 リモートの Branch は GitHub が消すので触らない）。
 Pull Request ができる前に止まった同期と、 merge されずに閉じた同期は、 検査の作業の置き場
@@ -42,12 +42,12 @@ Pull Request ができる前に止まった同期と、 merge されずに閉じ
   ・顧客 Repository の名前を出力に出さない（「顧客 Repository 1」と呼ぶ）。
     git・gh・検査の出力はそのまま出さず、 状態の置き場の `runs/<…>/logs/` に、
     名前を伏せて書く。 検査の出力は、 終わってから伏せて書く（途中で止めても、 伏せる
-    前の記録を残さない）。 **状態の置き場の中身は、 どれもそのまま表示・一覧しない**
-    （記録〔`logs/`〕には伏せきれない値が残りうる。 本文のファイル〔`bodies/`〕・
+    前の記録を残さない）。 **状態の置き場と検査の作業の置き場の中身は、 どれもそのまま
+    表示・一覧しない**（記録〔`logs/`〕には伏せきれない値が残りうる。 本文のファイル〔`bodies/`〕・
     `state.json`〔検査の記録の行〕・`aliases.json`・clone と作業ツリー・検査の道具の
-    段ごとの記録〔`w/`。 伏せていない〕には名前が残る）。
+    段ごとの記録〔検査の作業の置き場。 伏せていない〕には名前が残る）。
     状態の置き場は、 道具が作るときは本人だけが読める形（0700）にし、 既にある置き場が
-    そうでなければ、 権限を変えずに止まる
+    そうでなければ、 権限を変えずに止まる。 検査ごとの作業の場所も、 本人だけが読める形で作る
   ・作業 Branch（`feature/<数>-…`）にだけ push する。 main へは push しない。
     force push しない。 push の直前に push 先を確かめ直す。 正本の clone の
     origin も確かめる（違う中身を正本として写さない）
@@ -60,11 +60,18 @@ Pull Request ができる前に止まった同期と、 merge されずに閉じ
   ・`.ci-copy-allow` に書かれた写しは触らない
   ・正本の main に入っていない Pull Request（`--source`）からは同期しない
 
-状態の置き場は `~/.cache/mirumeai/sync-copies/`（`--state-dir` で変える）。 検査の道具の
-試験は、 状態の置き場の下（`w/<8 字>/job-NN/temp/…`）に Unix ソケットを作るので、 置き場の道が
-長いと、 ソケットの道の上限（107 バイト）を超えて落ちる。 置き場の道は 50 バイト以下にする
-（超えると注意を出す）。
+状態の置き場は `~/.cache/mirumeai/sync-copies/`（`--state-dir` で変える）。
 clone は Repository の別名の道（`clones/c1` など）に置く。
+
+検査の作業の置き場は、 状態の置き場と別の短い道 `~/.cache/mirumeai/sw/`（`--work-dir` で変える。
+同じ `--source` は、 片付けるまで同じ道で流す。 違えば消さずに止まる）。 検査ごとに、 その下に
+4 字の名前の dir を作って、 検査の道具の `--work` に渡す。 検査の道具は、 その下の
+`job-NN/temp` を試験の一時の場所にし、 PDM の試験は、 その下の `tmpXXXXXXXX/…` に Unix ソケットを
+作る。 ソケットの道が上限（107 バイト）を超えると試験が落ちる（#226。 状態の置き場の下に作っていた
+ときは、 44 バイトの状態の置き場でも落ちた）。 PDM の試験と同じ形のソケットの道が上限を超える
+長さの置き場なら、 `apply` は clone・Issue・検査の前に止まる（`plan` は注意を出す）。 置き場の道は
+39 バイトまで（既定の道なら、 ホームの道が 20 バイトまで）。 リンクをたどった道でも測る。
+#226 より前の版が状態の置き場の `w/` の下に作った作業の場所も、 `cleanup` が片付ける。
 
 このリポジトリは **Public**。 顧客名・社内 URL・IP アドレスをここに書かない。
 Repository の名前は実行時に Organization の一覧から読む。
@@ -78,6 +85,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -100,6 +108,8 @@ SHARED = copy_sync_check.SHARED
 ALLOW_FILE = copy_sync_check.ALLOW_FILE
 GUARD_TEST = "scripts/ci/test_guard_main.sh"
 DEFAULT_STATE = Path.home() / ".cache" / "mirumeai" / "sync-copies"
+#: 検査の作業の置き場の既定。 状態の置き場と別の、 短い道（その下で試験が作る Unix ソケットの道を短くする。 #226）
+DEFAULT_WORK = Path.home() / ".cache" / "mirumeai" / "sw"
 DEFAULT_SUBJECT = "共通のファイルの写しを正本に合わせる"
 RETRY_SLEEP = 8
 
@@ -171,7 +181,8 @@ class Result:
 
 #: 記録のファイルを示すときに添える注意（名前は伏せて書くが、 伏せきれない値が残りうる。
 #: 記録のほかの状態の置き場の中身にも名前が残る）
-LOG_NOTE = "名前は伏せて書いたが、 値が残りうるので、 そのまま表示しない。 状態の置き場の中身は、 どれもそのまま表示・一覧しない"
+LOG_NOTE = ("名前は伏せて書いたが、 値が残りうるので、 そのまま表示しない。 状態の置き場と検査の作業の置き場の中身は、"
+            " どれもそのまま表示・一覧しない")
 
 
 class Runner:
@@ -525,6 +536,7 @@ class Ctx:
     rv: object
     sleep: object
     remote_base: str
+    work_root: Path                                 # 検査の作業の置き場（--work-dir）
 
     def save(self) -> None:
         f = self.run_dir / "state.json"
@@ -622,29 +634,56 @@ def write_changes(ctx: Ctx, t: Target, a: Analysis, wt: Path) -> list:
     return touched
 
 
-#: 状態の置き場の道の長さの目安（バイト）。 これより長いと、 検査の道具の試験のソケットの道が
-#: 上限（107 バイト）に近づくので注意を出す
-STATE_DIR_MAX = 50
+#: Unix ソケットの道の上限（バイト。 sun_path の 108 バイトから終わりの NUL を引いた数。 Python は
+#: これより長い道を「AF_UNIX path too long」で断る）
+SOCKET_PATH_MAX = 107
+#: 検査の作業の場所の下に、 検査の道具と試験が足す道のうち、 知っている中でいちばん長いソケットの道
+#: （PDM の試験。 #226）。 検査の道具は job の一時の場所（TMPDIR）を <作業の場所>/job-NN/temp に作り、
+#: 試験は、 その下の tempfile の dir（tmp と 8 字）の下にソケットを作る
+RV_SOCKET_TAIL = "/job-01/temp/tmpxxxxxxxx/site_fakepkg_stop2/fakepkg_stop2/sub/s"
+#: 検査ごとの作業の場所の名前の字数と字（短くして、 置き場の道に使える長さを残す）
+RV_WORK_NAME_LEN = 4
+RV_WORK_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
-def long_state_dir_note(state_dir: Path) -> "str | None":
-    n = len(str(state_dir).encode("utf-8"))
-    if n <= STATE_DIR_MAX:
+def rv_work_too_long(work_root: Path) -> "str | None":
+    """検査の作業の場所（<work_root>/<4 字>）の下の、 PDM の試験と同じ形のソケットの道が上限を超えるなら、
+    止まる理由の文。 リンクをたどった道でも測る（一時の場所の道を、 リンクをたどった形にして使う試験がある）。"""
+    tail = len(("/" + "x" * RV_WORK_NAME_LEN + RV_SOCKET_TAIL).encode("utf-8"))
+    n = max(len(str(p).encode("utf-8")) for p in (work_root, work_root.resolve())) + tail
+    if n <= SOCKET_PATH_MAX:
         return None
-    return (f"注意: 状態の置き場の道が長い（{n} バイト。 目安は {STATE_DIR_MAX} バイト以下）。 検査の道具の"
-            " 試験が、 Unix ソケットの道の上限（107 バイト）を超えて落ちることがあります。"
-            " 落ちたら、 短い道を --state-dir に渡してください")
+    return (f"検査の作業の置き場（--work-dir）の道が長すぎます。 その下で検査の試験が作る Unix ソケットの道が"
+            f" {n} バイトになり、 上限（{SOCKET_PATH_MAX} バイト）を超えます。"
+            f" {SOCKET_PATH_MAX - tail} バイト以下の道を --work-dir に渡してください")
+
+
+def make_rv_work(work_root: Path) -> Path:
+    """検査ごとの新しい作業の場所を、 置き場の下に短い名前で作る（本人だけが読める形。 名前が重なれば選び直す）。"""
+    for _ in range(100):
+        work = work_root / "".join(secrets.choice(RV_WORK_CHARS) for _ in range(RV_WORK_NAME_LEN))
+        try:
+            work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            work.mkdir(mode=0o700)
+        except FileExistsError:
+            if work_root.is_dir():
+                continue
+            raise Stop("検査の作業の置き場（--work-dir）が dir ではありません") from None
+        except OSError as e:
+            raise Stop(f"検査の作業の置き場（--work-dir）に作業の場所を作れません（{type(e).__name__}）") from None
+        return work
+    raise Stop("検査の作業の置き場に、 新しい作業の場所を作れません（名前が重なり続けました）")
 
 
 def run_rv(ctx: Ctx, t: Target, wt: Path, head: str) -> "tuple[str, str]":
     log = ctx.run_dir / "logs" / f"{t.alias}-rv-{head[:12]}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    # 置き場は状態の置き場の直下の短い道にする（検査の道具は job の一時の場所を <work>/job-NN/temp に
-    # 作る。 道が長いと、 その下に Unix ソケットを作る試験が上限〔107 バイト〕を超えて落ちる）
-    work_root = ctx.run_dir.parents[1] / "w"
-    work_root.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="", dir=work_root))
-    # 片付け（cleanup）で消せるよう、 この同期の検査の作業の置き場の名前を状態に残す
+    # 作業の場所は、 状態の置き場と別の短い道（--work-dir）の下に、 短い名前で作る（検査の道具は job の一時の
+    # 場所を <作業の場所>/job-NN/temp に作り、 その下に Unix ソケットを作る試験が、 道が長いと上限〔107 バイト〕を
+    # 超えて落ちる。 #226）。 道の長さは、 流す前（main）に確かめた
+    work = make_rv_work(ctx.work_root)
+    # 片付け（cleanup）で消せるよう、 この同期の検査の作業の置き場の根と名前を状態に残す
+    ctx.state["rv_work_root"] = str(ctx.work_root)
     ctx.state.setdefault("targets", {}).setdefault(t.alias, {}).setdefault("rv_work", []).append(work.name)
     ctx.save()
     rc, text = ctx.rv(wt, head, work)
@@ -769,19 +808,21 @@ def apply_one(ctx: Ctx, t: Target, a: Analysis) -> str:
 
 def remove_rv_work(ctx: Ctx, st: dict, done: str) -> None:
     """検査の作業の置き場（伏せていない段ごとの記録）は、 道具が作った名前のものだけを消す。
-    置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）。 `done` は、 止まったときに済んだことの文。"""
-    work_root = ctx.run_dir.parents[1] / "w"
+    置き場の根も、 消す dir も、 リンクならたどらない（外を消さない）。 `done` は、 止まったときに済んだことの文。
+    名前は --work-dir の下と、 #226 より前の版が作業の場所を作った状態の置き場の `w/` の下で探す。"""
+    roots = (ctx.work_root, ctx.run_dir.parents[1] / "w")
     for name in st.get("rv_work", []):
         if not (isinstance(name, str) and name == Path(name).name and name not in ("", ".", "..")):
             continue
-        d = work_root / name
-        if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
-            continue
-        try:
-            shutil.rmtree(d)
-        except OSError as e:
-            raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。{done}"
-                       " 原因を直して同じ命令で続けてください）") from None
+        for work_root in roots:
+            d = work_root / name
+            if work_root.is_symlink() or d.is_symlink() or not d.is_dir():
+                continue
+            try:
+                shutil.rmtree(d)
+            except OSError as e:
+                raise Stop(f"検査の作業の置き場を消せません（{type(e).__name__}。{done}"
+                           " 原因を直して同じ命令で続けてください）") from None
     st.pop("rv_work", None)
     ctx.save()
 
@@ -856,6 +897,9 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
                         " 検査の作業の置き場だけ）")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--state-dir", type=Path, default=DEFAULT_STATE, help="状態と clone の置き場")
+        p.add_argument("--work-dir", type=Path, default=DEFAULT_WORK,
+                       help="検査（Required Verification）の作業の置き場（状態の置き場と別の短い道。"
+                       " 同じ --source には、 片付けるまで同じ道を渡す）")
         p.add_argument("--only", default="", help="別名をカンマで（例: dd,pdm）。 plan が別名を出す")
         p.add_argument("--canonical", type=Path, default=ROOT, help="正本（MirumeAI/.github）の clone")
         p.add_argument("--guard-cases", type=int, help="ガードの回帰テストの件数（省くと正本で流して数える）")
@@ -874,6 +918,16 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
     def say(msg: str, err: bool = False) -> None:
         print(mask(msg), file=sys.stderr if err else sys.stdout, flush=True)
 
+    # 検査の作業の置き場の道が長すぎるなら、 注意だけで済ませず、 何かを作る前（状態の置き場・clone・Issue の前）に
+    # 止まる。 検査を流さない plan は、 注意を出して続ける（#226）。 置き場はリンクをたどらない形で持つ（cleanup が
+    # 置き場の根のリンクをたどらないように）
+    work_root = Path(os.path.abspath(args.work_dir.expanduser()))
+    too_long = rv_work_too_long(work_root)
+    if too_long and args.cmd == "apply":
+        say(f"止まりました: {too_long}", err=True)
+        return 2
+    if too_long and args.cmd == "plan":
+        say(f"注意: {too_long}（apply は流す前に止まります）", err=True)
     state_dir = args.state_dir.expanduser().resolve()
     run_dir = state_dir / "runs" / (f"github-{args.source}" if args.source else "plan")
     # 顧客 Repository の clone を置くので、 本人だけが読める置き場にする。 既にある置き場の
@@ -886,9 +940,6 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
     else:
         state_dir.mkdir(parents=True, mode=0o700)
         os.chmod(state_dir, 0o700)                         # umask によらず 700
-    note = long_state_dir_note(state_dir)
-    if note:
-        say(note, err=True)
     run = Runner(run_dir / "logs" / "commands.log", sleep, mask)
     gh = lambda a, **k: run(["gh", *a], **k)                # noqa: E731
     try:
@@ -923,6 +974,13 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
     if args.cmd == "cleanup" and not state:
         say("止まりました: この --source の状態がありません（片付けるものが分かりません）", err=True)
         return 2
+    recorded = state.get("rv_work_root")
+    if (args.cmd in ("apply", "cleanup") and recorded and recorded != str(work_root)
+            and any(st.get("rv_work") for st in state.get("targets", {}).values())):
+        # 違う置き場を渡すと、 cleanup が作業の場所を見つけられずに名前を忘れる（伏せていない記録が残る）
+        say(f"止まりました: この --source の検査の作業の場所は、 別の --work-dir（{recorded}）に作りました。"
+            " 片付けるまで、 同じ --work-dir を渡してください", err=True)
+        return 2
     if args.cmd == "apply":
         before = state.get("canonical")
         if before and before != canon.commit:
@@ -938,7 +996,7 @@ def _main(argv, held: contextlib.ExitStack, *, remote_base: str, rv, sleep) -> i
     ctx = Ctx(run, gh, canon, cases, args.source or 0, getattr(args, "subject", DEFAULT_SUBJECT),
               state.get("trailers", []), state.get("pr_footer", ""),
               getattr(args, "overwrite_unknown", False), run_dir, state,
-              rv or default_rv(canon.root), sleep, remote_base)
+              rv or default_rv(canon.root), sleep, remote_base, work_root)
     if args.cmd == "apply":
         ctx.save()
 

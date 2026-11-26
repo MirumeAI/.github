@@ -14,6 +14,8 @@
   ・**顧客 Repository の名前を出力に出さない**（失敗したときの出力を含む）
   ・作業 Branch の形でない Branch には push しない。 正本の main に入っていない
     Pull Request からは同期しない。 Pull Request の雛形が変わったら止まる
+  ・検査の作業の場所は、 状態の置き場と別の短い道（`--work-dir`）の下に作る。 PDM の試験と
+    同じ形の Unix ソケットの道が上限を超える置き場なら、 `apply` は何かを作る前に止まる（#226）
 
 GitHub は、 手元の bare repository と、 gh の代わりの小さな道具でまねる。
 """
@@ -26,6 +28,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -146,6 +149,7 @@ class World:
         self.remotes = base / "remotes"
         self.remotes.mkdir()
         self.state = base / "state"
+        self.work = base / "w"                  # 検査の作業の置き場（--work-dir）
         self.bin = base / "bin"
         self.bin.mkdir()
         gh = self.bin / "gh"
@@ -156,6 +160,7 @@ class World:
         self.form_ng_expected = False           # Issue Form の確かめで止まるのを試す（記録を出さない）
         self.rv_line: dict = {}                 # 名前 → 記録の行の差し替え（基準を含まない・道具が正本と違う）
         self.rv_calls: list = []
+        self.rv_works: list = []                # 検査の道具に渡した作業の場所
         self.on_rv = None                       # 検査の間に起きること（push 先が変わるなど）
         self._canonical()
         self.db_path = base / "gh.json"
@@ -239,8 +244,10 @@ class World:
     # ---- 検査の代わり
     def rv(self, wt: Path, head: str, work: Path):
         assert work.is_dir() and not any(work.iterdir()), "検査の道具には空の作業の置き場を渡す"
-        assert self.state in work.parents, "検査の道具の作業の置き場は、 状態の置き場の中"
-        assert len(str(work)) <= len(str(self.state)) + 12, "検査の道具の作業の置き場の道は短く（ソケットの道の上限）"
+        assert work.parent == self.work, "検査の道具の作業の場所は、 --work-dir の直下（状態の置き場と別の短い道。 #226）"
+        assert len(work.name) == S.RV_WORK_NAME_LEN, "作業の場所の名前は短く（ソケットの道の上限）"
+        assert stat.S_IMODE(work.stat().st_mode) == 0o700, "作業の場所は本人だけが読める形"
+        self.rv_works.append(work)
         url = git("-C", wt, "remote", "get-url", "origin")
         name = Path(url).name[:-len(".git")]
         self.rv_calls.append((name, head))
@@ -261,15 +268,18 @@ class World:
     def state_file(self) -> Path:
         return self.state / "runs" / "github-97" / "state.json"
 
-    def main(self, *argv) -> "tuple[int, str]":
+    def main(self, *argv, real_limit: bool = False) -> "tuple[int, str]":
         self.save()
         out = io.StringIO()
         env = dict(os.environ, PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}", FAKE_GH_DB=str(self.db_path),
                    **GIT_ENV)
-        with mock.patch.dict(os.environ, env, clear=True), \
+        # 試験の一時の場所の道の長さは、 流す所（検査の job の一時の場所など）で変わる。 作業の置き場の道の長さの
+        # 確かめは、 決めた道で照らす試験（SocketPathTest と real_limit）に任せ、 ほかの試験では上限を外す
+        limit = contextlib.nullcontext() if real_limit else mock.patch.object(S, "SOCKET_PATH_MAX", 10 ** 6)
+        with mock.patch.dict(os.environ, env, clear=True), limit, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = S.main([*argv, "--state-dir", str(self.state), "--canonical", str(self.canon),
-                           "--guard-cases", "257"],
+            code = S.main([*argv, "--state-dir", str(self.state), "--work-dir", str(self.work),
+                           "--canonical", str(self.canon), "--guard-cases", "257"],
                           remote_base=str(self.remotes), rv=self.rv, sleep=lambda s: None)
         self.load()
         if "Issue Form に合いません" in out.getvalue() and not self.form_ng_expected:
@@ -866,10 +876,10 @@ class SyncTest(unittest.TestCase):
         made = []
 
         def on_rv(wt):
-            made.append(sorted((self.w.state / "w").iterdir())[-1])
+            made.append(sorted(self.w.work.iterdir())[-1])
         self.w.on_rv = on_rv
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 0)
-        work_root = self.w.state / "w"
+        work_root = self.w.work
         other = work_root / "other"
         other.mkdir()
         st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
@@ -900,14 +910,14 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
         self.assertEqual(len(seen), 1)
         self.assertEqual(len(seen[0]), 1, "検査の前に、 その検査の置き場の名前が状態にある")
-        self.assertTrue((self.w.state / "w" / seen[0][0]).is_dir())
+        self.assertTrue((self.w.work / seen[0][0]).is_dir())
 
     def test_cleanup_does_not_follow_links_in_rv_work(self) -> None:
         # 置き場の中のリンクと、 置き場の根のリンクはたどらない（#123 の Reviewer A・B）
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
         outside = self.w.base / "outside"
         (outside / "x").mkdir(parents=True)
-        (self.w.state / "w" / "link").symlink_to(outside / "x")
+        (self.w.work / "link").symlink_to(outside / "x")
         st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
         st["targets"]["pdm"]["rv_work"] += ["link", 7, None]
         self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
@@ -922,13 +932,34 @@ class SyncTest(unittest.TestCase):
         st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
         name = st["targets"]["pdm"]["rv_work"][0]
         real = self.w.base / "real-w"
-        (self.w.state / "w").rename(real)
-        (self.w.state / "w").symlink_to(real)
+        self.w.work.rename(real)
+        self.w.work.symlink_to(real)
         pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
         pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 2, out)
+        self.assertIn("止まりました: 検査の作業の置き場（--work-dir）がリンクです", out)
         self.assertTrue((real / name).is_dir(), "置き場の根がリンクなら、 たどって消さない")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(st["targets"]["pdm"]["rv_work"], [name], "片付けていない名前を状態から消さない")
+
+    def test_a_linked_work_dir_stops_apply_before_anything(self) -> None:
+        # 根がリンクなら、 apply はリンクの先に作らず、 何かを作る前に止まる（cleanup が片付けられないため）
+        real = self.w.base / "real-w"
+        real.mkdir()
+        self.w.work.symlink_to(real)
+        code, out = self.w.main("apply", "--source", "97")
+        self.assertEqual(code, 2, out)
+        self.assertIn("止まりました: 検査の作業の置き場（--work-dir）がリンクです", out)
+        self.assertEqual(self.w.rv_calls, [])
+        self.assertEqual(self.w.db["issues"], {})
+        self.assertFalse(self.w.state.exists())
+        self.assertEqual(list(real.iterdir()), [])
+        # 検査を流さない plan は、 止まらずに注意を出す
+        code, out = self.w.main("plan")
+        self.assertEqual(code, 0, out)
+        self.assertIn("apply と cleanup は止まります", out)
+        self.assertEqual(list(real.iterdir()), [])
 
     def test_cleanup_stops_cleanly_when_rv_work_cannot_be_removed(self) -> None:
         # 消せないときは、 traceback でなく伏せた文で止まり、 流し直すと続きから片付ける（#123 の Reviewer A・B）
@@ -942,7 +973,7 @@ class SyncTest(unittest.TestCase):
         self.assertNotIn("Traceback", out)
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
-        self.assertEqual([p for p in (self.w.state / "w").iterdir()], [])
+        self.assertEqual([p for p in self.w.work.iterdir()], [])
 
     def _rv_work(self, alias: str) -> list:
         st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
@@ -954,7 +985,7 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 1)
         names = self._rv_work("pdm")
         self.assertEqual(len(names), 1)
-        work = self.w.state / "w" / names[0]
+        work = self.w.work / names[0]
         (work / "job-01").mkdir()
         (work / "job-01" / "step.log").write_text("伏せていない記録\n", encoding="utf-8")
         clone = self.w.state / "clones" / "pdm"
@@ -984,14 +1015,14 @@ class SyncTest(unittest.TestCase):
         pr["state"] = "CLOSED"
         outside = self.w.base / "outside"
         outside.mkdir()
-        (self.w.state / "w" / "link").symlink_to(outside)
+        (self.w.work / "link").symlink_to(outside)
         st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
         st["targets"]["pdm"]["rv_work"] += ["link", "../../outside"]
         self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
         self.assertIn("merge されずに閉じた（検査の作業の置き場を片付けた", out)
-        self.assertFalse((self.w.state / "w" / names[0]).exists())
+        self.assertFalse((self.w.work / names[0]).exists())
         self.assertTrue(outside.is_dir(), "リンクと 1 段でない名前はたどらない（今と同じ条件）")
         self.assertTrue(self.w.wt("pdm").exists())
         self.assertNotEqual(git("-C", clone, "branch", "--list", pr["head"]), "")
@@ -1008,7 +1039,7 @@ class SyncTest(unittest.TestCase):
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
         self.assertIn("まだ merge されていない", out)
-        self.assertTrue((self.w.state / "w" / names[0]).is_dir())
+        self.assertTrue((self.w.work / names[0]).is_dir())
         self.assertEqual(self._rv_work("pdm"), names)
 
     def test_one_repository_stopping_keeps_its_rv_work_and_others_go_on(self) -> None:
@@ -1020,7 +1051,7 @@ class SyncTest(unittest.TestCase):
             pr = self.w.db["prs"][f"{S.ORG}/{repo}"][0]
             pr.update(state="MERGED", headRefOid=self.w.remote_heads(repo)[f"refs/heads/{pr['head']}"])
         real = shutil.rmtree
-        stuck = self.w.state / "w" / names["pdm"][0]
+        stuck = self.w.work / names["pdm"][0]
 
         def rmtree(p, *a, **k):
             if Path(p) == stuck:
@@ -1038,7 +1069,7 @@ class SyncTest(unittest.TestCase):
         for a in ("dd", "c2"):
             self.assertNotIn("rv_work", st[a], a)
             self.assertIn("cleaned", st[a], a)
-            self.assertFalse((self.w.state / "w" / names[a][0]).exists(), a)
+            self.assertFalse((self.w.work / names[a][0]).exists(), a)
         code, out = self.w.main("cleanup", "--source", "97")
         self.assertEqual(code, 0, out)
         self.assertFalse(stuck.exists())
@@ -1060,12 +1091,12 @@ class SyncTest(unittest.TestCase):
                     code, out = self.w.main(cmd, "--source", "97", "--only", "pdm")
                     self.assertEqual(code, 2, out)
                     self.assertIn("同じ --source の apply か cleanup が流れています", out)
-            self.assertTrue((self.w.state / "w" / names[0]).is_dir())
+            self.assertTrue((self.w.work / names[0]).is_dir())
             self.assertEqual(self._rv_work("pdm"), names)
         # 放した後は流せる（main は返るときに錠を放すので、 続けて流せる）
         code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
-        self.assertFalse((self.w.state / "w" / names[0]).exists())
+        self.assertFalse((self.w.work / names[0]).exists())
         self.assertEqual(self.w.main("cleanup", "--source", "97", "--only", "pdm")[0], 0)
 
     def _lock_is_held(self) -> bool:
@@ -1116,15 +1147,90 @@ class SyncTest(unittest.TestCase):
                     self.assertEqual(code, 2, out)
                     self.assertIn("同じ --source の apply か cleanup が流れています", out)
 
-    def test_main_notes_a_long_state_dir(self) -> None:
-        with mock.patch.object(S, "STATE_DIR_MAX", 1):
-            code, out = self.w.main("plan")
+    def _merge_pdm(self) -> None:
+        pr = self.w.db["prs"][f"{S.ORG}/PDM"][0]
+        pr.update(state="MERGED", headRefOid=self.w.remote_heads("PDM")[f"refs/heads/{pr['head']}"])
+
+    def test_rv_work_is_under_the_work_dir_whatever_the_state_dir(self) -> None:
+        # 状態の置き場の道が長くても（#226 では 44 バイトで落ちた。 前の目安の 50 バイトも超える道にする）、
+        # 検査の作業の場所は、 状態の置き場と別の --work-dir の直下に短い名前で作り、 根と名前を状態に残す
+        self.w.state = self.w.base / ("state-" + "s" * 80)
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
         self.assertEqual(code, 0, out)
-        self.assertIn("Unix ソケットの道の上限", out)
-        # 試験の置き場の道の長さは、 流す所（検査の一時の場所など）で変わるので、 目安の側を決めて確かめる
-        with mock.patch.object(S, "STATE_DIR_MAX", 10 ** 6):
-            code, out = self.w.main("plan")
-        self.assertNotIn("Unix ソケットの道の上限", out)
+        (work,) = self.w.rv_works
+        self.assertNotIn(self.w.state, work.parents)
+        self.assertFalse((self.w.state / "w").exists(), "状態の置き場の中には作らない")
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        self.assertEqual(st["rv_work_root"], str(self.w.work))
+        self.assertEqual(st["targets"]["pdm"]["rv_work"], [work.name])
+
+    def test_a_long_work_dir_stops_apply_before_anything(self) -> None:
+        # 作業の置き場の道が長すぎるなら、 注意だけで済ませず、 状態の置き場・clone・Issue・検査の前に止まる（#226）
+        self.w.work = self.w.base / ("w" * 120)
+        code, out = self.w.main("apply", "--source", "97", real_limit=True)
+        self.assertEqual(code, 2, out)
+        self.assertIn("止まりました: 検査の作業の置き場（--work-dir）の道が長すぎます", out)
+        self.assertIn(f"上限（{S.SOCKET_PATH_MAX} バイト）", out)
+        self.assertEqual(self.w.rv_calls, [])
+        self.assertEqual(self.w.db["issues"], {})
+        self.assertFalse(self.w.state.exists())
+        self.assertFalse(self.w.work.exists())
+        # 検査を流さない plan は、 止まらずに注意を出す
+        code, out = self.w.main("plan", real_limit=True)
+        self.assertEqual(code, 0, out)
+        self.assertIn("apply は流す前に止まります", out)
+        self.assertFalse(self.w.work.exists())
+
+    def test_a_different_work_dir_stops_until_its_rv_work_is_cleaned(self) -> None:
+        # 同じ --source は、 片付けるまで同じ --work-dir で流す（違えば、 名前を忘れず、 何も消さずに止まる）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        names = self._rv_work("pdm")
+        first, self.w.work = self.w.work, self.w.base / "w2"
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 2, out)
+        self.assertIn(f"別の --work-dir（{first}）", out)
+        self._merge_pdm()
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 2, out)
+        self.assertIn(f"別の --work-dir（{first}）", out)
+        self.assertTrue((first / names[0]).is_dir())
+        self.assertEqual(self._rv_work("pdm"), names)
+        self.assertFalse(self.w.work.exists())
+        self.w.work = first
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertFalse((first / names[0]).exists())
+
+    def test_a_work_dir_that_is_not_a_dir_stops_that_repository_cleanly(self) -> None:
+        self.w.work.write_text("", encoding="utf-8")
+        code, out = self.w.main("apply", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 1, out)
+        self.assertIn("検査の作業の置き場（--work-dir）が dir ではありません", out)
+        self.assertNotIn("Traceback", out)
+        self.assertEqual(self.w.rv_calls, [])
+        self.assertNotIn(f"{S.ORG}/PDM", self.w.db["prs"])
+
+    def test_cleanup_removes_rv_work_left_in_the_state_dir_by_older_versions(self) -> None:
+        # #226 より前の版は、 作業の場所を状態の置き場の w/ の下に作り、 名前だけを状態に残した（置き場の根は残さない）。
+        # cleanup はそこも探して消す（リンクはたどらない）
+        self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm")[0], 0)
+        old = self.w.state / "w" / "abcd1234"
+        (old / "logs").mkdir(parents=True)
+        (old / "logs" / "step.log").write_text("伏せていない記録\n", encoding="utf-8")
+        outside = self.w.base / "outside"
+        outside.mkdir()
+        (self.w.state / "w" / "link").symlink_to(outside)
+        st = json.loads(self.w.state_file().read_text(encoding="utf-8"))
+        del st["rv_work_root"]
+        st["targets"]["pdm"]["rv_work"] = [old.name, "link"] + st["targets"]["pdm"]["rv_work"]
+        self.w.state_file().write_text(json.dumps(st), encoding="utf-8")
+        self._merge_pdm()
+        code, out = self.w.main("cleanup", "--source", "97", "--only", "pdm")
+        self.assertEqual(code, 0, out)
+        self.assertFalse(old.exists())
+        self.assertEqual(list(self.w.work.iterdir()), [])
+        self.assertTrue(outside.is_dir())
+        self.assertNotIn("rv_work", json.loads(self.w.state_file().read_text(encoding="utf-8"))["targets"]["pdm"])
 
     def test_cleanup_does_not_follow_odd_rv_work_names(self) -> None:
         # 状態に書かれた名前が 1 段の名前でなければ（../ など）、 消さない（#118）
@@ -1141,12 +1247,6 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(keep.exists())
         self.assertTrue(self.w.state.exists())
 
-    def test_a_long_state_dir_is_noted(self) -> None:
-        self.assertIsNone(S.long_state_dir_note(Path("/home/user/.cache/mirumeai/sync-copies")))
-        note = S.long_state_dir_note(Path("/home/user/" + "x" * 60 + "/sync-copies"))
-        self.assertIn("Unix ソケットの道の上限", note)
-        self.assertIn("--state-dir", note)
-
     def test_cleanup_without_state_stops(self) -> None:
         # 正本に入った --source でも、 状態が無ければ何を片付けるか分からないので止まる
         self.w.db["source_pr"]["98"] = dict(self.w.db["source_pr"]["97"])
@@ -1158,6 +1258,92 @@ class SyncTest(unittest.TestCase):
         code, out = self.w.main("plan", "--only", "zz")
         self.assertEqual(code, 2)
         self.assertIn("知らない別名", out)
+
+
+def pdm_socket(work: str) -> str:
+    """PDM の試験（追加の照合の群の試験）が作る Unix ソケットの道の形（道具の RV_SOCKET_TAIL と別に書く）。
+    検査の道具は job の一時の場所（TMPDIR）を <作業の場所>/job-NN/temp に作り、 試験は、 その下の tempfile の
+    dir（tmp と 8 字）に site_<名前>/<名前>/sub/s を作って bind する。"""
+    return f"{work}/job-01/temp/tmpabcd1234/site_fakepkg_stop2/fakepkg_stop2/sub/s"
+
+
+def nbytes(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+class SocketPathTest(unittest.TestCase):
+    """検査の作業の場所の下の、 PDM と同じ形の Unix ソケットの道が上限に収まるか（#226）。
+
+    道は文字列で照らす（試験の一時の場所の道の長さは、 流す所で変わる）。 道の頭は、 リンクの無い、 在らない dir にする。"""
+
+    def test_the_tool_accepts_a_work_dir_exactly_when_the_pdm_socket_fits(self) -> None:
+        seen = set()
+        for n in range(20, 60):
+            root = "/" + "r" * (n - 1)
+            fits = nbytes(pdm_socket(f"{root}/{'x' * S.RV_WORK_NAME_LEN}")) <= S.SOCKET_PATH_MAX
+            with self.subTest(n=n):
+                self.assertEqual(S.rv_work_too_long(Path(root)) is None, fits)
+            seen.add(fits)
+        self.assertEqual(seen, {True, False}, "境を跨いで照らす")
+        # 字の数でなくバイトで測る
+        root = "/" + "あ" * 13
+        self.assertGreater(nbytes(pdm_socket(f"{root}/xxxx")), S.SOCKET_PATH_MAX)
+        self.assertIsNotNone(S.rv_work_too_long(Path(root)))
+
+    def test_the_pdm_socket_fits_under_the_default_work_dir_whatever_the_state_dir(self) -> None:
+        rel = S.DEFAULT_WORK.relative_to(Path.home())
+        for home_len in (7, 15, 18, 20):
+            home = "/" + "h" * (home_len - 1)
+            # #226: 状態の置き場（既定の道）の下の w/<8 字> では、 ホームが 15 バイト（状態の置き場が 43 バイト）でも
+            # 上限を超えた
+            state = f"{home}/.cache/mirumeai/sync-copies"
+            self.assertGreater(nbytes(pdm_socket(f"{state}/w/abcd1234")), S.SOCKET_PATH_MAX)
+            # 既定の作業の置き場は状態の置き場と別の短い道で、 状態の置き場の道の長さによらず収まる
+            root = Path(home) / rel
+            with self.subTest(home_len=home_len):
+                self.assertIsNone(S.rv_work_too_long(root))
+                self.assertLessEqual(nbytes(pdm_socket(f"{root}/{'x' * S.RV_WORK_NAME_LEN}")), S.SOCKET_PATH_MAX)
+
+    def test_a_linked_work_dir_is_measured_where_it_points(self) -> None:
+        # 短いリンクでも、 たどった先の道が長ければ止まる（一時の場所の道を、 リンクをたどった形にして使う試験がある）
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            far = base / ("x" * 60)
+            far.mkdir()
+            link = base / "l"
+            link.symlink_to(far)
+            tail = nbytes(f"/{'x' * S.RV_WORK_NAME_LEN}{S.RV_SOCKET_TAIL}")
+            # リンクそのものの道なら収まる上限にして照らす（試験の一時の場所の道の長さは、 流す所で変わる）
+            with mock.patch.object(S, "SOCKET_PATH_MAX", nbytes(str(link)) + tail):
+                self.assertIsNone(S.rv_work_too_long(base / "m"), "リンクでない同じ長さの道は受ける")
+                self.assertIsNotNone(S.rv_work_too_long(link))
+
+    def test_make_rv_work_picks_another_name_when_taken(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "w"
+            root.mkdir()
+            (root / "aaaa").mkdir()
+            picks = iter("aaaa" + "bbbb")
+            with mock.patch.object(S.secrets, "choice", side_effect=lambda chars: next(picks)):
+                work = S.make_rv_work(root)
+            self.assertEqual(work, root / "bbbb")
+            self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
+            self.assertEqual(list(work.iterdir()), [])
+
+    def test_make_rv_work_is_owner_only_under_a_setgid_root_and_any_umask(self) -> None:
+        # 置き場に setgid があると、 新しい dir が受け継ぐ（umask が緩いと group と others の権限も付く）
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "w"
+            root.mkdir()
+            os.chmod(root, 0o2775)
+            if not stat.S_IMODE(root.stat().st_mode) & stat.S_ISGID:
+                self.skipTest("この場所では dir に setgid を付けられない")
+            old = os.umask(0)
+            try:
+                work = S.make_rv_work(root)
+            finally:
+                os.umask(old)
+            self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
 
 
 class GuardCasesTest(unittest.TestCase):

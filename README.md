@@ -35,6 +35,8 @@ python3 <この Repository の clone>/scripts/ci/run_required_verification.py \
 
 - PASS のときに出る記録の行（`GitHub Actions unavailable — canonical verification PASS（…）`）を、そのまま PR に書きます。「基準を含む: いいえ」なら main を取り込んで流し直し、飛ばした試験が 0 でなければ理由を確かめます
 - 終了コードは 0 が PASS、1 が FAIL、2 が流せない（知らない書き方・Python の版が無いなど）です。`--list` は流す段を出すだけです
+- 同じ利用者の検査は重ねません。ほかの検査が流れていれば、その Repository（別の顧客 Repository なら名前を出さない）・head・始めた時刻を出して終わるまで待ちます（`--no-wait` なら待たずに終了コード 2）。同時に流す job の数は、待ち終えた後に決めます。止めたときと落ちたときも、ロックは残りません
+- 同時に流す job の数（`--jobs`）は、渡さなければ機械に合わせて決め、数と根拠を出します（使える CPU の数 − 2 と、空きメモリ ÷ 2 GiB の小さい方）
 - **PR のコードを手元で動かします。** 中身を読んでから流してください。仮の HOME と環境変数の取り除きは、悪意のあるコードを閉じ込める箱ではありません
 
 ## 門の記録と頼みの文（`gate_record.py`）

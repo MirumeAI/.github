@@ -8,7 +8,7 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 これまでの検査は一時の script で組んでいて、 共有されないまま消えた。
 
     python3 <.github の clone>/scripts/ci/run_required_verification.py <検査する Repository の clone>
-        [--head <commit>] [--base origin/main] [--python 3.10=<道>] [--jobs 3] [--list] [--keep]
+        [--head <commit>] [--base origin/main] [--python 3.10=<道>] [--jobs N] [--no-wait] [--list] [--keep]
 
 すること:
 
@@ -17,8 +17,21 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     変更のファイルは、 `--base` と head の merge-base からの差）
   ・job を `needs` の順に、 段を書いた順に流す。 段が落ちたら、 その job の
     残りは `if: always()` などの段だけを流す（CI と同じ）
-  ・`needs` を満たした job は、 `--jobs`（既定 3）まで同時に流す（GitHub も、 待ち合わせの無い job は
+  ・**同じ利用者の検査を重ねない**（#219）。 job を流す前に、 利用者の cache の置き場
+    （`XDG_CACHE_HOME` か `~/.cache` の下の `mirumeai/`）のロックを取る。 取れなければ、 ロックを持つ
+    検査（Repository・head・始めた時刻。 別の顧客 Repository と GitHub の外の clone は名前を出さない）を
+    出して、 終わるまで待つ。 `--no-wait` なら待たずに止める
+    （終了コード 2）。 ロックは `flock` で、 道具が終われば（止められた・落ちたときも）OS が外す。
+    重ねると、 どの検査も CPU を取り合って 3〜4 倍遅くなった。 `--list` と、 流す前に止まるときは取らない。
+    置き場は環境変数 `MIRUME_RV_LOCK_DIR` で変えられる（試験用。 変えると、 ほかの検査と重なる）
+  ・`needs` を満たした job は、 `--jobs` まで同時に流す（GitHub も、 待ち合わせの無い job は
     別の機械で同時に流す。 1 つずつ流すと、 変異の表を分けた job の時間が足し算になった。 #149）。
+    `--jobs` を渡さないときは、 この機械に合わせて決める（#219）: 使える CPU の数 − 2 と、 空きメモリ
+    （`/proc/meminfo` の MemAvailable。 読めなければ CPU だけで決める）÷ 1 job の見込み の小さい方で、
+    1 以上・plan の job の数まで。 決めた数と根拠を出す（記録の行には出さない）。 数は、 ほかの検査の
+    終わりを待った後（ロックを取った後）に決める。 開発の機械は共有なので、 使い切らずにほかの処理の分を
+    残す考え方: CPU は 2 つをほかの処理に残す。 メモリは始める時の空き（ほかの処理が使っている分は入らない）
+    を 1 job の見込みで割るだけで、 後でほかの処理が使う分までは残さない。 見込みの 2 GiB は実測していない。
     結果は plan の順に出す。 `--jobs 1` は 1 つずつ。 job ごとの `concurrency` がある workflow も、 1 つずつ
     流す（GitHub は同じ組の job を同時に流さない。 組は照らさない）。 同時に流すときは、 計算の部品の
     スレッドの数を「CPU の数 ÷ 同時に流す数」に絞る（どの job も CPU の数だけスレッドを立てて取り合い、
@@ -38,7 +51,7 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 結果は段ごとの終了コード・試験の件数・飛ばした試験の件数で、 PASS のときは
 PR に書く記録の行を出す。 記録の行には、 head が基準を含むか・正本の ref・
 流した道具の版（正本と同じか）も入れる。 終了コード: 0 PASS ／ 1 FAIL ／
-2 流せない（書き方・Python の版・引数・対象の workflow が無い）。
+2 流せない（書き方・Python の版・引数・対象の workflow が無い・`--no-wait` でほかの検査が流れている）。
 
 **PR のコードを手元で動かす。** 中身を読んでから流す。 仮の HOME と環境変数の
 取り除きは、 手元の設定や認証を**うっかり**使わせないためのもので、 同じ OS の
@@ -48,6 +61,7 @@ PR に書く記録の行を出す。 記録の行には、 head が基準を含�
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -77,6 +91,16 @@ RECORD_PASS = "GitHub Actions unavailable — canonical verification PASS"
 #: job を同時に流すときに絞る、 計算の部品のスレッドの数の環境変数（#149）
 THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
               "OPENCV_FOR_THREADS_NUM")
+#: `--jobs` の既定で、 job に使わずに残す CPU の数（道具・ほかの処理の分。 #219）
+SPARE_CPUS = 2
+#: `--jobs` の既定で、 同時に流す job 1 つに見込むメモリ（job ごとに venv を作って試験を流す。 #219）。
+#: **実測していない見込み**。 測ったら直す
+JOB_MEMORY = 2 * 1024 ** 3
+#: 同じ利用者の検査を重ねないロック（#219）。 置き場を変える環境変数（試験用）とファイルの名前
+LOCK_ENV = "MIRUME_RV_LOCK_DIR"
+LOCK_NAME = "required-verification.lock"
+#: ロックを待つ間に、 取れるかを確かめ直す間（秒）
+LOCK_POLL = 1.0
 
 #: 出力の行を崩しうる字の種類（制御・書式・行の区切り・段落の区切り。 U+0085 は Cc）。
 #: 名前にあると、 出力に記録の行に似た独立した行を作れる・文字の向きを変えて見せかけを作れる（#77）
@@ -815,6 +839,150 @@ def _cpus() -> int:
     return os.cpu_count() or 1
 
 
+def _available_memory(meminfo: Path = Path("/proc/meminfo")) -> int | None:
+    """空きメモリのバイト数（`/proc/meminfo` の MemAvailable）。 読めない環境（Linux でないなど）では None。"""
+    try:
+        with open(meminfo, encoding="ascii", errors="replace") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    value, unit = line.split()[1:3]
+                    if unit != "kB":
+                        return None
+                    return int(value) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _default_jobs(n_jobs: int) -> tuple:
+    """`--jobs` を渡さないときの、 同時に流す job の数と根拠の文（#219）。
+
+    使える CPU の数 − SPARE_CPUS と、 空きメモリ ÷ JOB_MEMORY の小さい方。 1 以上で、 plan の job の数まで。
+    変異の確かめの job はそれぞれほぼ 1 コアで動くので、 CPU の数に近いほど速いと見込む（時間は測っていない）。
+    メモリが読めなければ CPU だけで決める。 共有の機械なので、 CPU は SPARE_CPUS をほかの処理に残す。
+    """
+    cpus = _cpus()
+    by_cpu = cpus - SPARE_CPUS
+    why = f"使える CPU {cpus} − {SPARE_CPUS} = {by_cpu}"
+    n = by_cpu
+    mem = _available_memory()
+    if mem is None:
+        why += "・空きメモリは読めない"
+    else:
+        by_mem = mem // JOB_MEMORY
+        why += f"・空きメモリ {mem / 1024 ** 3:.1f} GiB ÷ {JOB_MEMORY / 1024 ** 3:g} GiB = {by_mem} の小さい方"
+        n = min(n, by_mem)
+    return max(1, min(n, n_jobs)), why
+
+
+def _lock_path() -> Path:
+    """同じ利用者の検査を重ねないロックのファイル（#219）。 利用者の cache の置き場の下。"""
+    d = os.environ.get(LOCK_ENV)
+    if d:
+        return Path(d) / LOCK_NAME
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "mirumeai" / LOCK_NAME
+
+
+_HEX40 = re.compile(r"[0-9a-f]{40}")
+
+
+def _holder_repo(repo: str, own: str) -> str:
+    """ロックを持つ検査の Repository を、 今の検査の画面と記録に出す形（#219）。
+
+    **別の顧客の顧客 Repository の名前を出さない**（同じ利用者が別の顧客の検査を流すと、 ある顧客の検査の記録に
+    載る）。 名前を出すのは、 今の検査と同じ Repository か、 GitHub の Repository で `customer-` で始まらないとき
+    だけ。 GitHub の外の clone（`local/<フォルダの名前>`）は、 フォルダの名前に何が入るか分からないので出さない。
+    どれも head・始めた時刻・process で見分けられる。"""
+    if repo == own:
+        return _show(repo[:100])
+    if repo.startswith("local/"):
+        return "手元の clone"
+    if repo.rsplit("/", 1)[-1].lower().startswith("customer-"):
+        return "顧客 Repository"
+    return _show(repo[:100])
+
+
+def _holder(fd: int, own: str) -> str:
+    """ロックを持つ検査の記録（Repository・head・始めた時刻・process）を、 出す形にする。
+    **記録は同じ利用者のほかの process が書いたもの**なので、 形を確かめ、 行を崩しうる字を escape し、 長さを切る。
+    道（clone・作業の場所・ロックの置き場）は書かせず、 出さない。 Repository の名前は `_holder_repo` の形で出す。"""
+    try:
+        raw = os.pread(fd, 4096, 0)
+        d = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError):
+        return "ロックを持つ検査の記録を読めません"
+    if not isinstance(d, dict):
+        return "ロックを持つ検査の記録を読めません"
+    repo = d.get("repository")
+    head = d.get("head")
+    started = d.get("started")
+    pid = d.get("pid")
+    parts = [_holder_repo(repo, own) if isinstance(repo, str) and repo else "Repository は不明"]
+    parts.append(f"head {head[:12]}" if isinstance(head, str) and _HEX40.fullmatch(head) else "head は不明")
+    parts.append(f"{started} に始めた" if isinstance(started, str)
+                 and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", started) else "始めた時刻は不明")
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        parts.append(f"process {pid}")
+    return "・".join(parts)
+
+
+def _take_lock(state: dict, info: dict, wait: bool) -> bool:
+    """同じ利用者の検査を重ねないロックを取る（#219）。 取れたら True、 `wait` が偽で取れなければ False。
+
+    **flock なので、 道具が終われば（止められた・落ちたときも）OS が外す。** ファイルが残っても、 ロックは残らない。
+    開いた fd はすぐ `state["lock"]` に置き、 main の終わりで閉じる（待つ途中で止められても漏らさない）。
+    段の process には渡らない（Python の fd は既定で子に渡らず、 Popen も閉じる）。
+    待つ間は、 持ち主が変わるたびに何を待っているかを出す。
+    **取ったら中身を書き換えるので、 symlink は辿らず、 この利用者だけの普通のファイル（ほかの名前とつながって
+    いない）でなければ使わない**（置いた symlink・hard link の先のファイルを切り詰めない）。"""
+    path = _lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+    state["lock"] = fd
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_nlink != 1:
+        raise OSError("ロックのファイルが、 この利用者だけの普通のファイルではありません")
+    if stat.S_IMODE(st.st_mode) != 0o600:
+        os.fchmod(fd, 0o600)
+    shown, t0 = None, time.monotonic()
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            pass
+        who = _holder(fd, info["repository"])
+        if not wait:
+            print(f"流せません: 同じ利用者の別の検査が流れています（{who}）。 --no-wait なので待たずに止めます",
+                  file=sys.stderr)
+            return False
+        if who != shown:
+            print(f"同じ利用者の別の検査が流れているので、 終わるまで待ちます（{who}）。"
+                  " 待たずに止めるには --no-wait", flush=True)
+            shown = who
+        time.sleep(LOCK_POLL)
+    state["locked"] = True
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, json.dumps(info, ensure_ascii=False).encode("utf-8", "backslashreplace"), 0)
+    if shown is not None:
+        print(f"待ち終えました（{time.monotonic() - t0:.0f} 秒）", flush=True)
+    return True
+
+
+def _release_lock(state: dict) -> None:
+    """ロックを外す（fd を閉じる）。 持っていたときだけ、 持ち主の記録を消す（待つ途中なら、 持ち主の記録を消さない）。"""
+    fd = state.pop("lock", None)
+    if fd is None:
+        return
+    try:
+        if state.pop("locked", False):
+            os.ftruncate(fd, 0)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _kill_group(pgid: int) -> None:
     """段の process の組を止める。 **段が終わった後も、 後ろで動く子を残さない**
     （GitHub の runner も job の終わりに止める）。 setsid で抜けたものは止められない。"""
@@ -1026,6 +1194,8 @@ def main(argv: list | None = None) -> int:
             return 1
         print(f"流せません（道具の中の誤り）: {why}", file=sys.stderr)
         return 2
+    finally:
+        _release_lock(state)            # どの終わり方でも外す（process が終われば OS も外す。 #219）
 
 
 def _main(argv: list | None, state: dict) -> int:
@@ -1038,13 +1208,16 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--python", action="append", default=[], metavar="版=道",
                     help="workflow の Python の版の interpreter（既定は PATH の python<版>）")
     ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir）")
-    ap.add_argument("--jobs", type=int, default=3, metavar="N",
-                    help="needs を満たした job を同時に流す数の上限（既定 3。 1 なら 1 つずつ）")
+    ap.add_argument("--jobs", type=int, default=None, metavar="N",
+                    help=f"needs を満たした job を同時に流す数の上限（既定は使える CPU の数 − {SPARE_CPUS} と 空きメモリ ÷ "
+                         f"{JOB_MEMORY / 1024 ** 3:g} GiB の小さい方。 1 なら 1 つずつ）")
+    ap.add_argument("--no-wait", action="store_true",
+                    help="同じ利用者の別の検査が流れていれば、 終わるのを待たずに止める（終了コード 2）")
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
     _STOP.clear()
-    if a.jobs < 1:
+    if a.jobs is not None and a.jobs < 1:
         print("流せません: --jobs は 1 以上にしてください", file=sys.stderr)
         return 2
     _bootstrap_yaml()
@@ -1094,22 +1267,32 @@ def _main(argv: list | None, state: dict) -> int:
     print(f"head: {a.head_sha}（{base_note}）")
     print(f"{canon_note}・{tool_note}")
     print(f"変更のファイル: {len(changed)}（merge-base {merge_base[:12]}）")
-    if a.jobs > 1 and any("concurrency" in j["spec"] for j in jobs):
-        # GitHub は同じ組（concurrency）の job を同時に流さない。 組を照らさずに、 全部を 1 つずつ流す（#149 の B）
-        a.jobs = 1
-        print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
-    together = min(a.jobs, len(jobs))
-    a.thread_env = {}
-    if together > 1:
-        per_job = max(1, _cpus() // together)
-        a.thread_env = {name: str(per_job) for name in THREAD_ENV}
-        print(f"job を同時に {together} つまで流すので、 計算の部品のスレッドを job ごとに {per_job} に絞ります")
+
+    def decide_jobs() -> None:
+        """同時に流す job の数と、 計算の部品のスレッドの絞り方を決める。 **流すときは、 ロックを取った後に決める**
+        （ほかの検査の終わりを待つ間に、 空きメモリが変わる。 #219）。"""
+        if a.jobs is None:
+            # この機械に合わせて決める（#219）。 決めた数と根拠を出す（記録の行には出さない）
+            a.jobs, why = _default_jobs(len(jobs))
+            print(f"同時に流す job の数: {a.jobs}（--jobs の既定。 {why}。 plan の job {len(jobs)}）")
+        if a.jobs > 1 and any("concurrency" in j["spec"] for j in jobs):
+            # GitHub は同じ組（concurrency）の job を同時に流さない。 組を照らさずに、 全部を 1 つずつ流す（#149 の B）
+            a.jobs = 1
+            print("注意: job ごとの concurrency があるので、 job を 1 つずつ流します")
+        together = min(a.jobs, len(jobs))
+        a.thread_env = {}
+        if together > 1:
+            per_job = max(1, _cpus() // together)
+            a.thread_env = {name: str(per_job) for name in THREAD_ENV}
+            print(f"job を同時に {together} つまで流すので、 計算の部品のスレッドを job ごとに {per_job} に絞ります")
+
     if not has_base:
         print(f"注意: head は {a.base} の先を含みません。 GitHub の pull_request は main と合わせた commit で流すので、"
               " merge の前に main を取り込んで流し直してください")
     for wf, why in plan.skipped:
         print(f"対象外: {_show(wf)}（{_show(why)}）")
     if a.list:
+        decide_jobs()                   # 今の機械で決めた数を出す（流すときは、 ロックを取った後に決め直す）
         for j in jobs:
             print(f"  {_show(j['workflow'])} の job {_show(j['name'])}: 段 {len(j['spec']['steps'])}"
                   + (f"・needs {', '.join(_show(n) for n in j['needs'])}" if j["needs"] else ""))
@@ -1118,6 +1301,30 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
         print(f"流せません: --work の {a.work} が空ではありません（前の結果と混ぜない）", file=sys.stderr)
         return 2
+    # 同じ利用者の検査を重ねない（#219）。 待つ間の Ctrl-C・SIGTERM でも、 traceback を出さずに止まる
+    stopped = {}
+
+    def stop_waiting(signum, _frame):
+        stopped["got"] = signum
+        raise KeyboardInterrupt
+
+    old_term, old_int = signal.signal(signal.SIGTERM, stop_waiting), signal.signal(signal.SIGINT, stop_waiting)
+    try:
+        info = {"repository": a.target_slug, "head": a.head_sha, "pid": os.getpid(),
+                "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if not _take_lock(state, info, wait=not a.no_wait):
+            return 2
+    except KeyboardInterrupt:
+        print("\n止めました（job を流す前。 何も流していません）", file=sys.stderr)
+        return 128 + stopped.get("got", signal.SIGINT)
+    except OSError as e:
+        print(f"流せません: 同じ利用者の検査を重ねないロックを取れません（{_show(e.strerror or e)}。"
+              f" 置き場は利用者の cache の下の mirumeai/{LOCK_NAME}）", file=sys.stderr)
+        return 2
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        signal.signal(signal.SIGINT, old_int)
+    decide_jobs()
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="mirume-rv-"))
     work.mkdir(parents=True, exist_ok=True)
     logs = work / "logs"

@@ -33,7 +33,7 @@ argument-hint: [顧客要求の内容]
             └─ NO  → Architecture Review
 ```
 
-`Plugin・Adapter` 候補の差し込む仕組みは、Python の entry points の群にそろえると決めた（development-docs#392）。今ある群は PDM の追加の照合 `mirumeai_pdm.extra_checks` と切り出しの方式 `mirumeai_pdm.extract_methods` の 2 つで、撮像側には無い。群の名前と部品の形は各 Core の `docs/public_api.md` に書く。群を足すときは、具体の要求で Architecture Review をする。差し込む部品は、顧客 Repository の製品のパッケージ（新しい形の `src/`）に置く。
+`Plugin・Adapter` 候補の差し込む仕組みは、Python の entry points の群にそろえると決めた（development-docs#392）。今ある群は PDM の追加の照合 `mirumeai_pdm.extra_checks`・切り出しの方式 `mirumeai_pdm.extract_methods`・製品の画面と API `mirumeai_pdm.web_extensions`（PDM の Web アプリに門番の内側で足す。MirumeAI/PDM#815）の 3 つで、撮像側には無い。群の名前と部品の形は各 Core の `docs/public_api.md` に書く。群を足すときは、具体の要求で Architecture Review をする。差し込む部品は、顧客 Repository の製品のパッケージ（新しい形の `src/`）に置く。
 
 製品アプリ（起動・製品画面・API・Adapter）は顧客 Repository に置き、両 Core の `docs/public_api.md` の公開の面と入口だけを使う。Core の内部は、公開の面や入口ができた後も直に import しない（development-docs の `03_customer_development/customer_specific_development.md` の「顧客 Repository での開発」「Core の入口」）。
 

@@ -12,6 +12,8 @@ allowed-tools: Bash(git switch:*), Bash(git pull:*), Bash(git status:*), Bash(gi
 
 ## 手順
 
+開発サーバの常時起動の組の venv が editable で読む物（案件のフォルダの顧客 Repository の checkout と、`.venvs/src/` の Core の作業ツリー。読むかを確かめていないときは読む物として扱う）でこの手順を流すときは、始める前に、development-docs の `04_environment/inspection_system_operation.md`（案件とポートの対応表の後）の決まりのとおり人に聞く。この手順（手順 4 の扱いと手順 5 の命令）は、流した clone の checkout を動かすため。
+
 1. Issue 番号が指定されていなければ、作成せずに番号を尋ねる。
 2. Issue の種別に応じて prefix を決める。不明なら尋ねる。
    - Feature → `feature/` / Bug → `fix/` / Experiment → `experiment/`

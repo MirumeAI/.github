@@ -25,6 +25,8 @@ git pull origin main
 git switch -c <prefix>/<Issue番号>-<短い説明>
 ```
 
+この 3 つの命令は、流した clone の checkout を動かす。開発サーバの常時起動の組の venv が editable で読む checkout（案件のフォルダの顧客 Repository の clone）で流すときは、先に development-docs の `04_environment/inspection_system_operation.md`（案件とポートの対応表の後）の決まりのとおり、人に聞く。
+
 例: `feature/42-camera-reconnect` / `fix/51-login-error` / `experiment/73-patchcore-backbone`
 
 ## 注意

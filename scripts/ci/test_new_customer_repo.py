@@ -535,6 +535,14 @@ class TheFirstContentTest(unittest.TestCase):
         readme = (ROOT / N.TEMPLATE / "README.md").read_text(encoding="utf-8")
         self.assertIn("scripts/ci/new_customer_repo.py", readme)
 
+    def test_the_template_readme_follows_the_common_form(self) -> None:
+        """雛形の README は、 どの事業でも同じ見出しの並び（development-docs の「README の書式」の
+        顧客 Repository の型）で、 60 行に収まる（#233）。 事業に依る所は「仕組み」と「構成」に寄せる。"""
+        readme = (ROOT / N.TEMPLATE / "README.md").read_text(encoding="utf-8")
+        heads = [line[3:].strip() for line in readme.splitlines() if line.startswith("## ")]
+        self.assertEqual(heads, ["目的", "仕組み", "構成", "始め方", "詳しい文書"])
+        self.assertLessEqual(len(readme.splitlines()), 60)
+
 
 class ItPassesTheFirstCITest(unittest.TestCase):
     """**作った中身が、 新しい Repository の最初の CI を通ること。**

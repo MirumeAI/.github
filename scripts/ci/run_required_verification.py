@@ -45,7 +45,7 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     で流す。** 元の clone と HOME は変えない（pip と Playwright の cache だけ共有）。
     これらを置く作業の場所（`--work`。 既定は一時の dir）は、 本人だけが読める形にする（#231）: 無ければ
     700 で作る。 既にある場所は、 この利用者の空の dir で、 グループと others の権限が無いときだけ使い、
-    そうでなければ権限を変えずに止める（終了コード 2）。 ロックを待つ間に同じ道へ現れた物も、 作るときに照らし直す
+    そうでなければ権限を変えずに止める（終了コード 2）。 ロックを待つ間に同じ道へ現れた物も、 作るときに照らし直す。
     環境変数は、 決めた名前だけを渡す（token・ssh の agent・git の設定などは渡さない）。
     段が終わったら、 後ろで動き続ける子の process も止める
   ・**知らない書き方は、 流す前に止める。** 知らない action・式・値・matrix・
@@ -1260,6 +1260,8 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
+    if a.work:
+        a.work = os.path.abspath(a.work)  # 段は clone の中で流すので、 相対の道は今の dir から決めておく
     _STOP.clear()
     if a.jobs is not None and a.jobs < 1:
         print("流せません: --jobs は 1 以上にしてください", file=sys.stderr)

@@ -20,9 +20,13 @@ Verification の出力は Pull Request の merge の後に消してよい、 git
      記録は `run_required_verification.py` の出力で、 頭の `===== Required Verification: <owner/repo>` と次の行の
      `head: <40 桁>` から、 その commit に結び付いた Pull Request と state・今の head を GitHub に問う
      （`gh api --method GET repos/<owner>/<repo>/commits/<head>/pulls`。 読むだけ）。
-     消せるのは、 結び付いた Pull Request がどれも merge か close されたか、 開いていても今の head が記録の
-     head でない記録だけ。 Pull Request が見つからない（push していない head など）・gh が使えない・頭が
-     読めない（頭が 1 つでない・GitHub の Repository でない）記録は、 理由を出して残す（安全な側）。
+     消せるのは、 結び付いた Pull Request がどれも merge 済みか、 開いていても今の head が記録の head でない
+     記録だけ（**merge された Pull Request の記録と、 開いた Pull Request の古い head の記録**）。 merge せずに
+     閉じた Pull Request の head には、 GitHub がこの問いで Pull Request を返さない（実物で確かめた。 答えは空）
+     ので、 閉じただけの記録は「Pull Request が見つからない」として残る（消すとは約束しない。 返ってきても消さない）。
+     Pull Request が見つからない（push していない head・閉じただけの Pull Request など）・gh が使えない・gh の答えの
+     形が違う（Repository・state・番号・開いた Pull Request の head）・頭が読めない（頭が 1 つでない・GitHub の Repository でない）
+     記録は、 理由を出して残す（安全な側）。
      この利用者の Required Verification の道具が流れている間（流れているか分からないときも）は、 終わりの行
      （`段ごとの記録: …` か、 包みが足す `rc=<数>`）の無い記録を残す（書き途中の記録を消さない）
   2. **作業の場所**。 消す記録が名指しする作業の場所（`段ごとの記録: <道>/logs` の `<道>`）は、 利用者の cache の
@@ -40,12 +44,23 @@ Verification の出力は Pull Request の merge の後に消してよい、 git
 **消すのは、 `.cache/rv-logs/` の直下の、 この利用者の普通のファイル（symlink でない）と、 上の 2 の条件の作業の
 場所だけ。** 作業ルート（`*_data`）・`.venvs`・`config`・`weights`・`wheelhouse`・clone など、 `.cache/` の外の物には
 触れない（作業の場所のほか）。 `.cache/` か `rv-logs/` が symlink なら、 その中を見ない。 消す直前に、 見たときと
-同じ物か（symlink でない・持ち主・inode）を確かめ直す。 作業の場所が消せなければ、 その記録も残す（次に流し直せる）。
+同じ物か（symlink でない・持ち主・inode。 作業の場所は上の 2 の条件も）を確かめ直し、 違えばその物を消さずに
+誤りにする（終了コード 1）。 作業の場所の中に、 本人が入れない dir（持ち主の読みか入りの権限が無い。 mode 000・300
+など）・ほかの利用者の dir・別の file system があれば、 中を何も消さずに、 作業の場所と記録を残して誤りにする
+（権限を直してから流し直す）。 作業の場所が消せなければ、 その記録も残す（次に流し直せる）。 誤りがあっても、
+ほかの記録は続けて扱う。 消し終えたことを確かめた物だけを、 消した数に数える。
 
 利用者の cache は `XDG_CACHE_HOME`（無ければ `~/.cache`）。 `run_required_verification.py` のロックの置き場と同じ。
 
-出力に Repository の名前は出さない（顧客 Repository の名前が入る）。 記録のファイルの名前・head・Pull Request の
-番号だけを出す。 gh の誤りの文もそのまま出さない（道に Repository の名前が入る）。
+出力に出す物と出さない物。 **出力には記録のファイルの名前と `.cache/` の下の名前が出るので、 GitHub（Issue・
+Pull Request・コメント・commit の文）にそのまま写さない**（写すのは数だけにする）。
+
+  ・出す: 記録のファイルの名前（案件の包みは Repository の短い名前から付けるので、 顧客 Repository の短い名前が
+    入りうる）・head の 12 桁・Pull Request の番号・`.cache/` の下の名前と道（案件のフォルダからの相対。 中の
+    clone・仮想環境の道も）・作業の場所と共通の cache の置き場（利用者の cache からの相対）・大きさとファイルの数
+  ・出さない: 案件のフォルダの道（「案件のフォルダ」とだけ書く）・利用者の cache の道（`XDG_CACHE_HOME` か
+    `~/.cache` とだけ書く）・記録の頭の Repository の名前（`owner/repo`）・gh の誤りの文（道に Repository の名前が
+    入る）・決まった置き場の外の作業の場所の道（記録の終わりの行を見る）・OS の誤りに付く道
 
 終了コード: 0 見るだけ・消し終えた（消せる物が無いときも） ／ 1 消す途中の誤り ／ 2 案件のフォルダが無い・引数の誤り。
 
@@ -177,10 +192,13 @@ def _read_nofollow(p: Path, limit: int) -> "bytes | None":
         fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except OSError:
         return None
-    with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            return None
-        data = f.read(limit + 1)
+    try:
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
+            data = f.read(limit + 1)
+    except OSError:
+        return None
     return None if len(data) > limit else data
 
 
@@ -232,7 +250,7 @@ class GitHub:
         except subprocess.TimeoutExpired:
             return None, f"gh が {GH_TIMEOUT} 秒で答えない"
         except OSError as e:
-            self.broken = f"gh が使えない（{_show(e.strerror or e)}）"
+            self.broken = f"gh が使えない（{_why(e)}）"
             return None, self.broken
         if p.returncode:
             # 誤りの文は出さない（道に Repository の名前が入る）。 種類だけにする
@@ -254,30 +272,44 @@ class GitHub:
         return data, ""
 
 
+def _dig(d, *keys):
+    """入れ子の dict から値を取る（途中が dict でなければ None）。"""
+    for k in keys:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
 def decide(slug: str, sha: str, pulls: list) -> "tuple[bool, str]":
-    """記録を消してよいか（と理由）。 結び付いた Pull Request がどれも merge か close されたか、
-    開いていても今の head が記録の head でないときだけ消してよい。"""
+    """記録を消してよいか（と理由）。 結び付いた Pull Request がどれも merge 済みか、 開いていても今の head が
+    記録の head でないときだけ消してよい。 答えの形が違えば（Repository が読めない・state が open・closed の
+    ほか・番号が数でない・開いた Pull Request の head が 40 桁の小文字の 16 進でない）消さない。 merge せずに
+    閉じた Pull Request は、 GitHub はふつう返さないが、 返っても消さない。"""
     prs = []
     for p in pulls:
         if not isinstance(p, dict):
             return False, "gh の答えが読めない"
-        base = ((p.get("base") or {}).get("repo") or {}).get("full_name")
-        if base is not None and str(base).lower() != slug.lower():
+        base = _dig(p, "base", "repo", "full_name")
+        if not isinstance(base, str):
+            return False, "gh の答えが読めない（Pull Request の Repository）"
+        if base.lower() != slug.lower():
             continue                    # 別の Repository の Pull Request
-        num, state, head = p.get("number"), p.get("state"), (p.get("head") or {}).get("sha")
+        num, state, head = p.get("number"), p.get("state"), _dig(p, "head", "sha")
         if not isinstance(num, int) or isinstance(num, bool) or state not in ("open", "closed"):
-            return False, "gh の答えが読めない"
+            return False, "gh の答えが読めない（Pull Request の番号か state）"
         if state == "open" and not (isinstance(head, str) and SHA.fullmatch(head)):
             return False, "gh の答えが読めない（開いた Pull Request の head）"
         prs.append((num, state, bool(p.get("merged_at")), head))
     if not prs:
         return False, "Pull Request が見つからない"
-    for num, state, _, head in prs:
+    for num, state, merged, head in prs:
         if state == "open" and head == sha:
             return False, f"Pull Request #{num} の今の head（開いている）"
-    why = [f"#{num} は merge 済み" if state == "closed" and merged else
-           f"#{num} は merge せずに閉じた" if state == "closed" else
-           f"#{num} の今の head は別（{head[:12]}）" for num, state, merged, head in prs]
+        if state == "closed" and not merged:
+            return False, f"Pull Request #{num} は merge せずに閉じた（閉じただけの記録は消さない）"
+    why = [f"#{num} は merge 済み" if state == "closed" else f"#{num} の今の head は別（{head[:12]}）"
+           for num, state, merged, head in prs]
     return True, "Pull Request " + "・".join(why)
 
 
@@ -377,7 +409,7 @@ def scan_logs(rv: Path, gh: GitHub, running: "bool | None", roots: list, out: "O
         with os.scandir(rv) as it:
             entries = {e.name: e for e in it}
     except OSError as e:
-        out.notice.append(f".cache/{RV_LOGS}/ を読めない（{_show(e.strerror or e)}）")
+        out.notice.append(f".cache/{RV_LOGS}/ を読めない（{_why(e)}）")
         return []
     records, used = [], set()
     for name in sorted(entries):
@@ -430,7 +462,7 @@ def scan_logs(rv: Path, gh: GitHub, running: "bool | None", roots: list, out: "O
             continue                    # 上の記録と一緒に消す
         if p is None:
             if why:
-                out.notice.append(f"{_show(r.name)} の作業の場所 {_show(r.work_text)} は消さない（{why}）")
+                out.notice.append(f"{_show(r.name)} の作業の場所（{out.where(r.work_text)}）は消さない（{why}）")
             continue
         taken.add(key(str(p)))
         r.work, r.work_st = p, st
@@ -508,7 +540,7 @@ def scan_cache(cache: Path, known: set, out: "Out") -> None:
         with os.scandir(cache) as it:
             entries = sorted(it, key=lambda e: e.name)
     except OSError as e:
-        out.notice.append(f".cache/ を読めない（{_show(e.strerror or e)}）")
+        out.notice.append(f".cache/ を読めない（{_why(e)}）")
         return
     for e in entries:
         top = f".cache/{e.name}"
@@ -555,18 +587,54 @@ def scan_shared(user_cache: Path, out: "Out") -> None:
 
 
 # ------------------------------------------------------------------ 消す
-def _rmtree(path: Path) -> None:
-    """dir を消す（symlink は辿らない）。 書けない dir は、 その dir の中だけ権限を足して消す。"""
-    top = str(path)
+def blocked(top: Path) -> str:
+    """作業の場所の中に、 消す途中で止まりうる物があれば、 その場所（作業の場所の直下の名前まで。 その下の
+    clone の中の道には案件の名前が入りうるので出さない）と理由。 無ければ ""。
 
-    def force(func, p, _exc):
+    本人が入れない dir（持ち主の読みか入りの権限が無い。 mode 000・300 など）・ほかの利用者の dir・別の file system
+    （中を消すと、 ほかの置き場の物を消す）。 **消し始める前に照らし、 当たれば何も消さない**（途中まで消すと、
+    中の `logs/summary.json` を失って、 次に流しても消せなくなる）。 symlink は辿らない。"""
+    st = _lstat(top)
+    if st is None:
+        return ""
+    stack = [top]
+    while stack:
+        d = stack.pop()
+        dst = _lstat(d)
+        rel = "作業の場所そのもの" if d == top else (
+            f"{_show(d.relative_to(top).parts[0])}" + ("" if len(d.relative_to(top).parts) == 1 else " の中の dir"))
+        if dst is None or not stat.S_ISDIR(dst.st_mode):
+            continue
+        if dst.st_uid != _uid():
+            return f"{rel} がこの利用者の物でない"
+        if dst.st_dev != st.st_dev:
+            return f"{rel} が別の file system"
+        if (dst.st_mode & (stat.S_IRUSR | stat.S_IXUSR)) != (stat.S_IRUSR | stat.S_IXUSR):
+            return f"{rel} に本人が入れない（mode {stat.S_IMODE(dst.st_mode):03o}）"
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(Path(e.path))
+        except OSError as e:
+            return f"{rel} を読めない（{_show(e.strerror or type(e).__name__)}）"
+    return ""
+
+
+def _rmtree(path: Path) -> None:
+    """dir を消す（symlink は辿らず、 symlink そのものなら誤り）。 書けない dir（mode 555 など）の中の物は、 その dir に
+    本人の権限を足して消し直す。 それ以外の誤りは、 そのまま上げる（消した物の道を出さないよう、 呼ぶ側で受ける）。"""
+    top = os.fspath(path)
+
+    def force(func, p, exc):
+        err = exc if isinstance(exc, BaseException) else exc[1]      # 3.12 の onexc は例外、 3.11 までの onerror は exc_info
         p = os.fspath(p)
-        for q in (os.path.dirname(p), p):
-            if (q == top or q.startswith(top + os.sep)) and not os.path.islink(q):
-                try:
-                    os.chmod(q, stat.S_IRWXU)
-                except OSError:
-                    pass
+        parent = os.path.dirname(p)
+        inside = parent == top or parent.startswith(top + os.sep)
+        if func not in (os.unlink, os.remove, os.rmdir) or not isinstance(err, PermissionError) or not inside \
+                or os.path.islink(parent):
+            raise err                   # symlink の根（func は os.path.islink）・入れない dir（os.open）など
+        os.chmod(parent, stat.S_IRWXU)
         func(p)
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, onexc=force)
@@ -575,22 +643,36 @@ def _rmtree(path: Path) -> None:
 
 
 def _unlink(p: Path, seen: "os.stat_result | None") -> None:
+    """見たときと同じ物（この利用者の普通のファイルで、 inode が同じ）のときだけ消す。"""
     now = _lstat(p)
     if _own_file(now) or not _same(now, seen):
-        raise OSError(f"見たときと違う物になった（{_show(p.name)}）")
+        raise OSError(f"{_show(p.name)} が見たときと違う物になった（消さない）")
     os.unlink(p)
 
 
-def remove(r: Record, roots: list, counts: dict) -> str:
-    """記録（と付属のファイル・作業の場所）を消す。 誤りなら理由を返す。"""
+def _why(e: BaseException) -> str:
+    """誤りの理由（OS の誤りに付く道は出さない）。"""
+    if isinstance(e, OSError):
+        return _show(e.strerror or (str(e) if not e.filename else type(e).__name__))
+    return type(e).__name__
+
+
+def remove(r: Record, roots: list, counts: dict, where: "Where") -> str:
+    """記録（と付属のファイル・作業の場所）を消す。 誤りなら理由を返す（ほかの記録は呼ぶ側が続けて扱う）。"""
     if r.work is not None:
         p, st, why = work_target(r, roots)
         if p != r.work or not _same(st, r.work_st):
-            return f"作業の場所 {_show(r.work)} が見たときと違う物になった（{why or '別の dir'}）。 記録も残す"
+            return f"作業の場所（{where(r.work)}）が見たときと違う物になった（{why or '別の dir'}）。 作業の場所も記録も残す"
+        why = blocked(r.work)
+        if why:
+            return (f"作業の場所（{where(r.work)}）の中の {why}。 何も消さずに、 作業の場所も記録も残す"
+                    "（権限を直してから流し直す）")
         try:
             _rmtree(r.work)
-        except OSError as e:
-            return f"作業の場所 {_show(r.work)} を消せない（{_show(e.strerror or e)}）。 記録も残す"
+        except Exception as e:          # noqa: BLE001  思わぬ誤りでも止まらず、 ほかの記録を続けて扱う
+            return f"作業の場所（{where(r.work)}）を消せない（{_why(e)}）。 記録も残す"
+        if os.path.lexists(r.work):
+            return f"作業の場所（{where(r.work)}）が消えていない。 記録も残す"
         counts["work"] += 1
     for p, st in r.companions:
         if _own_file(st):
@@ -598,19 +680,35 @@ def remove(r: Record, roots: list, counts: dict) -> str:
         try:
             _unlink(p, st)
         except OSError as e:
-            return f"{_show(p.name)} を消せない（{_show(e.strerror or e)}）"
+            return f"{_show(p.name)} を消せない（{_why(e)}）"
         counts["companion"] += 1
     try:
         _unlink(r.path, r.st)
     except OSError as e:
-        return f"{_show(r.name)} を消せない（{_show(e.strerror or e)}）"
+        return f"{_show(r.name)} を消せない（{_why(e)}）"
     counts["log"] += 1
     return ""
 
 
 # ------------------------------------------------------------------ 入口
+class Where:
+    """出力に出す道。 案件のフォルダと利用者の cache の道そのものは出さず、 そこからの相対にする。
+    どちらの下でもない道は出さない。"""
+
+    def __init__(self, case: Path, roots: list) -> None:
+        self.bases = [(str(case), "案件のフォルダの ")] + [(str(r), "利用者の cache の ") for r in roots]
+
+    def __call__(self, p) -> str:
+        p = os.path.normpath(os.fspath(p))
+        for base, label in self.bases:
+            if p.startswith(base + os.sep):
+                return label + _show(p[len(base) + 1:])
+        return "決まった置き場の外の道（道は出さない。 記録の終わりの行を見る）"
+
+
 @dataclass
 class Out:
+    where: Where
     other: list = field(default_factory=list)     # 記録の dir の、 記録でない物
     notice: list = field(default_factory=list)    # 知らせる物
 
@@ -638,17 +736,17 @@ def main(argv: "list | None" = None, *, running=checks_running) -> int:
             return 2
     case = Path(os.path.abspath(a.case))
     if not case.is_dir():
-        print(f"案件のフォルダがありません: {_show(case)}", file=sys.stderr)
+        print("案件のフォルダがありません（dir でない。 渡した道を確かめてください）", file=sys.stderr)
         return 2
     user_cache = _user_cache()
     roots = [user_cache] + ([Path(os.path.realpath(user_cache))]
                            if os.path.realpath(user_cache) != str(user_cache) else [])
-    out = Out()
+    out = Out(where=Where(case, roots))
     cache = case / CACHE
     rv = cache / RV_LOGS
     print(f"===== 案件のフォルダの cache の片付け（{'--apply' if a.apply else '見るだけ'}）")
-    print(f"案件のフォルダ: {_show(case)}")
-    print(f"利用者の cache: {_show(user_cache)}")
+    print("利用者の cache: " + ("XDG_CACHE_HOME" if os.environ.get("XDG_CACHE_HOME") else "~/.cache")
+          + "（道は出さない。 案件のフォルダの道も出さない）")
 
     records = []
     cst = _lstat(cache)
@@ -681,7 +779,9 @@ def main(argv: "list | None" = None, *, running=checks_running) -> int:
     for r in gone:
         lines.append(f"{label(r)}: head {r.head[:12]}・{r.reason}")
         if r.work is not None:
-            lines.append(f"  作業の場所 {_show(r.work)}（{_measured(measure(r.work))}）も消す")
+            stuck = blocked(r.work)
+            lines.append(f"  作業の場所（{out.where(r.work)}。 {_measured(measure(r.work))}）も消す"
+                         + (f"。 ただし {stuck} ので、 --apply では何も消さずに誤りになる" if stuck else ""))
     _block("消せる物", lines)
     _block("残す物", [f"{_show(r.name)}: " + (f"head {r.head[:12]}・" if r.head else "") + r.reason for r in kept]
            + out.other)
@@ -690,7 +790,10 @@ def main(argv: "list | None" = None, *, running=checks_running) -> int:
     errors = []
     if a.apply:
         for r in gone:
-            why = remove(r, roots, counts)
+            try:
+                why = remove(r, roots, counts, out.where)
+            except Exception as e:      # noqa: BLE001  思わぬ誤りでも止まらず、 ほかの記録を続けて扱う
+                why = f"{_show(r.name)} を扱う途中で止まった（{_why(e)}）"
             if why:
                 errors.append(why)
     scan_shared(user_cache, out)

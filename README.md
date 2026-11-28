@@ -8,7 +8,7 @@ MirumeAI Organization の、すべての Repository で共通に使う物の正�
 
 ## 目的
 
-MirumeAI では、Core（PDM・Image-Acquisition-PDM）や顧客ごとの Repository など、いくつもの Repository を同じ決まりで開発します。同じであるべき物を各 Repository が別々に持つと、直しが一部にだけ入り、少しずつずれていきます。そこで、どの Repository でも同じであるべき物（雛形・守りの仕組み・検査の道具）をこの 1 か所に置き、ここで直せば全体に行き渡るようにしています。
+MirumeAI では、事業ごとの Core や顧客ごとの Repository など、いくつもの Repository を同じ決まりで開発します。同じであるべき物を各 Repository が別々に持つと、直しが一部にだけ入り、少しずつずれていきます。そこで、どの Repository でも同じであるべき物（雛形・守りの仕組み・検査の道具）をこの 1 か所に置き、ここで直せば全体に行き渡るようにしています。
 
 開発の手順と決まりそのもの（Merge の門など）の正本は、Private の `MirumeAI/development-docs` です。この Repository は、その決まりを支える雛形と道具を持ちます。
 
@@ -16,7 +16,7 @@ MirumeAI では、Core（PDM・Image-Acquisition-PDM）や顧客ごとの Reposi
 
 | 届き方 | 何が | どうなる |
 |---|---|---|
-| GitHub が既定として見せる | Issue と Pull Request の雛形（白紙の Issue は作れない）、脆弱性の報告と困ったときの案内 | 各 Repository は複製せずに使う（同じ種類のファイルを持たないとき） |
+| GitHub が既定として見せる | Issue と Pull Request の雛形（画面では白紙の Issue を選べない）、脆弱性の報告と困ったときの案内 | 各 Repository は複製せずに使う（同じ種類のファイルを持たないとき） |
 | 各 Repository へ写す | Claude Code のガード、共通の command と Issue Form の道具、検査の道具の一部（一覧は `scripts/ci/copy_sync_check.py` の `SHARED`） | 各 Repository では直さない。ここで直し、同期の Pull Request で配る。写しが正本と同じかは、検査が照らす |
 | 呼んで・流して使う | 共通の検査（再利用 workflow と検査の道具） | 各 Repository の workflow が呼ぶ。merge の前の検査は、この Repository の clone から手元で流す |
 | 新しい Repository の元にする | 顧客案件の Repository の雛形 | 顧客案件の Repository を作るときに写す |

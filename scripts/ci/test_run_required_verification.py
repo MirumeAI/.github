@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -182,6 +183,56 @@ class PassAndRecordTest(E2E):
         self.assertIn("main を取り込んで流し直して", p.stdout)
         # main の側の変更（docs/）は、 この PR の変更に数えない（merge-base からの差）
         self.assertIn("docs.yml（paths に合う変更が無い）", p.stdout)
+
+
+class WorkDirIsPrivateTest(E2E):
+    """**作業の場所は本人だけが読める形**（#231）。 中に検査する Repository の clone・venv・仮の HOME が入る。"""
+
+    WF = """\
+        on: pull_request
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - name: ok
+                run: echo ok
+        """
+
+    def _run_at(self, work: Path):
+        t = _repo(self.root, self.wf(self.WF), {})
+        old = os.umask(0o002)       # グループに書ける umask でも、 作る場所は 700 になる
+        try:
+            return self.run_it(t, "--work", str(work))   # 後の --work が先の物に勝つ
+        finally:
+            os.umask(old)
+
+    def test_new_work_is_made_private_even_under_setgid_parent(self):
+        parent = self.root / "shared"
+        parent.mkdir()
+        os.chmod(parent, 0o2775)    # 上のフォルダの setgid と群の権限を、 新しい dir が受け継がない
+        work = parent / "w"
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode) & 0o7077, 0, oct(work.stat().st_mode))
+
+    def test_existing_work_open_to_group_is_refused_without_changing_it(self):
+        work = self.root / "open"
+        work.mkdir()
+        os.chmod(work, 0o770)
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("グループか others の権限", p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o770, "権限は変えない")
+        self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+
+    def test_existing_private_empty_work_is_used(self):
+        work = self.root / "mine"
+        work.mkdir()
+        os.chmod(work, 0o700)
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
 
 
 class FailureIsNeverPassTest(E2E):

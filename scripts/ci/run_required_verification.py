@@ -1207,7 +1207,8 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--canonical-ref", default="origin/main", help="正本の道具と再利用 workflow を取る ref")
     ap.add_argument("--python", action="append", default=[], metavar="版=道",
                     help="workflow の Python の版の interpreter（既定は PATH の python<版>）")
-    ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir）")
+    ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir。 無ければ本人だけが読める形〔700〕で作り、"
+                    " 既にある場所にグループか others の権限があれば止める）")
     ap.add_argument("--jobs", type=int, default=None, metavar="N",
                     help=f"needs を満たした job を同時に流す数の上限（既定は使える CPU の数 − {SPARE_CPUS} と 空きメモリ ÷ "
                          f"{JOB_MEMORY / 1024 ** 3:g} GiB の小さい方。 1 なら 1 つずつ）")
@@ -1301,6 +1302,12 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
         print(f"流せません: --work の {a.work} が空ではありません（前の結果と混ぜない）", file=sys.stderr)
         return 2
+    # 作業の場所には、 検査する Repository（顧客 Repository を含む）の clone・venv・仮の HOME が入る。 既にある
+    # 場所にグループか others の権限があれば、 権限を変えずに止める（#231。 写しの同期の道具の状態の置き場と同じ扱い）
+    if a.work and Path(a.work).exists() and stat.S_IMODE(Path(a.work).stat().st_mode) & 0o077:
+        print(f"流せません: --work の {a.work} に、 グループか others の権限があります（中に検査する Repository の"
+              " clone を置くので、 本人だけが読める場所を渡してください。 権限は変えません）", file=sys.stderr)
+        return 2
     # 同じ利用者の検査を重ねない（#219）。 待つ間の Ctrl-C・SIGTERM でも、 traceback を出さずに止まる
     stopped = {}
 
@@ -1326,7 +1333,11 @@ def _main(argv: list | None, state: dict) -> int:
         signal.signal(signal.SIGINT, old_int)
     decide_jobs()
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="mirume-rv-"))
-    work.mkdir(parents=True, exist_ok=True)
+    if not work.exists():
+        work.parent.mkdir(parents=True, exist_ok=True)
+        work.mkdir(mode=0o700)
+        # umask と、 上のフォルダの setgid（新しい dir が受け継ぐ）によらず、 本人だけが読める形にする（#231）
+        os.chmod(work, 0o700)
     logs = work / "logs"
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     done_jobs, outcome, blocks = {}, {}, {}

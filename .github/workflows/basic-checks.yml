@@ -167,3 +167,12 @@ jobs:
       # Repository で確かめる（gh は差し替え。 守りを 1 つずつ壊すと落ちることも確かめた）。
       - name: 門の記録の文を作る道具
         run: python scripts/ci/test_gate_record.py
+
+      # **案件のフォルダの .cache と共通の cache を片付ける道具。** ファイルを消す道具なので、
+      # 見るだけ（既定）では何も消さないこと、 merge された Pull Request の検査の記録と、 開いた
+      # Pull Request の古い head の記録と、 記録と合う決まった置き場の作業の場所だけを消すこと、
+      # 見てから消すまでに入れ替わった物・symlink・ほかの利用者の物・作業ルートなど .cache の外の
+      # 物に触れないことを、 一時の dir の架空の案件で確かめる（gh は差し替え。 守りを 1 つずつ
+      # 壊すと落ちることも確かめた。 #247）。
+      - name: 案件のフォルダの cache を片付ける道具
+        run: python scripts/ci/test_case_cache.py

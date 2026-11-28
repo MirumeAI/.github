@@ -1002,14 +1002,27 @@ def _claim_work(work: Path) -> str | None:
     """ロックの後に作業の場所を作る。 使えないときは理由を返す（#231）。
 
     無ければ 700 で作り、 umask と上のフォルダの setgid（新しい dir が受け継ぐ）によらず chmod で 700 にする。
-    既にあれば（ロックを待つ間に同じ道へ現れた物も）、 `exist_ok` を使わずに作れなかったことで気づき、 照らし直す。"""
-    work.parent.mkdir(parents=True, exist_ok=True)
+    既にあれば（ロックを待つ間に同じ道へ現れた物も）、 `exist_ok` を使わずに作れなかったことで気づき、 照らし直す。
+    上のフォルダか作業の場所そのものを作れないとき（上の道にファイルがある・本人が書けないなど）は、 作れなかった
+    道と理由を返す（「道具の中の誤り」にしない。 #243）。"""
+    try:
+        work.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"の上のフォルダを作れません（{_os_why(e)}）"
     try:
         work.mkdir(mode=0o700)
     except FileExistsError:
         return _work_problem(work)
+    except OSError as e:
+        return f"を作れません（{_os_why(e)}）"
     os.chmod(work, 0o700)
     return None
+
+
+def _os_why(e: OSError) -> str:
+    """作れなかった道と理由（`<道>: <理由>`。 道が分からなければ理由だけ）。"""
+    why = _show(e.strerror or e)
+    return f"{_show(e.filename)}: {why}" if e.filename else why
 
 
 def _release_lock(state: dict) -> None:
@@ -1348,7 +1361,7 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work and os.path.lexists(a.work):
         problem = _work_problem(Path(a.work))
         if problem:
-            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            print(f"流せません: --work の {_show(a.work)} {problem}", file=sys.stderr)   # 行を崩す字は escape（#243）
             return 2
     # 同じ利用者の検査を重ねない（#219）。 待つ間の Ctrl-C・SIGTERM でも、 traceback を出さずに止まる
     stopped = {}
@@ -1378,7 +1391,7 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work:
         problem = _claim_work(work)
         if problem:
-            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            print(f"流せません: --work の {_show(a.work)} {problem}", file=sys.stderr)   # 行を崩す字は escape（#243）
             return 2
     logs = work / "logs"
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")

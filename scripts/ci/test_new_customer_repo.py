@@ -20,7 +20,7 @@
   ・作った Repository の製品のパッケージの試験（workflow の `product` の job）が通る
   ・顧客の間の混入の検査の宣言は、 値の無い初期形（状態は人の確認待ち）で始まり、
     混入の照合は有効にしない。 初期形のままでは検査が合格にならない
-  ・架空の案件で、 雛形の README の手順どおりに、 宣言の下書き → 報告だけの形 →
+  ・架空の案件で、 混入の検査を有効にする順（development-docs の「有効にする順」。 雛形の README が指す）どおりに、 宣言の下書き → 報告だけの形 →
     VERIFIED → 有効化 → CI と同じ検査 まで通る（合成の E2E）
 
 混入の検査を流す試験には PyYAML が要る。 CI（環境変数 CI がある）で無ければ、
@@ -542,6 +542,10 @@ class TheFirstContentTest(unittest.TestCase):
         heads = [line[3:].strip() for line in readme.splitlines() if line.startswith("## ")]
         self.assertEqual(heads, ["目的", "仕組み", "構成", "始め方", "詳しい文書"])
         self.assertLessEqual(len(readme.splitlines()), 60)
+        # ほかの所（.gitignore・宣言と workflow の注釈・雛形の CLAUDE.md・作る道具の知らせ）が名指しする小見出し
+        subs = [line[4:].strip() for line in readme.splitlines() if line.startswith("### ")]
+        self.assertIn("Core の置き方", subs)
+        self.assertIn("顧客の間の混入の検査を始める", subs)
 
 
 class ItPassesTheFirstCITest(unittest.TestCase):
@@ -1213,7 +1217,7 @@ class TheIsolationStartsOffTest(unittest.TestCase):
 class TheIsolationPathTest(unittest.TestCase):
     """**作った Repository が、 混入の検査を始める手順をそのまま通れること**（合成の E2E）。
 
-    架空の案件で、 雛形の README の手順どおりに進める: 作る → 設定と宣言の下書き →
+    架空の案件で、 有効にする順（development-docs の「有効にする順」。 雛形の README が指す）どおりに進める: 作る → 設定と宣言の下書き →
     報告だけの形 → 人の確認（を模した状態の行の書き換え）→ VERIFIED → 有効化 →
     CI と同じ検査。 **値は出力に出ない**ことも見る。 人の確認そのものは試験では
     代われない（ここで行うのは、 確かめた後に人が直す行の書き換えだけ）。

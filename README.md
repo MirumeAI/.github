@@ -17,7 +17,7 @@ MirumeAI では、事業ごとの Core や顧客ごとの Repository など、�
 | 届き方 | 何が | どうなる |
 |---|---|---|
 | GitHub が既定として見せる | Issue と Pull Request の雛形（画面では白紙の Issue を選べない）、脆弱性の報告と困ったときの案内 | 各 Repository は複製せずに使う（同じ種類のファイルを持たないとき） |
-| 各 Repository へ写す | Claude Code のガード、共通の command と Issue Form の道具、検査の道具の一部（一覧は `scripts/ci/copy_sync_check.py` の `SHARED`） | 各 Repository では直さない。ここで直し、同期の Pull Request で配る。写しが正本と同じかは、検査が照らす |
+| 各 Repository へ写す | Claude Code のガード、共通の command と Issue Form の道具、検査の道具の一部、顧客案件の据え付けの道具（一覧は `scripts/ci/copy_sync_check.py` の `SHARED`） | 各 Repository では直さない。ここで直し、同期の Pull Request で配る。写しが正本と同じかは、検査が照らす |
 | 呼んで・流して使う | 共通の検査（再利用 workflow と検査の道具） | 各 Repository の workflow が呼ぶ。merge の前の検査は、この Repository の clone から手元で流す |
 | 新しい Repository の元にする | 顧客案件の Repository の雛形 | 顧客案件の Repository を作るときに写す |
 
@@ -28,6 +28,7 @@ MirumeAI では、事業ごとの Core や顧客ごとの Repository など、�
 | `.github/` | Issue Form（Feature・Bug・Experiment）・Pull Request の雛形・脆弱性の報告の窓口と、workflow（各 Repository が呼ぶ再利用 workflow と、この Repository の検査） |
 | `.claude/` | Claude Code のガード（作業 Branch でない Branch への commit などを止める）・共通の command と Issue Form の道具・この Repository の設定（新しい顧客 Repository の設定の元にもなる） |
 | `scripts/ci/` | 共通の検査の道具とその試験。一覧と使い方は [scripts/ci/README.md](scripts/ci/README.md) |
+| `deploy/bundle/` | 顧客案件の据え付けの道具とその試験（案件の Repository の同じ道へ写す正本。案件に依る所は案件の根の `pyproject.toml` から読む）。使い方は各道具の頭の説明 |
 | `templates/customer-project/` | 顧客案件の Repository の雛形。始め方は中の `README.md` |
 | `SECURITY.md`・`SUPPORT.md` | 脆弱性と秘密の漏れの報告、困ったときの案内 |
 | `CONTRIBUTING.md` | Organization の開発の流れと Branch の名前の要約（手順の正本は development-docs） |

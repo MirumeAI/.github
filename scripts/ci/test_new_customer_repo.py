@@ -609,6 +609,58 @@ class ItPassesTheFirstCITest(unittest.TestCase):
                              ["test_doctor.py", "test_no_core_import.py", "test_pyproject.py"])
 
 
+def _load_install_tool(name: str):
+    """据え付けの道具（`deploy/bundle/`。 案件の写しの正本）を名前を指して読む。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(f"_t_{name}", ROOT / "deploy" / "bundle" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TheInstallToolsFitTheTemplateTest(unittest.TestCase):
+    """**据え付けの道具の既定が、 雛形から作った案件に合うこと**（#237）。
+
+    道具は案件に依る所を案件の根の `pyproject.toml` から読み、 機体に置く根の物の既定の並び
+    （`install_set.TREE_TOP`）を持つ。 雛形の根に物を足したのに並びを直し忘れると、 機体に置く
+    物が黙って欠ける（逆に、 開発の機体だけの物が入る）。 道具の写しは案件の Repository にあり、
+    そこには雛形が無いので、 ここで照らす。
+    """
+
+    #: 開発の機体だけの根の物（期待値は道具の定数から取らない）
+    DEV_ONLY = {".claude", "dev"}
+
+    def test_the_default_list_is_the_root_of_the_first_content(self) -> None:
+        """既定の並びは、 雛形から作った最初の中身の根の物から、 開発の機体だけの物を除いた物。"""
+        IS = _load_install_tool("install_set")
+        roots = {rel.split("/", 1)[0] for rel in PLAN.tree}
+        self.assertLessEqual(self.DEV_ONLY, roots)
+        self.assertEqual(sorted(IS.TREE_TOP), sorted(roots - self.DEV_ONLY))
+        self.assertEqual(set(IS.DEV_ONLY), self.DEV_ONLY)
+
+    def test_the_first_content_is_read_by_the_install_tools(self) -> None:
+        """最初の中身の `pyproject.toml` を道具の読み方で読め（案件の名前と Python の名前。 extra・部品の登録・
+        一式に足す物は無い）、 `versions.yaml` は道具の読む字のままの書き方。"""
+        IV = _load_install_tool("install_venvs")
+        IS = _load_install_tool("install_set")
+        with tempfile.TemporaryDirectory() as td:
+            tgt = Path(td)
+            for rel in ("pyproject.toml", "versions.yaml"):
+                (tgt / rel).write_bytes(PLAN.tree[rel][1])
+            declaration = IV.read_declaration(tgt)
+            self.assertEqual(declaration, {"name": "example-part", "package": "example_part", "extras": [],
+                                           "parts": {}, "install_set_extra": []})
+            self.assertIn(f"src/{declaration['package']}/__init__.py", PLAN.tree)
+            self.assertEqual(IS.tree_list(declaration), IS.TREE_TOP)
+            self.assertLessEqual({"image_acquisition_pdm", "pdm"},
+                                 set(IV.sections(tgt / "versions.yaml", strict=tuple(IV.CORES))))
+
+    def test_the_workflow_runs_the_install_tool_tests(self) -> None:
+        """**呼ばれていなければ意味が無い。** 正本の検査が、 据え付けの道具の試験を道具と同じ形（`-I -B`）で流す。"""
+        wf = (ROOT / ".github/workflows/basic-checks.yml").read_text(encoding="utf-8")
+        self.assertIn("python -I -B -m unittest discover -s deploy/bundle -p 'test_*.py'", wf)
+
+
 class EverySharedFileIsDecidedTest(unittest.TestCase):
 
     def test_copied_files_are_compared(self) -> None:

@@ -36,6 +36,7 @@ SUPPORT.md               … 困ったときの案内（根に置く。実際の
 ほかに次を置いています。
 
 - `scripts/ci/` … 各 Repository の CI が使う検査の正本、Organization 監査（`org_audit.py`）、顧客案件の Repository を作る道具（`new_customer_repo.py`。Organization の Owner が実行する）、写しの同期の Pull Request をまとめて作る道具（`sync_copies.py`）、Reviewer への頼みと Merge の門の記録の文を作る道具（`gate_record.py`。GitHub へは書き込まない）
+- `deploy/bundle/` … 顧客案件の据え付けの道具とその試験の正本（案件の Repository の同じ道へ写す。照合の対象〔`copy_sync_check.SHARED`〕で、雛形から作る案件には写さない〔`new_customer_repo.NOT_FOR_CUSTOMER`〕。案件に依る所は案件の根の `pyproject.toml` から読み、顧客の名前と値を書かない）
 - `templates/customer-project/` … 顧客案件の Repository の雛形。**中の `CLAUDE.md` は案件の Repository 用で、この Repository の規則ではありません。** Claude Code 一式（`.claude/`）は雛形に置かず、作るときに正本（この Repository）から写します
 
 ## 変更時の手順

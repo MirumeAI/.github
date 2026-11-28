@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -900,21 +901,37 @@ class InstallVenvs(unittest.TestCase):
         self.assertEqual(len(product_eps(checks + "check_a = x.z\n\n" + methods)), 1)
         self.assertEqual(product_eps(checks + "\n" + methods), [])
 
+        def undeclared(eps, groups):
+            shutil.rmtree(site / "mirumeai_test_product-0.1.0.dist-info")
+            dist("mirumeai-test-product", "0.1.0", ['mirumeai-test-np==2.2.6; extra == "parts"'], eps)
+            return [b for b in IV.verify(run, Path("py"), dict(want, parts=["mirumeai-test-product", groups]))
+                    if "宣言に無い群" in b or "登録していません" in b]
+
+        # 宣言に無い mirumeai_pdm. の群への登録も止める（宣言が無いときも。setup.cfg などで足した登録を見逃さない）
+        self.assertEqual(undeclared(checks + "\n" + methods + "\n[mirumeai_pdm.other]\nx = y:Z\n", FAKE_PARTS),
+                         ["mirumeai-test-product が、 宣言に無い群 mirumeai_pdm.other に登録しています"])
+        self.assertEqual(undeclared(checks, {}),
+                         ["mirumeai-test-product が、 宣言に無い群 mirumeai_pdm.extra_checks に登録しています"])
+        self.assertEqual(undeclared("[other.group]\nx = y:Z\n", {}), [])         # ほかの群は読まない
+        self.assertEqual(undeclared("", {}), [])
+
     # ---- 根の pyproject.toml の宣言（案件に依る所。MirumeAI/.github#237）
 
     def test_the_declaration_is_read_from_the_root_pyproject(self):
         """製品の名前・Python の名前・extra・部品の登録を、根の pyproject.toml から読む（群は mirumeai_pdm. の物だけ）。"""
         d = IV.read_declaration(self.repo)
         self.assertEqual(d, {"name": "fake-case", "package": "fake_case", "extras": ["parts"], "parts": FAKE_PARTS,
-                             "install_set_extra": []})
+                             "install_set_extra": [], "build_requires": ["setuptools==84.2.1", "wheel==0.48.0"],
+                             "build_wheels": {}})
 
     def test_without_part_registrations_or_extras_nothing_more_is_checked(self):
-        """部品の登録の宣言が無ければ部品の登録を照らさず、extra が無ければ PDM の [web] だけを照らす。ほかの群の登録は読まない。"""
+        """部品の登録の宣言が無ければ、mirumeai_pdm. の群に登録が無いことを照らし、extra が無ければ PDM の [web] だけを照らす。
+        ほかの群の登録は読まない。"""
         (self.repo / "pyproject.toml").write_text(
             '[project]\nname = "fake-case"\n\n[project.entry-points."other.group"]\nx = "fake_case:x"\n', encoding="utf-8")
         p = IV.plan(self.repo, self.wh, self.machine, self.release)
         want = IV.expectations("ai", p)
-        self.assertNotIn("parts", want)
+        self.assertEqual(want["parts"], ["fake-case", {}])
         self.assertEqual(want["extras"], [["mirumeai-pdm", "web"]])
         self.assertNotIn("parts", IV.expectations("web", p))
         self.assertEqual(IV.expectations("web", p)["extras"], [])
@@ -958,6 +975,16 @@ class InstallVenvs(unittest.TestCase):
             "足す物が並びでない": ('[project]\nname = "x"\n[tool.mirumeai]\ninstall-set-extra = "docs"\n',
                                    "install-set-extra は、根の物の名前（文字列）の並びにします"),
             "同じ鍵を 2 度": ('[project]\nname = "x"\nname = "y"\n', "を 2 度書いています"),
+            "組み立ての道具の wheel が表でない": ('[project]\nname = "x"\n[tool.mirumeai]\nbuild-wheels = ["a.whl"]\n',
+                                                  "[tool.mirumeai.build-wheels] は、組み立ての道具の wheel のファイルの名前ごとに"),
+            "組み立ての道具の名前が wheel でない": ('[project]\nname = "x"\n[tool.mirumeai.build-wheels]\n'
+                                                    '"setuptools-84.2.1.tar.gz" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n',
+                                                    "[tool.mirumeai.build-wheels] は、組み立ての道具の wheel のファイルの名前ごとに"),
+            "組み立ての道具の sha256 が 64 桁でない": ('[project]\nname = "x"\n[tool.mirumeai.build-wheels]\n'
+                                                       '"setuptools-84.2.1-py3-none-any.whl" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n',
+                                                       "[tool.mirumeai.build-wheels] は、組み立ての道具の wheel のファイルの名前ごとに"),
+            "組み立ての道具の要求が並びでない": ('[build-system]\nrequires = "setuptools"\n[project]\nname = "x"\n',
+                                                 "[build-system].requires の形が違います"),
         }
         for label, (text, says) in cases.items():
             with self.subTest(label):
@@ -1110,6 +1137,11 @@ class TomlReader(unittest.TestCase):
         self.assertEqual(IV.read_toml(TOML_GOOD["改行が CRLF"]), {"project": {"name": "x"}})
         self.assertEqual(IV.read_toml(""), {})
 
+    def test_deep_nesting_is_refused_as_a_reading_error(self):
+        """深く入れ子にした並びは、RecursionError でなく読めない物（TomlError）として止める（宣言の読み手が Stop にまとめる）。"""
+        with self.assertRaisesRegex(IV.TomlError, "入れ子が深すぎます"):
+            IV.read_toml("a = " + "[" * 5000 + "]" * 5000 + "\n")
+
     def test_it_refuses_what_toml_refuses(self):
         for label, text in {**TOML_BAD, **TOML_REFUSED}.items():
             with self.subTest(label):
@@ -1120,7 +1152,8 @@ class TomlReader(unittest.TestCase):
     @unittest.skipIf(tomllib is None, "tomllib の無い Python（3.10）。読み手の照らしは上の試験で流す")
     def test_it_reads_like_tomllib(self):
         """tomllib のある Python で、読める物は同じに読み、tomllib が断る物はこの読み手も断る（試験の例が本当に TOML の
-        決まりのとおりかも照らす）。複数行の文字列は、tomllib は読み、この読み手は止める。"""
+        決まりのとおりかも照らす）。複数行の文字列は、tomllib は読み、この読み手は止める。暦に無い日付（値の中身）は、
+        tomllib は断り、この読み手は読む（読む鍵に使わない。試験の例に入れない）。"""
         for label, text in TOML_GOOD.items():
             with self.subTest(good=label):
                 self.assertEqual(IV.read_toml(text), toml_shape(tomllib.loads(text)))
@@ -1167,6 +1200,16 @@ def sys_executable():
     return sys.executable
 
 
+#: 偽の組み立ての道具の wheel（ファイルの名前 → 中身）。wheel 0.48.0 の依存 packaging も書く
+BUILD_WHEELS = {"setuptools-84.2.1-py3-none-any.whl": b"setuptools", "wheel-0.48.0-py3-none-any.whl": b"wheel",
+                "packaging-26.4-py3-none-any.whl": b"packaging"}
+#: 束を作る試験の偽の案件の根の pyproject.toml（組み立ての道具の版と、その wheel の sha256）
+DEMO_PYPROJECT = ('[build-system]\nrequires = ["setuptools==84.2.1", "wheel==0.48.0"]\n'
+                  'build-backend = "setuptools.build_meta"\n\n[project]\nname = "demo-pkg"\n\n'
+                  '[tool.mirumeai.build-wheels]\n'
+                  + "".join(f'"{f}" = "{hashlib.sha256(b).hexdigest()}"\n' for f, b in BUILD_WHEELS.items())).encode()
+
+
 class MakeProductBundle(unittest.TestCase):
 
     def setUp(self):
@@ -1182,8 +1225,9 @@ class MakeProductBundle(unittest.TestCase):
         self.wheel_runs = []
         self.git_runs = []
         (self.repo / "src" / "demo_pkg").mkdir(parents=True)
-        (self.repo / "pyproject.toml").write_text('[project]\nname = "demo-pkg"\n', encoding="utf-8")
+        (self.repo / "pyproject.toml").write_bytes(DEMO_PYPROJECT)
         (self.repo / "src" / "demo_pkg" / "__init__.py").write_text('__version__ = "0.2.0"\n', encoding="utf-8")
+        self.find_links = []
         for cmd in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "1"],
                     ["update-ref", "refs/remotes/origin/main", "HEAD"]):           # main に入った commit
             self.git(*cmd)
@@ -1199,15 +1243,34 @@ class MakeProductBundle(unittest.TestCase):
             self.git_runs.append((cmd, kw.get("env")))
             return subprocess.run(cmd, **kw)
         self.wheel_runs.append((cmd, kw.get("env")))
+        if cmd[1:4] == ["-I", "-m", "venv"]:
+            (Path(cmd[4]) / "bin").mkdir(parents=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if "--find-links" in cmd:                      # 組み立ての道具を入れる命令（そのときの置き場と要求を記録する）
+            links = Path(cmd[cmd.index("--find-links") + 1])
+            self.find_links.append(({f.name: f.read_bytes() for f in links.iterdir()},
+                                    Path(cmd[cmd.index("-r") + 1]).read_text(encoding="utf-8")))
+        if "--wheel-dir" not in cmd:                   # 組み立ての道具を入れる・照らす命令
+            return subprocess.CompletedProcess(cmd, 0, "", "")
         out = Path(cmd[cmd.index("--wheel-dir") + 1])
         out.mkdir(parents=True, exist_ok=True)
         self.assertTrue((Path(cmd[-1]) / "pyproject.toml").is_file())  # 写した木から作る
         (out / "demo_pkg-0.2.0-py3-none-any.whl").write_bytes(b"wheel")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    def make(self, out):
+    def place_build_wheels(self, out):
+        """組み立ての道具の置き場（束の置き場の build-wheels/）に、宣言した wheel を置く。"""
+        store = out / PB.BUILD_WHEELS
+        if not store.exists():
+            store.mkdir(parents=True)
+            for f, body in BUILD_WHEELS.items():
+                (store / f).write_bytes(body)
+        return store
+
+    def make(self, out, run=None):
+        self.place_build_wheels(out)
         with mock.patch.dict(os.environ, self.env, clear=True):
-            return PB.make(self.repo, out, "python3.10", run=self.fake_run)
+            return PB.make(self.repo, out, "python3.10", run=run or self.fake_run)
 
     def test_the_bundle_is_written_and_read_only(self):
         out = self.tmp / "wheelhouse"
@@ -1229,15 +1292,114 @@ class MakeProductBundle(unittest.TestCase):
         self.env.update(PIP_INDEX_URL="http://example.invalid/simple", PIP_CONFIG_FILE=str(self.tmp / "pip.conf"),
                         _PIP_STANDALONE_CERT=str(self.tmp / "ca.pem"), PYTHONPATH=str(self.tmp / "elsewhere"),
                         PYTHONHOME=str(self.tmp))
+        self.env.update(SETUPTOOLS_USE_DISTUTILS="stdlib", DISTUTILS_DEBUG="1", DIST_EXTRA_CONFIG=str(self.tmp / "x.cfg"),
+                        HOME=str(self.tmp / "real-home"))
         self.make(self.tmp / "wheelhouse")
-        self.assertEqual(len(self.wheel_runs), 1)
-        cmd, env = self.wheel_runs[0]
-        self.assertEqual(cmd[1:5], ["-I", "-m", "pip", "wheel"])
-        self.assertIsNotNone(env)
-        self.assertFalse([k for k in env if k.startswith(("PYTHON", "_PIP_"))])
-        self.assertEqual({k: v for k, v in env.items() if k.startswith("PIP_")},
-                         {"PIP_CONFIG_FILE": os.devnull, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
-        self.assertEqual(env.get("GIT_CONFIG_NOSYSTEM"), "1")       # ほかの名前は残す
+        self.assertEqual([c[1:4] for c, _ in self.wheel_runs], [["-I", "-m", "venv"]] + [["-I", "-m", "pip"]] * 3)
+        self.assertEqual([c[4] for c, _ in self.wheel_runs[1:]], ["install", "check", "wheel"])
+        venv_python = str(Path(self.wheel_runs[0][0][4]) / "bin" / "python")
+        self.assertEqual({c[0] for c, _ in self.wheel_runs[1:]}, {venv_python})   # 入れる・照らす・作るのは使い捨ての venv
+        wheel_cmd = self.wheel_runs[-1][0]
+        for flag in ("--no-deps", "--no-index", "--no-build-isolation", "--check-build-dependencies"):
+            self.assertIn(flag, wheel_cmd)
+        for cmd, env in self.wheel_runs:
+            with self.subTest(cmd=cmd[1:5]):
+                self.assertIsNotNone(env)
+                self.assertEqual([k for k in env if k.startswith(("PYTHON", "_PIP_"))], ["PYTHONNOUSERSITE"])
+                self.assertEqual(env["PYTHONNOUSERSITE"], "1")
+                self.assertEqual({k: v for k, v in env.items() if k.startswith("PIP_")},
+                                 {"PIP_CONFIG_FILE": os.devnull, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
+                # setuptools・distutils の利用者の設定を読ませない（HOME は空の一時の場所）
+                self.assertFalse([k for k in env if k.startswith(("SETUPTOOLS_", "DISTUTILS_")) or k == "DIST_EXTRA_CONFIG"])
+                self.assertNotEqual(env["HOME"], str(self.tmp / "real-home"))
+                self.assertTrue(env["HOME"].startswith(tempfile.gettempdir()))
+                self.assertEqual(env.get("GIT_CONFIG_NOSYSTEM"), "1")       # ほかの名前は残す
+
+    def test_the_build_tools_are_installed_by_hash_from_a_checked_copy(self):
+        """組み立ての道具は、宣言した wheel だけを置き場から写して sha256 を照らした所から、index なし・hash で入れる（置き場の
+        ほかの物は使わない）。依存の wheel も宣言に書き、入れた後に pip check で照らす。"""
+        store = self.place_build_wheels(self.tmp / "wheelhouse")
+        (store / "evil-1.0-py3-none-any.whl").write_bytes(b"evil")
+        self.make(self.tmp / "wheelhouse")
+        install = self.wheel_runs[1][0]
+        for flag in ("--no-index", "--no-deps", "--require-hashes"):
+            self.assertIn(flag, install)
+        self.assertEqual(install[install.index("--only-binary") + 1], ":all:")
+        self.assertNotEqual(Path(install[install.index("--find-links") + 1]), store)
+        (links, req), = self.find_links
+        self.assertEqual(links, BUILD_WHEELS)
+        self.assertEqual(sorted(req.splitlines()),
+                         sorted(f"{n}=={v} --hash=sha256:{hashlib.sha256(BUILD_WHEELS[f]).hexdigest()}"
+                                for f, (n, v) in {"setuptools-84.2.1-py3-none-any.whl": ("setuptools", "84.2.1"),
+                                                  "wheel-0.48.0-py3-none-any.whl": ("wheel", "0.48.0"),
+                                                  "packaging-26.4-py3-none-any.whl": ("packaging", "26.4")}.items()))
+
+    def test_build_tools_that_are_missing_changed_or_linked_are_refused(self):
+        out = self.tmp / "wheelhouse"
+        store = self.place_build_wheels(out)
+        cases = [("無い", lambda f: f.unlink(), "組み立ての道具の置き場に wheel-0.48.0-py3-none-any.whl がありません"),
+                 ("変わった", lambda f: f.write_bytes(b"other"), "wheel-0.48.0-py3-none-any.whl の sha256 が"),
+                 ("リンク", lambda f: (f.unlink(), f.symlink_to(self.tmp / "elsewhere.whl")), "がありません（リンクは使わない）")]
+        (self.tmp / "elsewhere.whl").write_bytes(b"wheel")
+        for label, change, says in cases:
+            with self.subTest(label):
+                f = store / "wheel-0.48.0-py3-none-any.whl"
+                change(f)
+                with self.assertRaisesRegex(PB.Stop, re.escape(says)):
+                    self.make(out)
+                self.assertFalse((out / "demo-pkg").exists())
+                self.assertEqual(self.wheel_runs, [])                   # 何も入れない
+                if f.is_symlink():
+                    f.unlink()
+                f.write_bytes(b"wheel")
+        shutil.rmtree(store)
+        store.mkdir()
+        shutil.rmtree(store)
+        store.symlink_to(self.tmp)
+        with self.assertRaisesRegex(PB.Stop, "組み立ての道具の置き場がありません"):
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                PB.make(self.repo, out, "python3.10", run=self.fake_run)
+
+    def test_the_build_declaration_must_pin_every_build_tool(self):
+        """[build-system].requires は、どれも版を固定した `名前==版` で、[tool.mirumeai.build-wheels] にその名前と版の wheel が
+        1 つずつある（依存の wheel は足してよいが、名前ごとに 1 つ）。"""
+        h = "a" * 64
+        top = self.tmp / "decl"
+        top.mkdir()
+
+        def plan(requires, wheels):
+            (top / "pyproject.toml").write_text(
+                f"[build-system]\nrequires = {json.dumps(requires)}\n[project]\nname = \"x\"\n[tool.mirumeai.build-wheels]\n"
+                + "".join(f'"{w}" = "{h}"\n' for w in wheels), encoding="utf-8")
+            return PB.build_plan(top)
+
+        good = ["setuptools-84.2.1-py3-none-any.whl", "wheel-0.48.0-py3-none-any.whl"]
+        self.assertEqual(plan(["setuptools==84.2.1", "wheel==0.48.0"], good),
+                         {good[0]: ("setuptools", "84.2.1", h), good[1]: ("wheel", "0.48.0", h)})
+        self.assertEqual(len(plan(["setuptools==84.2.1"], good)), 2)            # 依存の wheel は足してよい
+        cases = {"範囲": (["setuptools>=61"], good, "版を固定した `名前==版` ではありません"),
+                 "印": (["setuptools==84.2.1; python_version>'3'"], good, "版を固定した"),
+                 "同じ名前を 2 度": (["setuptools==84.2.1", "Setuptools==84.2.1"], good, "版を固定した"),
+                 "要求が無い": ([], good, "[build-system].requires がありません"),
+                 "wheel が無い": (["setuptools==84.2.1", "wheel==0.48.0"], good[:1], "wheel==0.48.0 の wheel と sha256 がありません"),
+                 "版が違う": (["setuptools==84.2.1"], ["setuptools-84.2.0-py3-none-any.whl"], "setuptools==84.2.1 の wheel"),
+                 "同じ名前の wheel が 2 つ": (["setuptools==84.2.1"], good[:1] + ["setuptools-84.2.0-py3-none-any.whl"],
+                                              "setuptools の wheel が 2 つあります")}
+        for label, (requires, wheels, says) in cases.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(PB.Stop, re.escape(says)):
+                    plan(requires, wheels)
+
+    def test_build_tools_whose_dependencies_are_missing_stop(self):
+        """組み立ての道具の依存が足りないとき（pip check が落ちる）は止め、作りかけの束を残さない。"""
+        def no_check(cmd, **kw):
+            if cmd[1:5] == ["-I", "-m", "pip", "check"]:
+                return subprocess.CompletedProcess(cmd, 1, "wheel 0.48.0 requires packaging, which is not installed.", "")
+            return self.fake_run(cmd, **kw)
+        with self.assertRaisesRegex(PB.Stop, "組み立ての道具の依存が足りないか合いません"):
+            self.make(self.tmp / "wheelhouse", run=no_check)
+        self.assertFalse((self.tmp / "wheelhouse" / "demo-pkg" / "0.2.0").exists())
+        self.assertFalse([c for c, _ in self.wheel_runs if "--wheel-dir" in c])
 
     def test_an_existing_bundle_is_not_rewritten(self):
         out = self.tmp / "wheelhouse"
@@ -1295,7 +1457,7 @@ class MakeProductBundle(unittest.TestCase):
         """手元の属性の export-ignore と filter・Repository の設定の filter・置き換えの ref・環境の GIT_CONFIG_COUNT が
         あっても、写すのは commit の blob そのまま（git archive はこれらに従う）。"""
         commit = self.commit_extra()
-        want = {"pyproject.toml": b'[project]\nname = "demo-pkg"\n', "src/demo_pkg/__init__.py": b'__version__ = "0.2.0"\n',
+        want = {"pyproject.toml": DEMO_PYPROJECT, "src/demo_pkg/__init__.py": b'__version__ = "0.2.0"\n',
                 "extra.txt": "commit の中身\n".encode(), "tools/run.sh": b"#!/bin/sh\necho ok\n"}
         info = self.repo / ".git" / "info"
         info.mkdir(exist_ok=True)
@@ -1474,11 +1636,11 @@ class MakeProductBundle(unittest.TestCase):
     def test_a_bundle_is_not_left_when_the_wheel_cannot_be_made(self):
         """wheel を作れないときは、作りかけの束を残さない。"""
         def no_wheel(cmd, **kw):
-            if cmd[:1] == ["git"]:
+            if "--wheel-dir" not in cmd:
                 return self.fake_run(cmd, **kw)
             return subprocess.CompletedProcess(cmd, 1, "", "壊れた")
-        with mock.patch.dict(os.environ, self.env, clear=True), self.assertRaisesRegex(PB.Stop, "wheel を作れません"):
-            PB.make(self.repo, self.tmp / "wheelhouse", "python3.10", run=no_wheel)
+        with self.assertRaisesRegex(PB.Stop, "wheel を作れません"):
+            self.make(self.tmp / "wheelhouse", run=no_wheel)
         self.assertFalse((self.tmp / "wheelhouse" / "demo-pkg" / "0.2.0").exists())
 
     def test_names_outside_top_are_skipped_before_they_are_read(self):

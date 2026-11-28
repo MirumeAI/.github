@@ -3,7 +3,8 @@
 
 案件に依らない共通の道具（正本は MirumeAI/.github の同じ道。 案件の Repository には写しを置く。 MirumeAI/.github#237）。
 
-    python3 deploy/bundle/make_product_bundle.py [--out <束の置き場>] [--python python3.10]
+    python3 deploy/bundle/make_product_bundle.py [--out <束の置き場>] [--build-wheels <組み立ての道具の置き場>]
+        [--python python3.10]
 
 この Repository の commit（HEAD）の追跡しているファイルだけを一時の場所に写し（commit の木と blob をそのまま。 手元の
 属性・filter・置き換えの ref を使わない）、 そこで製品の wheel を作って、 次の並びの束にする（PDM の Product Release の
@@ -30,7 +31,13 @@
 - 作った束のファイルとフォルダから、 書き込みの権限を外す
 - 終わりに、 System Release の記録の `product_package` に写す 3 つ（name・version・wheel_sha256）を出す
 
-wheel を作るとき、 pip は `pyproject.toml` の build-system の要求を index から取る（版を固定。 venv には残らない）。
+wheel は、 index を使わずに作る。 組み立ての道具（根の pyproject.toml の [build-system].requires。 どれも版を固定した
+`名前==版`）は、 根の pyproject.toml の [tool.mirumeai.build-wheels]（wheel のファイルの名前 → sha256。 組み立ての道具の
+依存の wheel も書く）に書いた wheel だけを、 組み立ての道具の置き場（既定は束の置き場の `build-wheels/`。 人が置く）から
+写して sha256 を照らし、 使い捨ての venv に hash で入れる（`pip check` で依存も照らす）。 その venv で、 build isolation を
+使わずに作る。 宣言は写した commit の木の物を読む。 組み立てには、 pip の設定のファイルと、 setuptools・distutils の利用者の
+設定を読ませない（HOME を空の一時の場所にし、 利用者の site を読まず、 PIP_・_PIP_・PYTHON・SETUPTOOLS_・DISTUTILS_ で
+始まる名前と DIST_EXTRA_CONFIG を外す）。
 """
 from __future__ import annotations
 
@@ -80,6 +87,10 @@ def git(repo: Path, *args: str) -> str:
 
 
 VERSION = re.compile(r"[0-9][0-9A-Za-z.+_-]*")
+#: 組み立ての道具の要求（[build-system].requires）の形: 版を固定した `名前==版` だけ（extra・印・範囲を書かない）
+BUILD_PIN = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][0-9A-Za-z.+!]*)")
+#: 組み立ての道具の置き場の既定の名前（束の置き場の中）
+BUILD_WHEELS = "build-wheels"
 _IV = None
 
 
@@ -112,6 +123,71 @@ def declared(repo: Path) -> "tuple[str, str]":
     if not VERSION.fullmatch(version.group(1)):
         raise Stop("製品の版に、使えない字があります（数字で始まり、英数字と .+_- だけ）")
     return name, version.group(1)
+
+
+def normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def build_plan(repo: Path) -> "dict[str, tuple[str, str, str]]":
+    """組み立ての道具の wheel（ファイルの名前 → (名前, 版, sha256)）。 根の pyproject.toml の [build-system].requires は、 どれも
+    版を固定した `名前==版` で、 [tool.mirumeai.build-wheels] に、 その名前と版の wheel が 1 つずつある。 ほかに書いた
+    wheel（組み立ての道具の依存）も、 名前ごとに 1 つだけ。"""
+    iv = install_tool()
+    try:
+        declaration = iv.read_declaration(repo)
+    except iv.Stop as e:
+        raise Stop(str(e)) from None
+    pins: "dict[str, str]" = {}
+    for req in declaration["build_requires"]:
+        m = BUILD_PIN.fullmatch(req)
+        if m is None or normalize(m.group(1)) in pins:
+            raise Stop(f"pyproject.toml の [build-system].requires の {req!r} は、版を固定した `名前==版` ではありません"
+                       "（1 つの名前を 1 度だけ。組み立ての道具は hash で照らした wheel から入れる）")
+        pins[normalize(m.group(1))] = m.group(2)
+    if not pins:
+        raise Stop("pyproject.toml の [build-system].requires がありません（組み立ての道具の版を固定して書く）")
+    wheels: "dict[str, tuple[str, str, str]]" = {}
+    seen: "dict[str, str]" = {}
+    for file, digest in sorted(declaration["build_wheels"].items()):
+        m = iv.WHEEL_FILE.fullmatch(file)
+        dist, version = normalize(m.group(1)), m.group(2)
+        if dist in seen:
+            raise Stop(f"[tool.mirumeai.build-wheels] に、{dist} の wheel が 2 つあります")
+        seen[dist] = version
+        wheels[file] = (dist, version, digest)
+    missing = [f"{n}=={v}" for n, v in sorted(pins.items()) if seen.get(n) != v]
+    if missing:
+        raise Stop(f"[tool.mirumeai.build-wheels] に、組み立ての道具 {', '.join(missing)} の wheel と sha256 がありません"
+                   "（組み立ての道具の依存の wheel も書く）")
+    return wheels
+
+
+def copy_build_wheels(store: Path, wheels: "dict[str, tuple[str, str, str]]", dest: Path) -> None:
+    """組み立ての道具の置き場から、 宣言した wheel だけを dest に写し、 写した物の sha256 を宣言と照らす（置き場のほかの物は
+    使わない）。"""
+    if store.is_symlink() or not store.is_dir():
+        raise Stop(f"組み立ての道具の置き場がありません: {store}（[tool.mirumeai.build-wheels] の wheel を置く）")
+    dest.mkdir()
+    for file, (_, _, digest) in sorted(wheels.items()):
+        source = store / file
+        if source.is_symlink() or not source.is_file():
+            raise Stop(f"組み立ての道具の置き場に {file} がありません（リンクは使わない）")
+        target = dest / file
+        shutil.copyfile(source, target)
+        if sha256_file(target) != digest:
+            raise Stop(f"組み立ての道具の {file} の sha256 が、[tool.mirumeai.build-wheels] と違います")
+
+
+def build_env(home: Path) -> "dict[str, str]":
+    """組み立てに渡す環境。 入れる道具の pip_env と同じ形（PIP_・_PIP_・PYTHON で始まる名前を外し、 pip の設定のファイルを
+    読まない）に加え、 setuptools と distutils の利用者の設定を読ませない（HOME を空の一時の場所にし、 利用者の site を
+    読まず、 SETUPTOOLS_・DISTUTILS_ で始まる名前と DIST_EXTRA_CONFIG を外す）。"""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("PIP_", "_PIP_", "PYTHON", "SETUPTOOLS_", "DISTUTILS_")) and k != "DIST_EXTRA_CONFIG"}
+    env.update(PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1", HOME=str(home),
+               PYTHONNOUSERSITE="1")
+    return env
 
 
 def write_sums(bundle: Path) -> str:
@@ -232,20 +308,36 @@ def copy_tree(repo: Path, commit: str, dest: Path, run=subprocess.run, top: "tup
     return len(files)
 
 
-def wheel_from_tree(src: Path, python: str, out: Path, run=subprocess.run) -> Path:
-    """写した木 src（copy_tree で commit から写した物）から製品の wheel を作り、 out に置く。"""
+def wheel_from_tree(src: Path, python: str, out: Path, tools: Path, wheels: "dict[str, tuple[str, str, str]]",
+                    run=subprocess.run) -> Path:
+    """写した木 src（copy_tree で commit から写した物）から製品の wheel を作り、 out に置く。 組み立ての道具は、 tools（照らした
+    wheel だけを写した所）から使い捨ての venv に hash で入れ、 index と build isolation を使わない。"""
     with tempfile.TemporaryDirectory(prefix="product-wheel-") as tmp:
-        wheels = Path(tmp) / "wheels"
-        # 入れる道具の pip_env と同じ形（PIP_・_PIP_・PYTHON で始まる名前を外し、 pip の設定のファイルを読まない）。 pip は -I で
-        # 流し、 流した所を sys.path に入れない
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("PIP_", "_PIP_", "PYTHON"))}
-        env.update(PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1")
-        r = run([python, "-I", "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels), str(src)],
-                capture_output=True, text=True, env=env)
-        if r.returncode != 0:
-            tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
-            raise Stop(f"wheel を作れません（{' / '.join(tail)}）")
-        made = sorted(wheels.glob("*.whl"))
+        tmp = Path(tmp)
+        home = tmp / "home"
+        home.mkdir()
+        env = build_env(home)
+
+        def step(cmd: "list[str]", what: str) -> None:
+            r = run(cmd, capture_output=True, text=True, env=env)
+            if r.returncode != 0:
+                tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
+                raise Stop(f"{what}（{' / '.join(tail)}）")
+
+        venv = tmp / "build-venv"
+        step([python, "-I", "-m", "venv", str(venv)], "組み立ての venv を作れません")
+        vpy = str(venv / "bin" / "python")
+        req = tmp / "build-requirements.txt"
+        req.write_text("".join(f"{dist}=={version} --hash=sha256:{digest}\n"
+                               for dist, version, digest in sorted(wheels.values())), encoding="utf-8")
+        step([vpy, "-I", "-m", "pip", "install", "--no-index", "--no-deps", "--require-hashes", "--only-binary", ":all:",
+              "--find-links", str(tools), "-r", str(req)], "組み立ての道具を入れられません")
+        step([vpy, "-I", "-m", "pip", "check"],
+             "組み立ての道具の依存が足りないか合いません（[tool.mirumeai.build-wheels] に依存の wheel も書く）")
+        made_dir = tmp / "wheels"
+        step([vpy, "-I", "-m", "pip", "wheel", "--no-deps", "--no-index", "--no-build-isolation", "--check-build-dependencies",
+              "--wheel-dir", str(made_dir), str(src)], "wheel を作れません")
+        made = sorted(made_dir.glob("*.whl"))
         if len(made) != 1:
             raise Stop(f"wheel が 1 つではありません（{len(made)}）")
         out.mkdir(parents=True)
@@ -254,7 +346,7 @@ def wheel_from_tree(src: Path, python: str, out: Path, run=subprocess.run) -> Pa
         return dest
 
 
-def make(repo: Path, out_root: Path, python: str, run=subprocess.run) -> dict:
+def make(repo: Path, out_root: Path, python: str, run=subprocess.run, build_store: "Path | None" = None) -> dict:
     here = declared(repo)
     if git(repo, "status", "--porcelain", "--untracked-files=no").strip():
         raise Stop("追跡しているファイルに commit していない変更があります（配る wheel は commit の中身だけから作る）")
@@ -274,12 +366,18 @@ def make(repo: Path, out_root: Path, python: str, run=subprocess.run) -> dict:
         name, version = declared(src)
         if (name, version) != here:
             raise Stop(f"作業ツリーと commit で、製品の名前か版が違います（commit は {name} {version}）")
+        if normalize(name) == BUILD_WHEELS:
+            raise Stop(f"製品の名前が、組み立ての道具の置き場の名前（{BUILD_WHEELS}）と同じです")
+        # 組み立ての道具も、 写した commit の木の宣言で照らす
+        wheels = build_plan(src)
+        tools = Path(tmp) / "build-wheels"
+        copy_build_wheels(build_store if build_store is not None else out_root / BUILD_WHEELS, wheels, tools)
         bundle = out_root / name / version
         if bundle.exists():
             raise Stop(f"同じ版の束がもうあります: {name}/{version}（版を上げてから作る）")
         bundle.mkdir(parents=True)
         try:
-            wheel = wheel_from_tree(src, python, bundle / "wheelhouse", run=run)
+            wheel = wheel_from_tree(src, python, bundle / "wheelhouse", tools, wheels, run=run)
         except BaseException:
             shutil.rmtree(bundle, ignore_errors=True)
             raise
@@ -302,13 +400,17 @@ def make(repo: Path, out_root: Path, python: str, run=subprocess.run) -> dict:
 def main(argv: "list[str] | None" = None, repo: Path = REPO) -> int:
     ap = argparse.ArgumentParser(description="製品のパッケージの束を作る")
     ap.add_argument("--out", help="束の置き場（既定は案件のフォルダの wheelhouse/）")
+    ap.add_argument("--build-wheels", help="組み立ての道具の置き場（既定は束の置き場の build-wheels/）")
     ap.add_argument("--python", default=shutil.which("python3.10") or sys.executable, help="wheel を作る Python")
     opts = ap.parse_args(argv)
     try:
         out_root = Path(opts.out).resolve() if opts.out else repo.parent / "wheelhouse"
         if out_root == repo or repo in out_root.parents:
             raise Stop("束の置き場が、この Repository の中です（Git の外に置く）")
-        release = make(repo, out_root, opts.python)
+        store = Path(opts.build_wheels).resolve() if opts.build_wheels else None
+        if store is not None and (store == repo or repo in store.parents):
+            raise Stop("組み立ての道具の置き場が、この Repository の中です（Git の外に置く）")
+        release = make(repo, out_root, opts.python, build_store=store)
         print(f"[product-bundle] 作りました: {release['product']} {release['version']}（commit {release['commit'][:12]}）")
         print("[product-bundle] System Release の記録の product_package に写す値:")
         print(f"  name: {release['product']}")

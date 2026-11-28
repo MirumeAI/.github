@@ -19,9 +19,15 @@
                                           なければ止める。 `-` を `_` にした物が Python の名前（`python -m <Python の名前>
                                           doctor` で Core の版の範囲を照らす。 製品のパッケージに `__main__.py` が要る）
   [project.optional-dependencies]         名前の全部が、 判定の venv で依存が満たされることを照らす extra
-  [project.entry-points."mirumeai_pdm.*"] PDM の差し込みの群ごとの、 製品のパッケージが登録する名前（無ければ照らさない）
+  [project.entry-points."mirumeai_pdm.*"] PDM の差し込みの群ごとの、 製品のパッケージが登録する名前。 入れた製品が
+                                          mirumeai_pdm. で始まる群に登録した物は、 宣言と同じでなければ止める（宣言に無い
+                                          群・宣言が無いときの登録も止める）
+  [tool.mirumeai]                         install-set-extra は一式の道具が、 build-wheels（組み立ての道具の wheel と sha256）
+                                          は製品の束を作る道具が読む。 知らない鍵は止める
   読み手は標準の部品だけの小さな TOML の読み手（read_toml。 機体の Python 3.10 には tomllib が無く、 system の python3 で
   ほかの部品を入れずに流すため）。 tomllib と同じ決まりで読み、 複数行の文字列などの読めない書き方と、 形の違う宣言は止める
+  （文字列・表・並びでない値は字の形だけを照らし、 中身を読まない。 暦に無い日付は、 tomllib は断るがこの読み手は読む。
+  読む鍵には使わない）
 
 読む物:
   versions.yaml（この Repository）      各 Core の節の tag・commit・sha256sums_sha256（束の SHA256SUMS の sha256）・
@@ -130,9 +136,12 @@ PARTS_GROUP = "mirumeai_pdm."
 PRODUCT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 #: extra と差し込みの群に登録する名前
 DECL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-#: 根の pyproject.toml の [tool.mirumeai] で読む鍵（ほかの鍵は書き違いとして止める）。 一式に足す根の物の並びは、 一式の
-#: 道具が読む
-TOOL_KEYS = ("install-set-extra",)
+#: 根の pyproject.toml の [tool.mirumeai] で読む鍵（ほかの鍵は書き違いとして止める）。 一式に足す根の物の並びは一式の道具が、
+#: 組み立ての道具の wheel とその sha256 は製品の束を作る道具が読む
+TOOL_KEYS = ("install-set-extra", "build-wheels")
+#: 組み立ての道具の wheel のファイルの名前（名前-版[-build]-python-abi-platform.whl）
+WHEEL_FILE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._]*)-([0-9][0-9A-Za-z.+!]*)(?:-[0-9][A-Za-z0-9._]*)?"
+                        r"-[A-Za-z0-9._]+-[A-Za-z0-9._]+-[A-Za-z0-9._]+\.whl")
 LOCK_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(\[[A-Za-z0-9,._-]+\])?==(?P<ver>[^\s;\\]+)"
                        r"(\s*;(?P<marker>[^\\]*?))?(\s+--hash=sha256:[0-9a-f]{64})+\s*$")
 #: venv を作るときに Python（ensurepip）が入れる物。 束に無くても、 入れた後の照らしで「ほかの配布物」に数えない
@@ -282,7 +291,7 @@ def read_machine(path: Path) -> "tuple[str, str]":
     machine = sections(path).get("machine") or {}
     symbol, kind = machine.get("symbol"), machine.get("kind")
     if kind == "dev":
-        raise Stop("開発の機体（kind: dev）では使いません。 開発の機体の venv は、 開発の道具で作ります（根の README の「開発」の節）")
+        raise Stop("開発の機体（kind: dev）では使いません。 開発の機体の venv は、 開発の道具で作ります（根の README の「始め方」）")
     if kind not in ("installed", "shown"):
         raise Stop("機体の設定の machine.kind が installed か shown ではありません")
     if not symbol or symbol != path.stem:
@@ -603,11 +612,14 @@ class _Toml:
 
 def read_toml(text: str) -> dict:
     """TOML の文を読む（tomllib と同じ決まりの、 この読み手が読める書き方だけ。 読めなければ TomlError）。"""
-    return _Toml(text).parse()
+    try:
+        return _Toml(text).parse()
+    except RecursionError:
+        raise TomlError("入れ子が深すぎます") from None
 
 
 def read_declaration(repo: Path) -> dict:
-    """根の pyproject.toml の、 案件に依る所（製品の名前・Python の名前・extra・部品の登録・一式に足す根の物）。 形が違えば
+    """根の pyproject.toml の、 案件に依る所（製品の名前・Python の名前・extra・部品の登録・一式に足す根の物・組み立ての道具）。 形が違えば
     止める。 読むのは repo の根の物だけ（据え付けた機体では、 一式の道具が照らした一式の木）。"""
     path = repo / "pyproject.toml"
     if path.is_symlink() or not path.is_file():
@@ -651,8 +663,17 @@ def read_declaration(repo: Path) -> dict:
     extra = ours.get("install-set-extra", [])
     if not isinstance(extra, list) or not all(isinstance(x, str) for x in extra):
         raise Stop("pyproject.toml の [tool.mirumeai].install-set-extra は、根の物の名前（文字列）の並びにします")
+    build_wheels = ours.get("build-wheels", {})
+    if not isinstance(build_wheels, dict) or any(
+            not WHEEL_FILE.fullmatch(k) or not isinstance(v, str) or not HEX64.fullmatch(v) for k, v in build_wheels.items()):
+        raise Stop("pyproject.toml の [tool.mirumeai.build-wheels] は、組み立ての道具の wheel のファイルの名前ごとに、sha256"
+                   "（64 桁の小文字の 16 進）を書きます")
+    build = data.get("build-system", {})
+    requires = build.get("requires", []) if isinstance(build, dict) else None
+    if not isinstance(requires, list) or not all(isinstance(x, str) for x in requires):
+        raise Stop("pyproject.toml の [build-system].requires の形が違います（要求の文字列の並び）")
     return {"name": name, "package": name.replace("-", "_"), "extras": sorted(extras), "parts": parts,
-            "install_set_extra": list(extra)}
+            "install_set_extra": list(extra), "build_requires": list(requires), "build_wheels": dict(build_wheels)}
 
 
 # ---------------------------------------------------------------- 束
@@ -961,11 +982,16 @@ for name, extra in want["extras"]:
             bad.append(name + "[" + extra + "] の依存 " + req.name + " がありません")
         elif not req.specifier.contains(d.version, prereleases=True):
             bad.append(name + "[" + extra + "] の依存 " + req.name + " の版が合いません")
-if want.get("parts"):
+if "parts" in want:
+    # 製品が PDM の差し込みの群（mirumeai_pdm. で始まる群。 PARTS_GROUP と同じ）に登録した物は、 宣言と同じでなければ止める
+    # （宣言に無い群の登録と、 宣言が無いときの登録も止める。 setup.cfg・setup.py で足した登録を見逃さない）
     dist, groups = want["parts"]
     d = have.get(norm(dist))
+    eps = list(d.entry_points) if d else []
+    for group in sorted({e.group for e in eps if e.group.startswith("mirumeai_pdm.")} - set(groups)):
+        bad.append(dist + " が、 宣言に無い群 " + group + " に登録しています")
     for group, names in sorted(groups.items()):
-        got = sorted(e.name for e in (d.entry_points if d else []) if e.group == group)
+        got = sorted(e.name for e in eps if e.group == group)
         if got != sorted(names):
             bad.append(dist + " が " + group + " に " + "・".join(sorted(names)) + " だけを 1 つずつ登録していません")
 print(json.dumps(bad, ensure_ascii=False))
@@ -1210,8 +1236,7 @@ def expectations(name: str, p: dict) -> dict:
     if name == "ai":
         pdm = wheel_dist(r["pdm"])
         want["extras"] = [[pdm[0], "web"]] + [[product[0], extra] for extra in declaration["extras"]]
-        if declaration["parts"]:
-            want["parts"] = [product[0], declaration["parts"]]
+        want["parts"] = [product[0], declaration["parts"]]
     return want
 
 

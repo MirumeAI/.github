@@ -1361,7 +1361,7 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work and os.path.lexists(a.work):
         problem = _work_problem(Path(a.work))
         if problem:
-            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            print(f"流せません: --work の {_show(a.work)} {problem}", file=sys.stderr)   # 行を崩す字は escape（#243）
             return 2
     # 同じ利用者の検査を重ねない（#219）。 待つ間の Ctrl-C・SIGTERM でも、 traceback を出さずに止まる
     stopped = {}
@@ -1391,7 +1391,7 @@ def _main(argv: list | None, state: dict) -> int:
     if a.work:
         problem = _claim_work(work)
         if problem:
-            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            print(f"流せません: --work の {_show(a.work)} {problem}", file=sys.stderr)   # 行を崩す字は escape（#243）
             return 2
     logs = work / "logs"
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")

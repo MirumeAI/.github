@@ -254,6 +254,25 @@ class WorkDirIsPrivateTest(E2E):
                 self._assert_cannot_make(p, "の上のフォルダを作れません", path)
         self.assertEqual(blocker.read_text(encoding="utf-8"), "x", "ファイルは変えない")
 
+    def test_line_breaking_chars_in_work_are_escaped_in_the_stop_line(self):
+        """止めの行の `--work` の道と作れなかった道は、 どちらも行を崩す字を escape して出す（#243。 PR #251 の Reviewer A・B）。"""
+        blocker = self.root / "a\u2028b"
+        blocker.write_text("x", encoding="utf-8")
+        p = self._run_at(blocker / "w5")
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("の上のフォルダを作れません", p.stderr)
+        self.assertNotIn("\u2028", p.stderr, "生の行を崩す字を出さない")
+        self.assertEqual(p.stderr.count("a\\u2028b"), 2, "--work の道と作れなかった道の 2 か所で escape する")
+        used = self.root / "c\u2028d"              # 既にある使えない作業の場所（ロックの前の照らしで止まる）
+        used.mkdir()
+        os.chmod(used, 0o700)
+        (used / "keep.txt").write_text("前の結果", encoding="utf-8")
+        p = self._run_at(used)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("空ではありません", p.stderr)
+        self.assertNotIn("\u2028", p.stderr, "生の行を崩す字を出さない")
+        self.assertIn("c\\u2028d", p.stderr)
+
     @unittest.skipIf(os.geteuid() == 0, "root は書けない dir にも書ける")
     def test_unwritable_parent_stops_with_the_path_and_reason(self):
         """本人が書けない上のフォルダ。 上のフォルダを作るところでも、 作業の場所を作るところでも、 道と理由を出して止める（#243）。"""

@@ -663,7 +663,7 @@ def pr_body(plan: Plan) -> str:
 
 ## Reviewerに確認してほしい点
 
-案件の題名（「{plan.title}」）と案件の名前（`{plan.case}`）・Python の名前（`{plan.package}`）、`README.md` の「始めるときにやること」。
+案件の題名（「{plan.title}」）と案件の名前（`{plan.case}`）・Python の名前（`{plan.package}`）、`README.md` の「始め方」。
 """
 
 

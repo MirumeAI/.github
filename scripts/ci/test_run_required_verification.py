@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -182,6 +183,95 @@ class PassAndRecordTest(E2E):
         self.assertIn("main を取り込んで流し直して", p.stdout)
         # main の側の変更（docs/）は、 この PR の変更に数えない（merge-base からの差）
         self.assertIn("docs.yml（paths に合う変更が無い）", p.stdout)
+
+
+class WorkDirIsPrivateTest(E2E):
+    """**作業の場所は本人だけが読める形**（#231）。 中に検査する Repository の clone・venv・仮の HOME が入る。"""
+
+    WF = """\
+        on: pull_request
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - name: ok
+                run: echo ok
+        """
+
+    def _run_at(self, work: Path):
+        t = _repo(self.root, self.wf(self.WF), {}, name=f"target-{work.name}")
+        old = os.umask(0o002)       # グループに書ける umask でも、 作る場所は 700 になる
+        try:
+            return self.run_it(t, "--work", str(work))   # 後の --work が先の物に勝つ
+        finally:
+            os.umask(old)
+
+    def test_new_work_is_made_private_even_under_setgid_parent(self):
+        parent = self.root / "shared"
+        parent.mkdir()
+        os.chmod(parent, 0o2775)    # 上のフォルダの setgid と群の権限を、 新しい dir が受け継がない
+        work = parent / "w"
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode) & 0o7077, 0, oct(work.stat().st_mode))
+
+    def test_existing_work_open_to_group_or_others_is_refused_without_changing_it(self):
+        for mode in (0o770, 0o705, 0o701, 0o710):      # グループだけ・others だけのどちらでも止める
+            with self.subTest(mode=oct(mode)):
+                work = self.root / f"open-{mode:o}"
+                work.mkdir()
+                os.chmod(work, mode)
+                p = self._run_at(work)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("グループか others の権限", p.stderr)
+                self.assertEqual(stat.S_IMODE(work.stat().st_mode), mode, "権限は変えない")
+                self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+
+    def test_new_work_under_missing_parents_is_made_private(self):
+        work = self.root / "not" / "yet" / "w"          # 上のフォルダもまだ無い
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
+
+    def test_existing_private_empty_work_is_used(self):
+        work = self.root / "mine"
+        work.mkdir()
+        os.chmod(work, 0o700)
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
+
+    def test_existing_private_work_with_contents_is_refused_and_left_as_is(self):
+        work = self.root / "used"
+        work.mkdir()
+        os.chmod(work, 0o700)
+        (work / "keep.txt").write_text("前の結果", encoding="utf-8")
+        p = self._run_at(work)
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("空ではありません", p.stderr)
+        self.assertEqual([x.name for x in work.iterdir()], ["keep.txt"], "中身は変えない")
+        self.assertEqual((work / "keep.txt").read_text(encoding="utf-8"), "前の結果")
+
+    def test_work_of_another_user_is_refused(self):
+        """持ち主の照らし。 別の利用者の dir は試験では作れないので、 照らしの関数を直に呼び、 この利用者の番号だけを替える。"""
+        from unittest import mock
+        work = self.root / "theirs"
+        work.mkdir()
+        os.chmod(work, 0o700)
+        self.assertIsNone(R._work_problem(work))
+        with mock.patch.object(R.os, "getuid", return_value=os.getuid() + 1):
+            self.assertIn("持ち主", R._work_problem(work) or "")
+
+    def test_relative_work_is_taken_from_the_current_dir(self):
+        """相対の道の `--work` は、 流した dir から決める（段は clone の中で流すので、 そのままでは段が落ちていた）。"""
+        t = _repo(self.root, self.wf(self.WF), {}, name="target-rel")
+        cmd = [sys.executable, str(RUNNER), str(t), "--head", "pr", "--base", "main",
+               "--canonical", str(t), "--canonical-ref", "main",
+               "--python", f"{PYVER}={sys.executable}", "--work", "rel-work"]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=self.root)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE((self.root / "rel-work").stat().st_mode), 0o700)
 
 
 class FailureIsNeverPassTest(E2E):
@@ -1588,6 +1678,47 @@ class LockTest(E2E):
         self.assertNotIn("local/first", log3.read_text(encoding="utf-8"))
         (at / "release").touch()
         self.assertEqual(first.wait(120), 0)
+
+    def test_work_that_appears_while_waiting_is_checked_again(self):
+        """ロックを待つ間に同じ道へ開いた dir が現れても、 照らし直して止める（#231。 待つ前の照らしだけでは抜ける）。"""
+        held = [self.hold_lock(b"{}")]
+
+        def release():
+            while held:
+                os.close(held.pop())
+        self.addCleanup(release)                         # 途中で落ちても、 持たせたロックを閉じる
+        work = self.root / "late-work"
+        proc, log, _ = self.start("late", "echo ok", "--work", str(work))   # 後の --work が先の物に勝つ
+        self.wait_for(lambda: "終わるまで待ちます" in log.read_text(encoding="utf-8"), "ロックを待ち始める", proc, log)
+        work.mkdir()
+        os.chmod(work, 0o770)
+        release()                                        # ロックを外して、 道具に進ませる
+        self.assertEqual(proc.wait(120), 2, log.read_text(encoding="utf-8"))
+        self.assertIn("グループか others の権限", log.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o770, "権限は変えない")
+        self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+        self.assertLockIsFree()
+
+    def test_existing_unusable_work_stops_without_waiting_for_the_lock(self):
+        """既にある使えない作業の場所は、 ロックを待たずに止める（#231。 待ってから止めると、 ほかの検査の終わりまで待たせる）。"""
+        fd = self.hold_lock(b"{}")
+        self.addCleanup(os.close, fd)
+        work = self.root / "open-work"
+        work.mkdir()
+        os.chmod(work, 0o770)
+        t = _repo(self.root, self.wf("""\
+            on: pull_request
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - run: echo ok
+            """), {}, name="early")
+        proc, log = self.run_bg([str(t), "--python", f"{PYVER}={sys.executable}", "--work", str(work)], "early")
+        self.assertEqual(proc.poll(), 2, log.read_text(encoding="utf-8"))
+        self.assertIn("グループか others の権限", log.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o770, "権限は変えない")
+        self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
 
     def test_list_and_refusals_do_not_take_the_lock(self):
         """`--list` と、 流す前に止まるとき（知らない書き方）は、 ロックを待たない。"""

@@ -1984,7 +1984,7 @@ def _load_profile(root: Path, yaml) -> Profile:
     if not p.is_file():
         raise Stop("profile-missing",
                    f"{PROFILE} がありません。 この検査を有効にしたリポジトリでは、 根に"
-                   "この案件の宣言が要ります（書き方は MirumeAI/.github の README）")
+                   "この案件の宣言が要ります（書き方は MirumeAI/.github の scripts/ci/README.md）")
     if p.stat().st_size > MAX_PROFILE_BYTES:
         raise Stop("profile-yaml", f"{PROFILE} が大きすぎます（{MAX_PROFILE_BYTES // 1024} KB まで）")
     try:

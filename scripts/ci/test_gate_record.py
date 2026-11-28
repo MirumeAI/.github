@@ -363,10 +363,10 @@ class ReviewTest(Base):
         # 止めたときの知らせに、 言い直しの例を書く（#139 の Reviewer A）
         self.assertStops(self.w.run(*base, "--look", "Human Verification の完了を確かめる"),
                          "`が完了したかを確かめる`・`の完了を待つか` のように言い直して", 2)
-        # 知らせが指す README の節の名前は、 見出しと同じ（#141）
+        # 知らせが指す README の節の名前は、 見出しと同じ（#141。 道具の README に移した。 #232）
         self.assertStops(self.w.run(*base, "--look", "Human Verification の完了を確かめる"),
-                         "README の「門の記録と頼みの文（`gate_record.py`）」の節", 2)
-        readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+                         "`scripts/ci/README.md` の「門の記録と頼みの文（`gate_record.py`）」の節", 2)
+        readme = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("\n## 門の記録と頼みの文（`gate_record.py`）\n", readme)
 
     def test_recheck_needs_a_different_head_and_fixes(self) -> None:

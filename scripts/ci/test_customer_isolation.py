@@ -44,7 +44,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "customer_isolation_check.py"
-README = HERE.parents[1] / "README.md"
+README = HERE / "README.md"  # 宣言の書き方と例の正本（道具の README。 #232 で根の README から移した）
 WORKFLOWS = HERE.parents[1] / ".github" / "workflows"
 sys.path.insert(0, str(HERE))
 

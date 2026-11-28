@@ -239,7 +239,7 @@ def _one_line(text, what: str, mention_ok: bool = False) -> str:
             raise Fatal(f"{what} に、人の判断・人の確認の記録の形（`Human Adjudication:`・`Human Verification:` など）を"
                         "書かないでください（言葉に触れるだけなら書けます。触れるだけで止まったときは、"
                         "`が完了したかを確かめる`・`の完了を待つか` のように言い直してください。"
-                        "README の「門の記録と頼みの文（`gate_record.py`）」の節）")
+                        "`scripts/ci/README.md` の「門の記録と頼みの文（`gate_record.py`）」の節）")
         return text.strip()
     return _no_mark(text.strip(), what)
 

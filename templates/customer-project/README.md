@@ -59,4 +59,4 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 5. `--report-only` を付けずに流して `結果: PASS`（`NG` と `ERROR` の行が無い）になったら、`run-isolation-check` を `true` にする
 6. その Pull Request の Required Verification で、混入の照合の段が動いて `結果: PASS` になることを確かめる
 
-宣言を変えた Pull Request は、人が値を確かめるまで merge しません。正本は `customer_isolation_check.md` の「有効にする順」と、`MirumeAI/.github` の README「顧客の間の混入の検査」です。
+宣言を変えた Pull Request は、人が値を確かめるまで merge しません。正本は `customer_isolation_check.md` の「有効にする順」と、`MirumeAI/.github` の `scripts/ci/README.md` の「顧客の間の混入の検査」です。

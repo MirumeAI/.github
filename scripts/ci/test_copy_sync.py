@@ -156,6 +156,27 @@ class ItFindsDriftTest(unittest.TestCase):
                 self.assertEqual(code, 1, out[-400:])
                 self.assertIn(rel, out)
 
+    def test_the_install_tools_are_covered(self) -> None:
+        """**据え付けの道具とその試験も対象であること**（#237）。
+
+        案件と同じ道（`deploy/bundle/`）に正本を置き、 案件の写しを照らす。 2 件目の案件が
+        手で写して直すと、 守りの直しが片方にだけ入る。
+        """
+        for rel in ("deploy/bundle/install_venvs.py", "deploy/bundle/make_product_bundle.py",
+                    "deploy/bundle/install_set.py", "deploy/bundle/test_install_venvs.py",
+                    "deploy/bundle/test_install_set.py"):
+            with self.subTest(file=rel), tempfile.TemporaryDirectory() as td:
+                self.assertIn(rel, C.SHARED)
+                base = Path(td)
+                can, tgt = base / "can", base / "tgt"
+                _canonical_tree(can)
+                _canonical_tree(tgt)
+                f = tgt / rel
+                f.write_bytes(f.read_bytes() + b"\n# drift\n")
+                code, out = self._run(tgt, can)
+                self.assertEqual(code, 1, out[-400:])
+                self.assertIn(rel, out)
+
     def test_every_shared_command_is_compared(self) -> None:
         """**共通 command と script は、 すべて照合の対象であること。**
 

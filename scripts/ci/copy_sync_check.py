@@ -68,6 +68,14 @@ SHARED = (
     ".claude/commands/pr.md",
     ".claude/commands/docs-sync.md",
     ".claude/commands/customer-request.md",
+    # 据え付けの道具とその試験（#237。 決定 P1: 案件と同じ道に正本を置く）。 最初の案件が
+    # 自分の写しを持ち、 2 件目からは手で写して直すと、 守り（hash の照らし・git と pip の
+    # 環境の絞り）の直しが片方にだけ入る。 案件に依る所は案件の根の `pyproject.toml` から読む。
+    "deploy/bundle/install_venvs.py",
+    "deploy/bundle/make_product_bundle.py",
+    "deploy/bundle/install_set.py",
+    "deploy/bundle/test_install_venvs.py",
+    "deploy/bundle/test_install_set.py",
 )
 
 ALLOW_FILE = ".ci-copy-allow"

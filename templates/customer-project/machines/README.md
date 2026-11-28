@@ -10,6 +10,6 @@
 
 - 機体の設定のファイル（`recipes/case.yaml` が無いのにここに置くと、混入の検査が止まります）
 - 開発の機体の設定（どの形でも Git の外に置く）
-- 画像・Dataset・Model Weight の本体、Credential、パスワード、ライセンスファイル、ほかの案件の値
+- 顧客データ（画像を含む）・Dataset・モデルと Model Weight の本体、Credential、パスワード、ライセンスファイル、ほかの案件の値
 
 目標の形の正本: `MirumeAI/development-docs` の `03_customer_development/recipes_and_machines.md`

@@ -200,7 +200,7 @@ class WorkDirIsPrivateTest(E2E):
         """
 
     def _run_at(self, work: Path):
-        t = _repo(self.root, self.wf(self.WF), {})
+        t = _repo(self.root, self.wf(self.WF), {}, name=f"target-{work.name}")
         old = os.umask(0o002)       # グループに書ける umask でも、 作る場所は 700 になる
         try:
             return self.run_it(t, "--work", str(work))   # 後の --work が先の物に勝つ
@@ -216,15 +216,23 @@ class WorkDirIsPrivateTest(E2E):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(stat.S_IMODE(work.stat().st_mode) & 0o7077, 0, oct(work.stat().st_mode))
 
-    def test_existing_work_open_to_group_is_refused_without_changing_it(self):
-        work = self.root / "open"
-        work.mkdir()
-        os.chmod(work, 0o770)
+    def test_existing_work_open_to_group_or_others_is_refused_without_changing_it(self):
+        for mode in (0o770, 0o705, 0o701, 0o710):      # グループだけ・others だけのどちらでも止める
+            with self.subTest(mode=oct(mode)):
+                work = self.root / f"open-{mode:o}"
+                work.mkdir()
+                os.chmod(work, mode)
+                p = self._run_at(work)
+                self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+                self.assertIn("グループか others の権限", p.stderr)
+                self.assertEqual(stat.S_IMODE(work.stat().st_mode), mode, "権限は変えない")
+                self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+
+    def test_new_work_under_missing_parents_is_made_private(self):
+        work = self.root / "not" / "yet" / "w"          # 上のフォルダもまだ無い
         p = self._run_at(work)
-        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("グループか others の権限", p.stderr)
-        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o770, "権限は変えない")
-        self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o700)
 
     def test_existing_private_empty_work_is_used(self):
         work = self.root / "mine"
@@ -1639,6 +1647,21 @@ class LockTest(E2E):
         self.assertNotIn("local/first", log3.read_text(encoding="utf-8"))
         (at / "release").touch()
         self.assertEqual(first.wait(120), 0)
+
+    def test_work_that_appears_while_waiting_is_checked_again(self):
+        """ロックを待つ間に同じ道へ開いた dir が現れても、 照らし直して止める（#231。 待つ前の照らしだけでは抜ける）。"""
+        fd = self.hold_lock(b"{}")
+        work = self.root / "late-work"
+        proc, log, _ = self.start("late", "echo ok", "--work", str(work))   # 後の --work が先の物に勝つ
+        self.wait_for(lambda: "終わるまで待ちます" in log.read_text(encoding="utf-8"), "ロックを待ち始める", proc, log)
+        work.mkdir()
+        os.chmod(work, 0o770)
+        os.close(fd)                                     # ロックを外して、 道具に進ませる
+        self.assertEqual(proc.wait(120), 2, log.read_text(encoding="utf-8"))
+        self.assertIn("グループか others の権限", log.read_text(encoding="utf-8"))
+        self.assertEqual(stat.S_IMODE(work.stat().st_mode), 0o770, "権限は変えない")
+        self.assertEqual(list(work.iterdir()), [], "止めるときは何も置かない")
+        self.assertLockIsFree()
 
     def test_list_and_refusals_do_not_take_the_lock(self):
         """`--list` と、 流す前に止まるとき（知らない書き方）は、 ロックを待たない。"""

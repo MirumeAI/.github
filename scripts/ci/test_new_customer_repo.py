@@ -649,7 +649,11 @@ class TheInstallToolsFitTheTemplateTest(unittest.TestCase):
                 (tgt / rel).write_bytes(PLAN.tree[rel][1])
             declaration = IV.read_declaration(tgt)
             self.assertEqual(declaration, {"name": "example-part", "package": "example_part", "extras": [],
-                                           "parts": {}, "install_set_extra": []})
+                                           "parts": {}, "install_set_extra": [],
+                                           "build_requires": ["setuptools==84.2.1", "wheel==0.48.0"], "build_wheels": {}})
+            # 組み立ての道具は、 製品の束を作る道具が読める形（版を固定した 名前==版）で書いてある
+            PB = _load_install_tool("make_product_bundle")
+            self.assertTrue(all(PB.BUILD_PIN.fullmatch(r) for r in declaration["build_requires"]))
             self.assertIn(f"src/{declaration['package']}/__init__.py", PLAN.tree)
             self.assertEqual(IS.tree_list(declaration), IS.TREE_TOP)
             self.assertLessEqual({"image_acquisition_pdm", "pdm"},

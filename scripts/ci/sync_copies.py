@@ -144,6 +144,7 @@ KINDS = (
     ("検査の道具", "scripts/ci/"),
     ("Issue Form の道具", ".claude/scripts/"),
     ("共通の command", ".claude/commands/"),
+    ("据え付けの道具", "deploy/bundle/"),
 )
 RECORD = "GitHub Actions unavailable — canonical verification PASS"
 

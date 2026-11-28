@@ -735,9 +735,11 @@ class SyncTest(unittest.TestCase):
         self.assertIn("## 影響範囲\n\nこの Repository の写し（ガードの回帰テスト・ガード・回帰テストの件数の行）。",
                       bodies["PDM"])
         self.assertIn("## 影響範囲\n\nこの Repository の写し（検査の道具・ガードの回帰テスト・ガード・"
-                      "Issue Form の道具・共通の command・回帰テストの件数の行）。", bodies["development-docs"])
+                      "Issue Form の道具・共通の command・据え付けの道具・回帰テストの件数の行）。", bodies["development-docs"])
         a = S.Analysis("x", files=[(".claude/commands/pr.md", "old")])
         self.assertEqual(S.scope(a), "この Repository の写し（共通の command）。")
+        a = S.Analysis("x", files=[("deploy/bundle/install_set.py", "old")])
+        self.assertEqual(S.scope(a), "この Repository の写し（据え付けの道具）。")
 
     def test_cleanup_removes_only_merged_and_unchanged(self) -> None:
         self.assertEqual(self.w.main("apply", "--source", "97", "--only", "pdm,dd")[0], 0)

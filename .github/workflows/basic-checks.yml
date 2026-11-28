@@ -105,6 +105,13 @@ jobs:
       - name: 顧客案件の Repository を作る道具
         run: python scripts/ci/test_new_customer_repo.py
 
+      # **据え付けの道具（案件の写しの正本。 `deploy/bundle/`）。** 機体へ wheel を hash で入れる・
+      # 製品の束を作る・機体へ運ぶ一式を作って照らす（#237）。 案件に依る所は案件の根の
+      # `pyproject.toml` から読む。 偽の案件の束と Git の Repository で照らし、 pip は流さない。
+      # 案件の Repository の物を照らす試験は、 正本では飛ぶ（雛形に合うことは上の段が照らす）
+      - name: 据え付けの道具
+        run: python -I -B -m unittest discover -s deploy/bundle -p 'test_*.py' -v
+
       # **版と配置の記録の検査そのもの。**
       # 「deployed_release に書いた版が無い」「rollback が今の版と同じ」は
       # 必要になった瞬間まで気づけない。 見つける側が壊れたら意味が無い。

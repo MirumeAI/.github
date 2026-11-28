@@ -120,6 +120,19 @@ NOT_FOR_CUSTOMER = {
         "（顧客案件には表も job も無い）",
     "scripts/ci/test_mutation_engine.py":
         "変異の確かめの仕組みの試験。 仕組みと同じく Core だけが使う",
+    # 据え付けの道具（#237）。 据え付けの計画のある案件が、 自分の Pull Request で写す（写した後は
+    # 照合が見る）。 雛形から作ったばかりの案件は、 まだ機体も Core の版の選択も無く、 雛形の製品の
+    # パッケージには道具が doctor を呼ぶ `python -m` の入口（`__main__.py`）も無い
+    "deploy/bundle/install_venvs.py":
+        "据え付けの道具。 据え付けの計画のある案件が写す（雛形の製品のパッケージには python -m の入口が無い）",
+    "deploy/bundle/make_product_bundle.py":
+        "据え付けの道具（製品の束を作る）。 上と同じく、 据え付けの計画のある案件が写す",
+    "deploy/bundle/install_set.py":
+        "据え付けの道具（機体へ運ぶ一式）。 上と同じく、 据え付けの計画のある案件が写す",
+    "deploy/bundle/test_install_venvs.py":
+        "据え付けの道具の試験。 道具と一緒に写す",
+    "deploy/bundle/test_install_set.py":
+        "据え付けの道具の試験。 道具と一緒に写す",
 }
 
 #: `.claude/settings.json` は**正本から作る**。 顧客案件はライセンス

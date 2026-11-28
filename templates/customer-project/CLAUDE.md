@@ -18,7 +18,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = <案件の題名> �
 - `main` へ直接 commit / push しない（`.claude/hooks/guard-main.sh` が止める。挙動は `scripts/ci/test_guard_main.sh` が 257 ケースで検証している）
 - Core の Source をこの Repository へ写さない。開発では Core の clone をこの Repository の隣に置く
 - `pyproject.toml` に Core の名前を書かない。Core の内部を import しない（各 Core の `docs/public_api.md` の公開の面と差し込みの群だけを使う）。認証とライセンスの門番を外さず、迂回しない。入口を開く・`allow_ports` を広げる変更は、守りの境として人の判断が要る
-- 顧客データ・Credential・大容量 Dataset・Model Weight・ライセンスファイル（`*.lic`）を置かない
+- 顧客データ・個人情報・機密契約資料・Credential・大容量 Dataset・Model Weight・出所か版の分からない Core の Binary・ライセンスファイル（`*.lic`）を置かない（正本は development-docs の `customer_repository_structure.md` の「保持しない対象」と `05_security/secrets_and_data.md`）
 - `.claude/`・`scripts/ci/` は正本（`MirumeAI/.github`）の写し。ここでは直さない
 
 ## 変更を加えるとき

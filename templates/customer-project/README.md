@@ -42,7 +42,7 @@ PDM Core + Image-Acquisition-PDM Core + この Repository = 顧客検査シス�
 | `release/`・`deployment/`・`validation/` | System Release・配置・検証の記録 |
 | `.claude/`・`scripts/ci/`・`.github/workflows/` | 正本（`MirumeAI/.github`）の写しと、共通の検査を呼ぶ workflow。ここでは直さない |
 
-Core の Source とその写し、顧客データ（画像を含む）、画像・Dataset・モデルと Model Weight の本体、データの manifest そのものとデータの置き場の実際の道、ライセンスファイル（`*.lic`）・資格情報（パスワードを含む）は置きません（正本は development-docs の `customer_repository_structure.md` の「保持しない対象」と `05_security/secrets_and_data.md`。各フォルダの README に、置く物と置かない物があります）。
+Core の Source とその写しと、出所か版の分からない Core の Binary（配布物を含む）、顧客データ（画像を含む）、画像・Dataset・モデルと Model Weight の本体（試験用の小さなダミーは `tests/README.md`）、個人情報・機密契約資料、データの manifest そのものとデータの置き場の実際の道、ライセンスファイル（`*.lic`）・資格情報（パスワードを含む）は置きません（正本は development-docs の `customer_repository_structure.md` の「保持しない対象」と `05_security/secrets_and_data.md`。各フォルダの README に、置く物と置かない物があります）。
 
 ## 始め方
 

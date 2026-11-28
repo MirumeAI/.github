@@ -43,6 +43,9 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
     `actions/checkout` は、 head か正本の新しい clone に置き換える
   ・**job ごとに、 新しい clone・workflow の Python の版の新しい venv・仮の HOME
     で流す。** 元の clone と HOME は変えない（pip と Playwright の cache だけ共有）。
+    これらを置く作業の場所（`--work`。 既定は一時の dir）は、 本人だけが読める形にする（#231）: 無ければ
+    700 で作る。 既にある場所は、 この利用者の空の dir で、 グループと others の権限が無いときだけ使い、
+    そうでなければ権限を変えずに止める（終了コード 2）。 ロックを待つ間に同じ道へ現れた物も、 作るときに照らし直す。
     環境変数は、 決めた名前だけを渡す（token・ssh の agent・git の設定などは渡さない）。
     段が終わったら、 後ろで動き続ける子の process も止める
   ・**知らない書き方は、 流す前に止める。** 知らない action・式・値・matrix・
@@ -51,7 +54,8 @@ merge の前提は、 **PR で動く workflow の段そのものを、 merge す
 結果は段ごとの終了コード・試験の件数・飛ばした試験の件数で、 PASS のときは
 PR に書く記録の行を出す。 記録の行には、 head が基準を含むか・正本の ref・
 流した道具の版（正本と同じか）も入れる。 終了コード: 0 PASS ／ 1 FAIL ／
-2 流せない（書き方・Python の版・引数・対象の workflow が無い・`--no-wait` でほかの検査が流れている）。
+2 流せない（書き方・Python の版・引数・対象の workflow が無い・`--no-wait` でほかの検査が流れている・
+`--work` の場所が使えない）。
 
 **PR のコードを手元で動かす。** 中身を読んでから流す。 仮の HOME と環境変数の
 取り除きは、 手元の設定や認証を**うっかり**使わせないためのもので、 同じ OS の
@@ -969,6 +973,45 @@ def _take_lock(state: dict, info: dict, wait: bool) -> bool:
     return True
 
 
+WORK_OPEN = ("に、 グループか others の権限があります（中に検査する Repository の clone を置くので、"
+             " 本人だけが読める場所を渡してください。 権限は変えません）")
+
+
+def _work_problem(work: Path) -> str | None:
+    """既にある作業の場所（`--work`）が使えない理由。 使えるなら None（#231）。
+
+    作業の場所には、 検査する Repository（顧客 Repository を含む）の clone・venv・仮の HOME が入る。 dir で、
+    この利用者の持ち物で、 空で、 グループと others の権限が無いときだけ使う。 権限は変えない（写しの同期の道具の
+    状態の置き場と同じ扱い）。 symlink は辿って、 その先を照らす。"""
+    try:
+        st = work.stat()
+    except OSError as e:
+        return f"を確かめられません（{_show(e.strerror or e)}）"
+    if not stat.S_ISDIR(st.st_mode):
+        return "が dir ではありません"
+    if st.st_uid != os.getuid():
+        return "の持ち主が、 この利用者ではありません"
+    if any(work.iterdir()):
+        return "が空ではありません（前の結果と混ぜない）"
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        return WORK_OPEN
+    return None
+
+
+def _claim_work(work: Path) -> str | None:
+    """ロックの後に作業の場所を作る。 使えないときは理由を返す（#231）。
+
+    無ければ 700 で作り、 umask と上のフォルダの setgid（新しい dir が受け継ぐ）によらず chmod で 700 にする。
+    既にあれば（ロックを待つ間に同じ道へ現れた物も）、 `exist_ok` を使わずに作れなかったことで気づき、 照らし直す。"""
+    work.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        work.mkdir(mode=0o700)
+    except FileExistsError:
+        return _work_problem(work)
+    os.chmod(work, 0o700)
+    return None
+
+
 def _release_lock(state: dict) -> None:
     """ロックを外す（fd を閉じる）。 持っていたときだけ、 持ち主の記録を消す（待つ途中なら、 持ち主の記録を消さない）。"""
     fd = state.pop("lock", None)
@@ -1207,7 +1250,8 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--canonical-ref", default="origin/main", help="正本の道具と再利用 workflow を取る ref")
     ap.add_argument("--python", action="append", default=[], metavar="版=道",
                     help="workflow の Python の版の interpreter（既定は PATH の python<版>）")
-    ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir）")
+    ap.add_argument("--work", help="clone・venv・仮の HOME を置く空の場所（既定は一時の dir。 無ければ本人だけが読める形〔700〕で作り、"
+                    " 既にある場所は、 この利用者の空の dir で、 グループと others の権限が無いときだけ使う）")
     ap.add_argument("--jobs", type=int, default=None, metavar="N",
                     help=f"needs を満たした job を同時に流す数の上限（既定は使える CPU の数 − {SPARE_CPUS} と 空きメモリ ÷ "
                          f"{JOB_MEMORY / 1024 ** 3:g} GiB の小さい方。 1 なら 1 つずつ）")
@@ -1216,6 +1260,8 @@ def _main(argv: list | None, state: dict) -> int:
     ap.add_argument("--list", action="store_true", help="流す workflow・job・段を出すだけ")
     ap.add_argument("--keep", action="store_true", help="clone・venv・仮の HOME を消さずに残す")
     a = ap.parse_args(argv)
+    if a.work:
+        a.work = os.path.abspath(a.work)  # 段は clone の中で流すので、 相対の道は今の dir から決めておく
     _STOP.clear()
     if a.jobs is not None and a.jobs < 1:
         print("流せません: --jobs は 1 以上にしてください", file=sys.stderr)
@@ -1298,9 +1344,12 @@ def _main(argv: list | None, state: dict) -> int:
                   + (f"・needs {', '.join(_show(n) for n in j['needs'])}" if j["needs"] else ""))
         return 0
 
-    if a.work and Path(a.work).exists() and any(Path(a.work).iterdir()):
-        print(f"流せません: --work の {a.work} が空ではありません（前の結果と混ぜない）", file=sys.stderr)
-        return 2
+    # 既にある作業の場所は、 ロックを待つ前に照らして早く止める（ロックの後でも、 作るときに照らし直す。 _claim_work）
+    if a.work and os.path.lexists(a.work):
+        problem = _work_problem(Path(a.work))
+        if problem:
+            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            return 2
     # 同じ利用者の検査を重ねない（#219）。 待つ間の Ctrl-C・SIGTERM でも、 traceback を出さずに止まる
     stopped = {}
 
@@ -1326,7 +1375,11 @@ def _main(argv: list | None, state: dict) -> int:
         signal.signal(signal.SIGINT, old_int)
     decide_jobs()
     work = Path(a.work) if a.work else Path(tempfile.mkdtemp(prefix="mirume-rv-"))
-    work.mkdir(parents=True, exist_ok=True)
+    if a.work:
+        problem = _claim_work(work)
+        if problem:
+            print(f"流せません: --work の {a.work} {problem}", file=sys.stderr)
+            return 2
     logs = work / "logs"
     real_cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     done_jobs, outcome, blocks = {}, {}, {}

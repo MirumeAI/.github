@@ -36,8 +36,8 @@ wheel は、 index を使わずに作る。 組み立ての道具（根の pypro
 依存の wheel も書く）に書いた wheel だけを、 組み立ての道具の置き場（既定は束の置き場の `build-wheels/`。 人が置く）から
 写して sha256 を照らし、 使い捨ての venv に hash で入れる（`pip check` で依存も照らす）。 その venv で、 build isolation を
 使わずに作る。 宣言は写した commit の木の物を読む。 組み立てには、 pip の設定のファイルと、 setuptools・distutils の利用者の
-設定を読ませない（HOME を空の一時の場所にし、 利用者の site を読まず、 PIP_・_PIP_・PYTHON・SETUPTOOLS_・DISTUTILS_ で
-始まる名前と DIST_EXTRA_CONFIG を外す）。
+設定を読ませない（環境は残す名前を並べる形〔PATH・LANG・LC_ など〕。 HOME を空の一時の場所にし、 利用者の site を読まず、
+pip に設定のファイルと index を使わせない）。 venv の種と同じ版の道具も、 照らした wheel から入れ直す。
 """
 from __future__ import annotations
 
@@ -91,6 +91,8 @@ VERSION = re.compile(r"[0-9][0-9A-Za-z.+_-]*")
 BUILD_PIN = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([0-9][0-9A-Za-z.+!]*)")
 #: 組み立ての道具の置き場の既定の名前（束の置き場の中）
 BUILD_WHEELS = "build-wheels"
+#: 組み立てに渡す環境で残す名前（ほかは LC_ で始まる名前だけ。 build_env）
+BUILD_ENV_KEEP = ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "SOURCE_DATE_EPOCH")
 _IV = None
 
 
@@ -180,13 +182,12 @@ def copy_build_wheels(store: Path, wheels: "dict[str, tuple[str, str, str]]", de
 
 
 def build_env(home: Path) -> "dict[str, str]":
-    """組み立てに渡す環境。 入れる道具の pip_env と同じ形（PIP_・_PIP_・PYTHON で始まる名前を外し、 pip の設定のファイルを
-    読まない）に加え、 setuptools と distutils の利用者の設定を読ませない（HOME を空の一時の場所にし、 利用者の site を
-    読まず、 SETUPTOOLS_・DISTUTILS_ で始まる名前と DIST_EXTRA_CONFIG を外す）。"""
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("PIP_", "_PIP_", "PYTHON", "SETUPTOOLS_", "DISTUTILS_")) and k != "DIST_EXTRA_CONFIG"}
-    env.update(PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1", HOME=str(home),
-               PYTHONNOUSERSITE="1")
+    """組み立てに渡す環境。 残す名前を並べる形（BUILD_ENV_KEEP と LC_ で始まる名前だけを残す。 PEP 517 の backend の道・
+    setuptools と distutils の利用者の設定・Python の部品の道などの名前を、 並べ漏らしても通さない）。 HOME は空の一時の
+    場所にし、 利用者の site を読まず、 pip には設定のファイルを読ませず、 index を使わせない。"""
+    env = {k: v for k, v in os.environ.items() if k in BUILD_ENV_KEEP or k.startswith("LC_")}
+    env.update(HOME=str(home), PYTHONNOUSERSITE="1", PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1",
+               PIP_NO_INPUT="1", PIP_NO_INDEX="1")
     return env
 
 
@@ -330,8 +331,9 @@ def wheel_from_tree(src: Path, python: str, out: Path, tools: Path, wheels: "dic
         req = tmp / "build-requirements.txt"
         req.write_text("".join(f"{dist}=={version} --hash=sha256:{digest}\n"
                                for dist, version, digest in sorted(wheels.values())), encoding="utf-8")
+        # venv の種（Python に付いてくる pip・setuptools）と同じ版でも、 照らした wheel から入れ直す（--force-reinstall）
         step([vpy, "-I", "-m", "pip", "install", "--no-index", "--no-deps", "--require-hashes", "--only-binary", ":all:",
-              "--find-links", str(tools), "-r", str(req)], "組み立ての道具を入れられません")
+              "--force-reinstall", "--find-links", str(tools), "-r", str(req)], "組み立ての道具を入れられません")
         step([vpy, "-I", "-m", "pip", "check"],
              "組み立ての道具の依存が足りないか合いません（[tool.mirumeai.build-wheels] に依存の wheel も書く）")
         made_dir = tmp / "wheels"
@@ -407,8 +409,9 @@ def main(argv: "list[str] | None" = None, repo: Path = REPO) -> int:
         out_root = Path(opts.out).resolve() if opts.out else repo.parent / "wheelhouse"
         if out_root == repo or repo in out_root.parents:
             raise Stop("束の置き場が、この Repository の中です（Git の外に置く）")
-        store = Path(opts.build_wheels).resolve() if opts.build_wheels else None
-        if store is not None and (store == repo or repo in store.parents):
+        # 置き場のリンクの照らし（copy_build_wheels）が効くように、 名指しした道は resolve しない
+        store = Path(opts.build_wheels).absolute() if opts.build_wheels else None
+        if store is not None and (store.resolve() == repo.resolve() or repo.resolve() in store.resolve().parents):
             raise Stop("組み立ての道具の置き場が、この Repository の中です（Git の外に置く）")
         release = make(repo, out_root, opts.python, build_store=store)
         print(f"[product-bundle] 作りました: {release['product']} {release['version']}（commit {release['commit'][:12]}）")

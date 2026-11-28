@@ -1286,14 +1286,17 @@ class MakeProductBundle(unittest.TestCase):
         IV.check_bundle(bundle, sha256sums_sha256=None, wheel_sha256=release["wheel_sha256"], label="製品",
                         product={"name": "demo-pkg", "version": "0.2.0"})
 
-    def test_the_wheel_is_built_isolated_with_a_narrowed_environment(self):
-        """pip wheel は -I で流し、入れる道具の pip_env と同じ形の環境（PIP_・_PIP_・PYTHON で始まる名前を外し、pip の設定の
-        ファイルを読まない）を渡す。"""
+    def test_the_wheel_is_built_with_a_narrowed_environment_and_an_empty_home(self):
+        """組み立ての命令（venv・入れる・照らす・作る）は、使い捨ての venv の Python を -I で流し、残す名前を並べた環境（PATH・
+        LANG・LC_ など。PEP 517 の backend の道・setuptools と distutils の利用者の設定・Python の部品の道を通さない）と、空の
+        HOME を渡す。pip には設定のファイルと index を使わせない。"""
         self.env.update(PIP_INDEX_URL="http://example.invalid/simple", PIP_CONFIG_FILE=str(self.tmp / "pip.conf"),
                         _PIP_STANDALONE_CERT=str(self.tmp / "ca.pem"), PYTHONPATH=str(self.tmp / "elsewhere"),
                         PYTHONHOME=str(self.tmp))
         self.env.update(SETUPTOOLS_USE_DISTUTILS="stdlib", DISTUTILS_DEBUG="1", DIST_EXTRA_CONFIG=str(self.tmp / "x.cfg"),
-                        HOME=str(self.tmp / "real-home"))
+                        HOME=str(self.tmp / "real-home"), PEP517_BACKEND_PATH=str(self.tmp / "evil"),
+                        _PYPROJECT_HOOKS_BACKEND_PATH=str(self.tmp / "evil"), XDG_CACHE_HOME=str(self.tmp / "cache"),
+                        _PYTHON_SYSCONFIGDATA_NAME="evil", LANG="C.UTF-8", LC_ALL="C.UTF-8")
         self.make(self.tmp / "wheelhouse")
         self.assertEqual([c[1:4] for c, _ in self.wheel_runs], [["-I", "-m", "venv"]] + [["-I", "-m", "pip"]] * 3)
         self.assertEqual([c[4] for c, _ in self.wheel_runs[1:]], ["install", "check", "wheel"])
@@ -1308,12 +1311,15 @@ class MakeProductBundle(unittest.TestCase):
                 self.assertEqual([k for k in env if k.startswith(("PYTHON", "_PIP_"))], ["PYTHONNOUSERSITE"])
                 self.assertEqual(env["PYTHONNOUSERSITE"], "1")
                 self.assertEqual({k: v for k, v in env.items() if k.startswith("PIP_")},
-                                 {"PIP_CONFIG_FILE": os.devnull, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
-                # setuptools・distutils の利用者の設定を読ませない（HOME は空の一時の場所）
-                self.assertFalse([k for k in env if k.startswith(("SETUPTOOLS_", "DISTUTILS_")) or k == "DIST_EXTRA_CONFIG"])
+                                 {"PIP_CONFIG_FILE": os.devnull, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                                  "PIP_NO_INDEX": "1"})
+                # 残す名前だけ（並べていない名前は通さない）。HOME は空の一時の場所
+                self.assertEqual(sorted(set(env) - set(PB.BUILD_ENV_KEEP) - {"HOME", "PYTHONNOUSERSITE"}
+                                        - {k for k in env if k.startswith(("PIP_", "LC_"))}), [])
+                self.assertEqual((env["LANG"], env["LC_ALL"]), ("C.UTF-8", "C.UTF-8"))
                 self.assertNotEqual(env["HOME"], str(self.tmp / "real-home"))
                 self.assertTrue(env["HOME"].startswith(tempfile.gettempdir()))
-                self.assertEqual(env.get("GIT_CONFIG_NOSYSTEM"), "1")       # ほかの名前は残す
+                self.assertNotIn("GIT_CONFIG_NOSYSTEM", env)
 
     def test_the_build_tools_are_installed_by_hash_from_a_checked_copy(self):
         """組み立ての道具は、宣言した wheel だけを置き場から写して sha256 を照らした所から、index なし・hash で入れる（置き場の
@@ -1322,7 +1328,7 @@ class MakeProductBundle(unittest.TestCase):
         (store / "evil-1.0-py3-none-any.whl").write_bytes(b"evil")
         self.make(self.tmp / "wheelhouse")
         install = self.wheel_runs[1][0]
-        for flag in ("--no-index", "--no-deps", "--require-hashes"):
+        for flag in ("--no-index", "--no-deps", "--require-hashes", "--force-reinstall"):   # venv の種と同じ版も入れ直す
             self.assertIn(flag, install)
         self.assertEqual(install[install.index("--only-binary") + 1], ":all:")
         self.assertNotEqual(Path(install[install.index("--find-links") + 1]), store)
@@ -1389,6 +1395,51 @@ class MakeProductBundle(unittest.TestCase):
             with self.subTest(label):
                 with self.assertRaisesRegex(PB.Stop, re.escape(says)):
                     plan(requires, wheels)
+
+    def test_the_build_declaration_is_read_from_the_commit(self):
+        """組み立ての道具の宣言は、作業ツリーでなく写した commit の木から読む（status に出ない作業ツリーの書き換えを使わない）。"""
+        out = self.tmp / "wheelhouse"
+        store = self.place_build_wheels(out)
+        self.git("update-index", "--skip-worktree", "pyproject.toml")
+        other = hashlib.sha256(b"other").hexdigest()
+        changed = DEMO_PYPROJECT.decode().replace(hashlib.sha256(b"wheel").hexdigest(), other)
+        (self.repo / "pyproject.toml").write_text(changed, encoding="utf-8")
+        (store / "wheel-0.48.0-py3-none-any.whl").write_bytes(b"other")
+        with self.assertRaisesRegex(PB.Stop, "wheel-0.48.0-py3-none-any.whl の sha256 が"):
+            self.make(out)
+        self.assertEqual(self.wheel_runs, [])
+
+    def test_a_product_named_like_the_build_tool_store_is_refused(self):
+        (self.repo / "pyproject.toml").write_bytes(DEMO_PYPROJECT.replace(b'name = "demo-pkg"', b'name = "build-wheels"'))
+        (self.repo / "src" / "build_wheels").mkdir()
+        (self.repo / "src" / "build_wheels" / "__init__.py").write_text('__version__ = "0.2.0"\n', encoding="utf-8")
+        for cmd in (["add", "-A"], ["commit", "-q", "-m", "2"], ["update-ref", "refs/remotes/origin/main", "HEAD"]):
+            self.git(*cmd)
+        with self.assertRaisesRegex(PB.Stop, "組み立ての道具の置き場の名前（build-wheels）と同じです"):
+            self.make(self.tmp / "wheelhouse")
+
+    def test_a_named_build_tool_store_is_used_as_given(self):
+        """--build-wheels で名指しした置き場を、resolve せずに使う（置き場のリンクの照らしが効く）。Repository の中は断る。"""
+        named = self.tmp / "tools"
+        named.mkdir()
+        link = self.tmp / "tools-link"
+        link.symlink_to(named)
+        with mock.patch.object(PB, "make", return_value={"product": "demo-pkg", "version": "0.2.0", "commit": "a" * 40,
+                                                         "wheel_sha256": "b" * 64}) as made, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(PB.main(["--out", str(self.tmp / "wheelhouse"), "--build-wheels", str(link)], repo=self.repo), 0)
+        self.assertEqual(made.call_args.kwargs["build_store"], link)
+        with mock.patch.object(PB, "make") as made, mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(PB.main(["--out", str(self.tmp / "wheelhouse"), "--build-wheels", str(self.repo / "w")],
+                                     repo=self.repo), 1)
+        made.assert_not_called()
+        self.assertIn("組み立ての道具の置き場が、この Repository の中です", err.getvalue())
+        # 名指しした置き場がリンクなら止める
+        for f, body in BUILD_WHEELS.items():
+            (named / f).write_bytes(body)
+        with mock.patch.dict(os.environ, self.env, clear=True), self.assertRaisesRegex(PB.Stop, "組み立ての道具の置き場がありません"):
+            PB.make(self.repo, self.tmp / "wheelhouse", "python3.10", run=self.fake_run, build_store=link)
+        PB.make(self.repo, self.tmp / "wheelhouse", "python3.10", run=self.fake_run, build_store=named)
 
     def test_build_tools_whose_dependencies_are_missing_stop(self):
         """組み立ての道具の依存が足りないとき（pip check が落ちる）は止め、作りかけの束を残さない。"""

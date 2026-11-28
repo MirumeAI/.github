@@ -16,8 +16,8 @@ MirumeAI では、Core（PDM・Image-Acquisition-PDM）や顧客ごとの Reposi
 
 | 届き方 | 何が | どうなる |
 |---|---|---|
-| GitHub が既定として見せる | Issue と Pull Request の雛形、脆弱性の報告と困ったときの案内 | 各 Repository は複製せずに使う（同じ種類のファイルを持たないとき） |
-| 各 Repository へ写す | Claude Code のガード、共通の command、検査の道具の一部 | 各 Repository では直さない。ここで直し、同期の Pull Request で配る。写しが正本と同じかは、検査が照らす |
+| GitHub が既定として見せる | Issue と Pull Request の雛形（白紙の Issue は作れない）、脆弱性の報告と困ったときの案内 | 各 Repository は複製せずに使う（同じ種類のファイルを持たないとき） |
+| 各 Repository へ写す | Claude Code のガード、共通の command と Issue Form の道具、検査の道具の一部（一覧は `scripts/ci/copy_sync_check.py` の `SHARED`） | 各 Repository では直さない。ここで直し、同期の Pull Request で配る。写しが正本と同じかは、検査が照らす |
 | 呼んで・流して使う | 共通の検査（再利用 workflow と検査の道具） | 各 Repository の workflow が呼ぶ。merge の前の検査は、この Repository の clone から手元で流す |
 | 新しい Repository の元にする | 顧客案件の Repository の雛形 | 顧客案件の Repository を作るときに写す |
 
@@ -26,17 +26,18 @@ MirumeAI では、Core（PDM・Image-Acquisition-PDM）や顧客ごとの Reposi
 | 場所 | 何のためか |
 |---|---|
 | `.github/` | Issue Form（Feature・Bug・Experiment）・Pull Request の雛形・脆弱性の報告の窓口と、workflow（各 Repository が呼ぶ再利用 workflow と、この Repository の検査） |
-| `.claude/` | Claude Code のガード（作業 Branch でない Branch への commit などを止める）・共通の command・この Repository の設定（新しい顧客 Repository の設定の元にもなる） |
+| `.claude/` | Claude Code のガード（作業 Branch でない Branch への commit などを止める）・共通の command と Issue Form の道具・この Repository の設定（新しい顧客 Repository の設定の元にもなる） |
 | `scripts/ci/` | 共通の検査の道具とその試験。一覧と使い方は [scripts/ci/README.md](scripts/ci/README.md) |
 | `templates/customer-project/` | 顧客案件の Repository の雛形。始め方は中の `README.md` |
 | `SECURITY.md`・`SUPPORT.md` | 脆弱性と秘密の漏れの報告、困ったときの案内 |
-| `CONTRIBUTING.md`・`CLAUDE.md` | この Repository を変えるときの流れと、Claude Code への指示 |
+| `CONTRIBUTING.md` | Organization の開発の流れと Branch の名前の要約（手順の正本は development-docs） |
+| `CLAUDE.md` | この Repository で作業する Claude Code への指示 |
 
 ## 変えるとき
 
-- 写し（ガード・共通の command・検査の道具の一部）は、各 Repository で直しません。この Repository で正本を直し、merge の後に同期します
+- 写し（一覧は `scripts/ci/copy_sync_check.py` の `SHARED`）は、各 Repository で直しません。この Repository で正本を直し、merge の後に同期します
 - 守りに関わる物（ガードとその試験、`.claude/settings.json`、CI の守りの検査とそれを流す workflow など）を変えるときは、merge の前に人の判断が要ります
-- 変え方の流れは [CONTRIBUTING.md](CONTRIBUTING.md) にあります
+- 変え方の流れは [CONTRIBUTING.md](CONTRIBUTING.md) と、この Repository の [CLAUDE.md](CLAUDE.md) の「変更時の手順」にあります
 
 ## 詳しい文書
 

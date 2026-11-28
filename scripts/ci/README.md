@@ -16,6 +16,7 @@ MirumeAI の Repository が共通に使う検査の道具と、その試験（`t
 | `customer_isolation_check.py` | 顧客リポジトリの設定に、別の案件の値が混ざっていないかを、その案件自身の宣言（リポジトリの根の `customer-profile.yaml`）と照らして確かめる。 |
 | `copy_sync_check.py` | 手元用の複製が、正本とずれていないことを確かめる。 |
 | `sync_copies.py` | 写しを持つ Repository へ、正本（この Repository）の共通のファイルを合わせる Pull Request を、まとめて作る。 |
+| `case_cache.py` | 案件のフォルダの `.cache/` と、共通の道具の cache（利用者の cache の下の `mirumeai/`）の、使い終えた物を片付ける（既定は見るだけ。`--apply` で消す）。 |
 | `mutation_engine.py` | 変異の確かめの仕組み。テストが本当に検証しているかを、守りを壊して確かめる。 |
 | `release_identity_check.py` | Product Release の識別を確かめる（各 Core の Release の workflow が使う共通の確かめ）。 |
 | `release_record_check.py` | Release と Deployment の記録が形式どおりか確かめる。 |

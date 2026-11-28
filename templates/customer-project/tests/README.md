@@ -10,4 +10,4 @@
 ## 置かないもの
 
 - Core の機能そのものの試験（Core 側に置く）
-- 顧客データ（画像を含む）・Dataset・モデルと Model Weight の本体
+- 顧客データ（画像を含む）、画像・Dataset・モデルと Model Weight の本体

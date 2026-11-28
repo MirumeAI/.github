@@ -14,6 +14,6 @@ dev/config/image-acquisition/<案件の名前>.json   撮像側の開発の設�
 
 - 出荷・据え付けに使う設定（`config/` に置く）
 - `deploy/`・`versions.yaml`・`release/`・`deployment/` から `dev/` と `MIRUME_DEV_CONFIG` を指す書き方（検査が断る）
-- 顧客データ（画像を含む）・Dataset・モデルと Model Weight の本体、Credential、パスワード、ライセンスファイル、ほかの案件の値
+- 顧客データ（画像を含む）、画像・Dataset・モデルと Model Weight の本体、Credential、パスワード、ライセンスファイル、ほかの案件の値
 
 正本: `MirumeAI/development-docs` の `03_customer_development/customer_isolation_check.md`（S4・S6）

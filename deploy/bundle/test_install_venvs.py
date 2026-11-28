@@ -1317,6 +1317,12 @@ class MakeProductBundle(unittest.TestCase):
                 self.assertEqual(sorted(set(env) - set(PB.BUILD_ENV_KEEP) - {"HOME", "PYTHONNOUSERSITE"}
                                         - {k for k in env if k.startswith(("PIP_", "LC_"))}), [])
                 self.assertEqual((env["LANG"], env["LC_ALL"]), ("C.UTF-8", "C.UTF-8"))
+                # 置いた危ない名前は通さない（残す名前の並びそのものも、ここで固定して照らす）
+                for name in ("PEP517_BACKEND_PATH", "_PYPROJECT_HOOKS_BACKEND_PATH", "XDG_CACHE_HOME",
+                             "_PYTHON_SYSCONFIGDATA_NAME", "SETUPTOOLS_USE_DISTUTILS", "DISTUTILS_DEBUG", "DIST_EXTRA_CONFIG",
+                             "PYTHONPATH", "PYTHONHOME", "PIP_INDEX_URL", "_PIP_STANDALONE_CERT"):
+                    self.assertNotIn(name, env)
+                self.assertEqual(PB.BUILD_ENV_KEEP, ("PATH", "LANG", "LANGUAGE", "TZ", "TMPDIR", "SOURCE_DATE_EPOCH"))
                 self.assertNotEqual(env["HOME"], str(self.tmp / "real-home"))
                 self.assertTrue(env["HOME"].startswith(tempfile.gettempdir()))
                 self.assertNotIn("GIT_CONFIG_NOSYSTEM", env)
